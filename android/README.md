@@ -427,13 +427,16 @@ terrain triangles, Lua mission scripts, and 134 live legacy AI units.
 Touch controls currently implemented:
 
 - tap a green player unit or formation to select it;
+- tap a red hostile unit while a player unit is selected to issue the original
+  legacy attack command;
 - tap terrain to issue the original legacy move command and move the selected
   unit through the Android presentation bridge;
 - drag with one finger to pan;
 - pinch to zoom;
 - rotate with a two-finger twist.
 
-The selected unit is yellow and follows the real terrain height while moving.
+The selected unit is yellow, the current attack target is orange, and moving
+units follow the real terrain height.
 Green proxies are player units and red proxies are hostile units. Formations
 are shown as small groups and mechanized units use oriented low-poly hull,
 turret, and barrel geometry. The camera starts focused on the player's

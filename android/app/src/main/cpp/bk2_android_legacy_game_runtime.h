@@ -24,7 +24,9 @@ int SelectLegacyUnitNear(
         float world_y,
         float max_radius,
         int player);
+bool SelectLegacyUnit(int unit_id, int player);
 bool MoveSelectedLegacyUnit(float world_x, float world_y);
+bool AttackSelectedLegacyUnit(int target_unit_id);
 int SelectedLegacyUnitId();
 void ShutdownLegacyGameRuntime();
 bool IsLegacyGameRuntimeReady();

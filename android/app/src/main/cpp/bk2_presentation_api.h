@@ -18,6 +18,7 @@ enum Bk2PresentationEntityFlags {
     BK2_PRESENTATION_ENTITY_MECHANIZED = 1u << 4,
     BK2_PRESENTATION_ENTITY_INFANTRY = 1u << 5,
     BK2_PRESENTATION_ENTITY_FORMATION = 1u << 6,
+    BK2_PRESENTATION_ENTITY_TARGETED = 1u << 7,
 };
 
 typedef struct Bk2PresentationVertex {

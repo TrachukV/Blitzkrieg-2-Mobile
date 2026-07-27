@@ -758,12 +758,15 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         }
         const bool selected =
                 (entity.flags & BK2_PRESENTATION_ENTITY_SELECTED) != 0;
+        const bool targeted =
+                (entity.flags & BK2_PRESENTATION_ENTITY_TARGETED) != 0;
         AppendEntityModel(
                 &combined,
                 entity,
                 selected ? ArgbToAbgr(0xffffe066u)
+                         : targeted ? ArgbToAbgr(0xffff8a3du)
                          : ObjectColor(entity.player, false),
-                selected);
+                selected || targeted);
         ++g_dynamic_rendered_object_count;
     }
     g_world_object_mesh = std::move(combined);
@@ -855,6 +858,114 @@ float TerrainMeshHeightAtLocked(float world_x, float world_y) {
             height_at(x0, y1) +
             (height_at(x1, y1) - height_at(x0, y1)) * tx;
     return top + (bottom - top) * ty;
+}
+
+int FindEntityNearScreenLocked(
+        float screen_x,
+        float screen_y,
+        uint32_t viewport_width,
+        uint32_t viewport_height,
+        int player,
+        bool invert_player_match,
+        float radius_pixels) {
+    if (viewport_width == 0 ||
+        viewport_height == 0 ||
+        radius_pixels <= 0.0f) {
+        return -1;
+    }
+    const Bk2PresentationSnapshotInfo snapshot =
+            bk2_presentation_snapshot_info();
+    std::vector<Bk2PresentationEntity> entities(snapshot.entity_count);
+    if (!entities.empty() &&
+        bk2_presentation_copy_entities(
+                entities.data(),
+                entities.size()) != entities.size()) {
+        return -1;
+    }
+
+    struct Vec3 {
+        float x;
+        float y;
+        float z;
+    };
+    const auto normalize = [](Vec3 value) {
+        const float length = std::sqrt(
+                value.x * value.x +
+                value.y * value.y +
+                value.z * value.z);
+        if (length > 0.0001f) {
+            value.x /= length;
+            value.y /= length;
+            value.z /= length;
+        }
+        return value;
+    };
+    const auto cross = [](const Vec3& left, const Vec3& right) {
+        return Vec3{
+                left.y * right.z - left.z * right.y,
+                left.z * right.x - left.x * right.z,
+                left.x * right.y - left.y * right.x};
+    };
+    const auto dot = [](const Vec3& left, const Vec3& right) {
+        return left.x * right.x + left.y * right.y + left.z * right.z;
+    };
+
+    const float horizontal_distance =
+            g_camera.distance * std::cos(g_camera.pitch_radians);
+    const Vec3 eye = {
+            g_camera.target_x +
+                    std::sin(g_camera.yaw_radians) * horizontal_distance,
+            g_camera.target_y -
+                    std::cos(g_camera.yaw_radians) * horizontal_distance,
+            g_camera.target_z +
+                    std::sin(g_camera.pitch_radians) * g_camera.distance};
+    const Vec3 forward = normalize(Vec3{
+            g_camera.target_x - eye.x,
+            g_camera.target_y - eye.y,
+            g_camera.target_z - eye.z});
+    const Vec3 right = normalize(cross(forward, Vec3{0.0f, 0.0f, 1.0f}));
+    const Vec3 camera_up = normalize(cross(right, forward));
+    const float tangent =
+            std::tan(48.0f * 0.5f * 3.14159265358979323846f / 180.0f);
+    const float aspect =
+            static_cast<float>(viewport_width) /
+            static_cast<float>(viewport_height);
+    const float max_distance_squared = radius_pixels * radius_pixels;
+    float best_distance_squared = std::numeric_limits<float>::max();
+    int best_id = -1;
+    for (const Bk2PresentationEntity& entity : entities) {
+        const bool player_matches = entity.player == player;
+        if ((invert_player_match ? player_matches : !player_matches) ||
+            (entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) == 0) {
+            continue;
+        }
+        const Vec3 relative = {
+                entity.x - eye.x,
+                entity.y - eye.y,
+                entity.z + 1.0f - eye.z};
+        const float depth = dot(relative, forward);
+        if (depth <= 0.001f) {
+            continue;
+        }
+        const float ndc_x =
+                dot(relative, right) / (depth * tangent * aspect);
+        const float ndc_y =
+                dot(relative, camera_up) / (depth * tangent);
+        const float projected_x =
+                (ndc_x + 1.0f) * 0.5f * viewport_width;
+        const float projected_y =
+                (1.0f - ndc_y) * 0.5f * viewport_height;
+        const float delta_x = projected_x - screen_x;
+        const float delta_y = projected_y - screen_y;
+        const float distance_squared =
+                delta_x * delta_x + delta_y * delta_y;
+        if (distance_squared <= max_distance_squared &&
+            distance_squared < best_distance_squared) {
+            best_distance_squared = distance_squared;
+            best_id = entity.id;
+        }
+    }
+    return best_id;
 }
 
 bool ScreenToTerrainLocked(
@@ -1193,6 +1304,42 @@ bool HandleSinglePlayerTap(
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
     if (!g_ready) {
         return false;
+    }
+    constexpr float kEntityTapRadiusPixels = 52.0f;
+    const int friendly_unit = FindEntityNearScreenLocked(
+            screen_x,
+            screen_y,
+            viewport_width,
+            viewport_height,
+            0,
+            false,
+            kEntityTapRadiusPixels);
+    if (friendly_unit >= 0 && SelectLegacyUnit(friendly_unit, 0)) {
+        std::ostringstream report;
+        report << "player_tap=select_screen"
+               << "; unit=" << friendly_unit
+               << "; radius_pixels=" << kEntityTapRadiusPixels;
+        PlatformRuntime::instance().log_info(report.str());
+        return RefreshDynamicWorldMeshLocked(true);
+    }
+    if (SelectedLegacyUnitId() >= 0) {
+        const int hostile_unit = FindEntityNearScreenLocked(
+                screen_x,
+                screen_y,
+                viewport_width,
+                viewport_height,
+                0,
+                true,
+                kEntityTapRadiusPixels);
+        if (hostile_unit >= 0 &&
+            AttackSelectedLegacyUnit(hostile_unit)) {
+            std::ostringstream report;
+            report << "player_tap=attack_screen"
+                   << "; target=" << hostile_unit
+                   << "; radius_pixels=" << kEntityTapRadiusPixels;
+            PlatformRuntime::instance().log_info(report.str());
+            return RefreshDynamicWorldMeshLocked(true);
+        }
     }
     float world_x = 0.0f;
     float world_y = 0.0f;

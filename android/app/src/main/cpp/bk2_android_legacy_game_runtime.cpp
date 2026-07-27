@@ -83,7 +83,9 @@ int g_normalized_unit_stats_count = 0;
 int g_normalized_squad_stats_count = 0;
 int g_normalize_skipped_no_visual_count = 0;
 int g_selected_unit_id = -1;
+int g_attack_target_unit_id = -1;
 uint64_t g_player_move_command_count = 0;
+uint64_t g_player_attack_command_count = 0;
 bool g_android_move_active = false;
 CVec2 g_android_move_target = VNULL2;
 uint32_t g_android_move_log_millis = 0;
@@ -378,6 +380,9 @@ void PublishPresentationEntities() {
         }
         if (unit->GetUniqueIdQU() == g_selected_unit_id) {
             flags |= BK2_PRESENTATION_ENTITY_SELECTED;
+        }
+        if (unit->GetUniqueIdQU() == g_attack_target_unit_id) {
+            flags |= BK2_PRESENTATION_ENTITY_TARGETED;
         }
         if (unit->IsMech()) {
             flags |= BK2_PRESENTATION_ENTITY_MECHANIZED;
@@ -803,14 +808,29 @@ int SelectLegacyUnitNear(
     if (best_id < 0) {
         return -1;
     }
-    g_selected_unit_id = best_id;
+    return SelectLegacyUnit(best_id, player) ? best_id : -1;
+}
+
+bool SelectLegacyUnit(int unit_id, int player) {
+    if (!g_ready || unit_id < 0) {
+        return false;
+    }
+    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(unit_id);
+    if (unit == nullptr ||
+        !unit->IsAlive() ||
+        !unit->IsSelectable() ||
+        static_cast<int>(unit->GetPlayer()) != player) {
+        return false;
+    }
+    g_selected_unit_id = unit_id;
+    g_attack_target_unit_id = -1;
     g_android_move_active = false;
     g_android_move_log_millis = 0;
     PublishPresentationEntities();
     PlatformRuntime::instance().log_info(
             std::string("player_unit_selected=") +
             std::to_string(g_selected_unit_id));
-    return g_selected_unit_id;
+    return true;
 }
 
 bool MoveSelectedLegacyUnit(float world_x, float world_y) {
@@ -834,6 +854,7 @@ bool MoveSelectedLegacyUnit(float world_x, float world_y) {
     theGroupLogic.UnitCommand(command, unit, false);
     g_android_move_target = target;
     g_android_move_active = true;
+    g_attack_target_unit_id = -1;
     g_android_move_log_millis = 0;
     ++g_player_move_command_count;
     PlatformRuntime::instance().log_info(
@@ -841,6 +862,43 @@ bool MoveSelectedLegacyUnit(float world_x, float world_y) {
             std::to_string(g_selected_unit_id) +
             "; target=" + std::to_string(world_x) +
             "," + std::to_string(world_y));
+    return true;
+}
+
+bool AttackSelectedLegacyUnit(int target_unit_id) {
+    if (!g_ready || g_selected_unit_id < 0 || target_unit_id < 0) {
+        return false;
+    }
+    CAIUnit* attacker = CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+    if (attacker == nullptr ||
+        !attacker->IsAlive() ||
+        !attacker->IsSelectable() ||
+        attacker->GetPlayer() != 0) {
+        g_selected_unit_id = -1;
+        PublishPresentationEntities();
+        return false;
+    }
+    CAIUnit* target = CAIUnit::GetUnitByUniqueID(target_unit_id);
+    if (target == nullptr ||
+        !target->IsAlive() ||
+        target->GetPlayer() == attacker->GetPlayer()) {
+        return false;
+    }
+
+    SAIUnitCmd command(
+            ACTION_COMMAND_ATTACK_UNIT,
+            target->GetUniqueId());
+    command.bFromAI = false;
+    theGroupLogic.UnitCommand(command, attacker, false);
+    g_android_move_active = false;
+    g_android_move_log_millis = 0;
+    g_attack_target_unit_id = target->GetUniqueIdQU();
+    ++g_player_attack_command_count;
+    PublishPresentationEntities();
+    PlatformRuntime::instance().log_info(
+            std::string("player_attack_command=") +
+            std::to_string(g_selected_unit_id) +
+            "; target=" + std::to_string(target->GetUniqueIdQU()));
     return true;
 }
 
@@ -868,7 +926,9 @@ void ShutdownLegacyGameRuntime() {
     SetAIMap(nullptr);
     ResetReportState();
     g_selected_unit_id = -1;
+    g_attack_target_unit_id = -1;
     g_player_move_command_count = 0;
+    g_player_attack_command_count = 0;
     g_android_move_active = false;
     g_android_move_target = VNULL2;
     g_android_move_log_millis = 0;
@@ -891,7 +951,9 @@ std::string LegacyGameRuntimeReport() {
            << "; ai_units_alive=" << g_ai_unit_alive_count
            << "; ai_units_ref_valid=" << g_ai_unit_ref_valid_count
            << "; selected_unit=" << g_selected_unit_id
+           << "; attack_target_unit=" << g_attack_target_unit_id
            << "; player_move_commands=" << g_player_move_command_count
+           << "; player_attack_commands=" << g_player_attack_command_count
            << "; normalized_rpg_stats=" << g_normalized_rpg_stats_count
            << "; normalized_unit_stats=" << g_normalized_unit_stats_count
            << "; normalized_squad_stats=" << g_normalized_squad_stats_count
