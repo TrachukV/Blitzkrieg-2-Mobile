@@ -445,7 +445,19 @@ Touch controls currently implemented:
 
 The in-game Android HUD shows the active mission and these controls. Its
 `Missions` button returns to the native single-player mission list without
-terminating the app process.
+terminating the app process. It also shows completed, active, and failed
+objective counts. The Android client now drains the original AI update stream
+every simulation tick instead of allowing visual/client updates to accumulate.
+`EFB_OBJECTIVE_CHANGED` updates are applied to both the original scenario
+tracker and the Android campaign checkpoint state.
+
+Original Lua `Win()`/`Loose()` calls now cross the Android input bridge.
+They freeze the finished simulation, commit the corresponding campaign
+win/cancel state, and show a centered victory/defeat panel with a return to the
+mission selector. Previously those `local_win`/`local_loose` events were
+discarded because the old desktop `WorldClient` was not linked. The in-game
+`Surrender` action uses the same defeat path; it has been exercised on the
+ARM64 emulator through the result panel and back to the 75-map selector.
 
 The selected unit is yellow, the current attack target is orange, and moving
 units follow the real terrain height.
@@ -457,7 +469,7 @@ formation.
 This is a playable runtime milestone, not a complete visual port. Units and
 buildings still use temporary generated geometry. Original Granny models,
 skeletons, animations, combat presentation, briefing/game HUD, and the
-complete win/lose-to-campaign flow remain unfinished.
+complete campaign-selection/progression UI remain unfinished.
 
 The video transcode manifest now writes Android-canonical runtime paths. A Bink
 ref such as `Movies\Nival.bik` maps to `DataAndroid/Movies/Nival.mp4`, not to a

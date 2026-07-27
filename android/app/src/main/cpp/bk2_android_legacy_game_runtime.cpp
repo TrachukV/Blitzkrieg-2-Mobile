@@ -1,5 +1,6 @@
 #include "bk2_android_legacy_game_runtime.h"
 
+#include "bk2_android_mission_runtime.h"
 #include "bk2_android_platform.h"
 #include "bk2_presentation_internal.h"
 
@@ -12,8 +13,10 @@
 #include "AILogic/GroupLogic.h"
 #include "AILogic/AIMap.h"
 #include "AILogic/AIUnit.h"
+#include "AILogic/NewUpdater.h"
 #include "AILogic/UnitsIterators.h"
 #include "B2_M1_Terrain/DBTerrain.h"
+#include "B2_M1_World/MissionObjectiveStates.h"
 #include "Common_RTS_AI/AIClasses.h"
 #include "Common_RTS_AI/aiobjectbase.h"
 #include "Common_RTS_AI/CommonPathFinder.h"
@@ -25,12 +28,15 @@
 #include "Main/GameTimer.h"
 #include "SceneB2/TerrainInfo.h"
 #include "Stats_B2_M1/DBMapInfo.h"
+#include "Stats_B2_M1/FeedBackUpdates.h"
 #include "Stats_B2_M1/TerraAIObserver.h"
 #include "Stats_B2_M1/Vis2AI.h"
 #include "System/VFSOperations.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <set>
 #include <sstream>
@@ -86,6 +92,16 @@ int g_selected_unit_id = -1;
 int g_attack_target_unit_id = -1;
 uint64_t g_player_move_command_count = 0;
 uint64_t g_player_attack_command_count = 0;
+uint64_t g_client_update_count = 0;
+uint64_t g_objective_update_count = 0;
+enum LegacyMissionOutcomeValue {
+    kLegacyMissionRunning = 0,
+    kLegacyMissionWon = 1,
+    kLegacyMissionLost = 2,
+    kLegacyMissionProgressionError = 3,
+};
+std::atomic<int> g_mission_outcome{kLegacyMissionRunning};
+std::atomic<int> g_pending_mission_outcome{kLegacyMissionRunning};
 bool g_android_move_active = false;
 CVec2 g_android_move_target = VNULL2;
 uint32_t g_android_move_log_millis = 0;
@@ -356,6 +372,97 @@ void CountAIUnits() {
         }
         if (unit->IsRefValid()) {
             ++g_ai_unit_ref_valid_count;
+        }
+    }
+}
+
+const char* MissionOutcomeName(int outcome) {
+    switch (outcome) {
+        case kLegacyMissionWon:
+            return "won";
+        case kLegacyMissionLost:
+            return "lost";
+        case kLegacyMissionProgressionError:
+            return "progression_error";
+        default:
+            return "running";
+    }
+}
+
+void FinalizePendingMissionOutcome() {
+    const int pending = g_pending_mission_outcome.exchange(
+            kLegacyMissionRunning);
+    if (pending == kLegacyMissionRunning ||
+        g_mission_outcome.load() != kLegacyMissionRunning) {
+        return;
+    }
+
+    MissionRuntimeResult progression;
+    if (pending == kLegacyMissionWon) {
+        if (g_scenario_tracker != nullptr &&
+            !g_scenario_tracker->IsMissionWon()) {
+            g_scenario_tracker->MissionWin();
+        }
+        progression = MarkMissionWon();
+    } else {
+        if (g_scenario_tracker != nullptr) {
+            g_scenario_tracker->MissionCancel();
+        }
+        progression = CancelMission();
+    }
+
+    const int outcome = progression.ok
+            ? pending
+            : kLegacyMissionProgressionError;
+    g_mission_outcome.store(outcome);
+    PlatformRuntime::instance().log_info(
+            std::string("mission_outcome=") +
+            MissionOutcomeName(outcome) +
+            (progression.ok
+                    ? ""
+                    : "; progression_error=" + progression.error));
+}
+
+void DrainLegacyClientUpdates() {
+    if (g_ai_logic == nullptr) {
+        return;
+    }
+    g_ai_logic->PrepareUpdates();
+    while (CPtr<CObjectBase> update = g_ai_logic->GetUpdate()) {
+        ++g_client_update_count;
+        SAIFeedbackUpdate* feedback =
+                dynamic_cast<SAIFeedbackUpdate*>(update.GetPtr());
+        if (feedback == nullptr ||
+            feedback->info.feedBackType != EFB_OBJECTIVE_CHANGED) {
+            continue;
+        }
+
+        const int objective = feedback->info.nParam >> 8;
+        const int state = feedback->info.nParam & 0xff;
+        if (state < EMOS_MIN || state > EMOS_MAX) {
+            continue;
+        }
+        if (g_scenario_tracker != nullptr &&
+            objective >= 0 &&
+            objective < g_scenario_tracker->GetObjectiveCount()) {
+            g_scenario_tracker->SetObjectiveState(
+                    objective,
+                    static_cast<EMissionObjectiveState>(state));
+        }
+        const MissionRuntimeResult result =
+                SetMissionObjectiveState(objective, state);
+        if (result.ok) {
+            ++g_objective_update_count;
+            PlatformRuntime::instance().log_info(
+                    std::string("mission_objective_update=") +
+                    std::to_string(objective) +
+                    "; state=" + std::to_string(state));
+        } else {
+            PlatformRuntime::instance().log_warn(
+                    std::string("mission_objective_update_failed=") +
+                    std::to_string(objective) +
+                    "; state=" + std::to_string(state) +
+                    "; error=" + result.error);
         }
     }
 }
@@ -643,6 +750,10 @@ void ResetReportState() {
     g_normalize_skipped_no_visual_count = 0;
     g_missing_unit_payload_refs.clear();
     g_missing_squad_payload_refs.clear();
+    g_client_update_count = 0;
+    g_objective_update_count = 0;
+    g_mission_outcome.store(kLegacyMissionRunning);
+    g_pending_mission_outcome.store(kLegacyMissionRunning);
     g_stage = "not_started";
 }
 
@@ -759,6 +870,9 @@ void TickLegacyGameRuntime(uint32_t elapsed_millis) {
     if (!g_ready || g_ai_logic == nullptr || !g_game_timer) {
         return;
     }
+    if (g_mission_outcome.load() != kLegacyMissionRunning) {
+        return;
+    }
     g_timer_millis += elapsed_millis;
     g_game_timer->Update(g_timer_millis);
     bool advanced = false;
@@ -766,6 +880,13 @@ void TickLegacyGameRuntime(uint32_t elapsed_millis) {
         g_ai_logic->Segment();
         ++g_segment_count;
         advanced = true;
+    }
+    DrainLegacyClientUpdates();
+    FinalizePendingMissionOutcome();
+    if (g_mission_outcome.load() != kLegacyMissionRunning) {
+        CountAIUnits();
+        PublishPresentationEntities();
+        return;
     }
     const bool android_unit_moved =
             AdvanceAndroidSelectedUnit(elapsed_millis);
@@ -906,6 +1027,22 @@ int SelectedLegacyUnitId() {
     return g_selected_unit_id;
 }
 
+void HandleLegacyInputEvent(const char* event_name) {
+    if (event_name == nullptr ||
+        g_mission_outcome.load() != kLegacyMissionRunning) {
+        return;
+    }
+    if (std::strcmp(event_name, "local_win") == 0) {
+        g_pending_mission_outcome.store(kLegacyMissionWon);
+    } else if (std::strcmp(event_name, "local_loose") == 0) {
+        g_pending_mission_outcome.store(kLegacyMissionLost);
+    }
+}
+
+const char* LegacyMissionOutcome() {
+    return MissionOutcomeName(g_mission_outcome.load());
+}
+
 void ShutdownLegacyGameRuntime() {
     if (g_ai_logic != nullptr) {
         g_ai_logic->Suspend();
@@ -929,6 +1066,10 @@ void ShutdownLegacyGameRuntime() {
     g_attack_target_unit_id = -1;
     g_player_move_command_count = 0;
     g_player_attack_command_count = 0;
+    g_client_update_count = 0;
+    g_objective_update_count = 0;
+    g_mission_outcome.store(kLegacyMissionRunning);
+    g_pending_mission_outcome.store(kLegacyMissionRunning);
     g_android_move_active = false;
     g_android_move_target = VNULL2;
     g_android_move_log_millis = 0;
@@ -956,8 +1097,12 @@ std::string LegacyGameRuntimeReport() {
            << "; ai_units_ref_valid=" << g_ai_unit_ref_valid_count
            << "; selected_unit=" << g_selected_unit_id
            << "; attack_target_unit=" << g_attack_target_unit_id
+           << "; mission_outcome="
+           << MissionOutcomeName(g_mission_outcome.load())
            << "; player_move_commands=" << g_player_move_command_count
            << "; player_attack_commands=" << g_player_attack_command_count
+           << "; client_updates=" << g_client_update_count
+           << "; objective_updates=" << g_objective_update_count
            << "; normalized_rpg_stats=" << g_normalized_rpg_stats_count
            << "; normalized_unit_stats=" << g_normalized_unit_stats_count
            << "; normalized_squad_stats=" << g_normalized_squad_stats_count

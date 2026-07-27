@@ -28,6 +28,8 @@ bool SelectLegacyUnit(int unit_id, int player);
 bool MoveSelectedLegacyUnit(float world_x, float world_y);
 bool AttackSelectedLegacyUnit(int target_unit_id);
 int SelectedLegacyUnitId();
+void HandleLegacyInputEvent(const char* event_name);
+const char* LegacyMissionOutcome();
 void ShutdownLegacyGameRuntime();
 bool IsLegacyGameRuntimeReady();
 std::string LegacyGameRuntimeReport();

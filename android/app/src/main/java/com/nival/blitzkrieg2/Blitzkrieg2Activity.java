@@ -4,7 +4,10 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.FrameLayout;
@@ -20,6 +23,31 @@ import java.io.IOException;
 public final class Blitzkrieg2Activity extends GameActivity {
     public static final String EXTRA_MISSION_ID = "com.nival.blitzkrieg2.MISSION_ID";
     public static final String EXTRA_DIFFICULTY = "com.nival.blitzkrieg2.DIFFICULTY";
+    private final Handler outcomeHandler = new Handler(Looper.getMainLooper());
+    private LinearLayout outcomePanel;
+    private TextView outcomeTitle;
+    private TextView missionStatus;
+    private boolean outcomePolling;
+    private final Runnable outcomePoll = new Runnable() {
+        @Override
+        public void run() {
+            if (!outcomePolling) {
+                return;
+            }
+            if (missionStatus != null) {
+                missionStatus.setText(NativeBridge.getMissionHudStatus());
+            }
+            String outcome = NativeBridge.getMissionOutcome();
+            if ("won".equals(outcome)) {
+                showOutcome("VICTORY", 0xffd9c46b);
+            } else if ("lost".equals(outcome)) {
+                showOutcome("DEFEAT", 0xffd87862);
+            } else if ("progression_error".equals(outcome)) {
+                showOutcome("MISSION ENDED", 0xffd87862);
+            }
+            outcomeHandler.postDelayed(this, 500L);
+        }
+    };
 
     static {
         System.loadLibrary("blitzkrieg2");
@@ -42,6 +70,15 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 new ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT));
+        outcomePolling = true;
+        outcomeHandler.post(outcomePoll);
+    }
+
+    @Override
+    protected void onDestroy() {
+        outcomePolling = false;
+        outcomeHandler.removeCallbacks(outcomePoll);
+        super.onDestroy();
     }
 
     private FrameLayout createHud() {
@@ -79,6 +116,16 @@ public final class Blitzkrieg2Activity extends GameActivity {
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        missionStatus = new TextView(this);
+        missionStatus.setTextColor(0xffd9c46b);
+        missionStatus.setTextSize(12.0f);
+        missionStatus.setText("Objectives: loading");
+        info.addView(
+                missionStatus,
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+
         FrameLayout.LayoutParams infoParams = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -86,18 +133,80 @@ public final class Blitzkrieg2Activity extends GameActivity {
         infoParams.setMargins(dp(16), dp(14), dp(16), dp(14));
         root.addView(info, infoParams);
 
+        LinearLayout missionActions = new LinearLayout(this);
+        missionActions.setOrientation(LinearLayout.HORIZONTAL);
+
+        Button forfeit = new Button(this);
+        forfeit.setAllCaps(false);
+        forfeit.setText("Surrender");
+        forfeit.setTextColor(Color.WHITE);
+        forfeit.setOnClickListener(view -> NativeBridge.forfeitMission());
+        missionActions.addView(
+                forfeit,
+                new LinearLayout.LayoutParams(dp(112), dp(48)));
+
         Button missions = new Button(this);
         missions.setAllCaps(false);
         missions.setText("Missions");
         missions.setTextColor(Color.WHITE);
         missions.setOnClickListener(view -> finish());
-        FrameLayout.LayoutParams buttonParams = new FrameLayout.LayoutParams(
-                dp(122),
-                dp(48),
+        missionActions.addView(
+                missions,
+                new LinearLayout.LayoutParams(dp(112), dp(48)));
+
+        FrameLayout.LayoutParams actionParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP | Gravity.END);
-        buttonParams.setMargins(dp(16), dp(12), dp(16), dp(12));
-        root.addView(missions, buttonParams);
+        actionParams.setMargins(dp(16), dp(12), dp(16), dp(12));
+        root.addView(missionActions, actionParams);
+
+        outcomePanel = new LinearLayout(this);
+        outcomePanel.setOrientation(LinearLayout.VERTICAL);
+        outcomePanel.setGravity(Gravity.CENTER);
+        outcomePanel.setPadding(dp(24), dp(18), dp(24), dp(18));
+        outcomePanel.setClickable(true);
+        GradientDrawable outcomeBackground = new GradientDrawable();
+        outcomeBackground.setColor(0xee0b1110);
+        outcomeBackground.setCornerRadius(dp(12));
+        outcomePanel.setBackground(outcomeBackground);
+        outcomePanel.setVisibility(View.GONE);
+
+        outcomeTitle = new TextView(this);
+        outcomeTitle.setTextSize(30.0f);
+        outcomeTitle.setGravity(Gravity.CENTER);
+        outcomePanel.addView(
+                outcomeTitle,
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        Button outcomeMissions = new Button(this);
+        outcomeMissions.setAllCaps(false);
+        outcomeMissions.setText("Return to missions");
+        outcomeMissions.setTextColor(Color.WHITE);
+        outcomeMissions.setOnClickListener(view -> finish());
+        LinearLayout.LayoutParams outcomeButtonParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(48));
+        outcomeButtonParams.topMargin = dp(14);
+        outcomePanel.addView(outcomeMissions, outcomeButtonParams);
+
+        FrameLayout.LayoutParams outcomeParams = new FrameLayout.LayoutParams(
+                dp(300),
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER);
+        root.addView(outcomePanel, outcomeParams);
         return root;
+    }
+
+    private void showOutcome(String title, int color) {
+        if (outcomePanel == null || outcomeTitle == null) {
+            return;
+        }
+        outcomeTitle.setText(title);
+        outcomeTitle.setTextColor(color);
+        outcomePanel.setVisibility(View.VISIBLE);
     }
 
     private String missionLabel() {

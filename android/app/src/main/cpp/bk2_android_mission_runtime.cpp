@@ -1,6 +1,7 @@
 #include "bk2_android_mission_runtime.h"
 
 #include "bk2_android_database.h"
+#include "bk2_android_legacy_game_runtime.h"
 #include "bk2_android_vfs.h"
 #include "bk2_port_paths.h"
 
@@ -3458,4 +3459,34 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_nival_blitzkrieg2_NativeBridge_runMissionCheckpointProbe(JNIEnv* env, jclass) {
     const std::string text = bk2::android::RunMissionCheckpointProbe();
     return env->NewStringUTF(text.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_getMissionOutcome(JNIEnv* env, jclass) {
+    return env->NewStringUTF(bk2::android::LegacyMissionOutcome());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_getMissionHudStatus(JNIEnv* env, jclass) {
+    const bk2::android::MissionRuntimeState state =
+            bk2::android::GetMissionRuntimeState();
+    std::ostringstream text;
+    if (!state.active) {
+        text << "Objectives: loading";
+    } else {
+        text << "Objectives: " << state.completed_objective_count
+             << "/" << state.objective_count;
+        if (state.received_objective_count > 0) {
+            text << "   Active: " << state.received_objective_count;
+        }
+        if (state.failed_objective_count > 0) {
+            text << "   Failed: " << state.failed_objective_count;
+        }
+    }
+    return env->NewStringUTF(text.str().c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_forfeitMission(JNIEnv*, jclass) {
+    bk2::android::HandleLegacyInputEvent("local_loose");
 }

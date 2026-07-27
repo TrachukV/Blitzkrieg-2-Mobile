@@ -5,6 +5,8 @@
 #include "../../../../../Versions/Temporary/Engine/Sources/Input/Bind.h"
 #include "../../../../../Versions/Temporary/Engine/Sources/Misc/HPTimer.h"
 
+#include "bk2_android_legacy_game_runtime.h"
+
 #include <chrono>
 
 namespace {
@@ -98,9 +100,9 @@ void ToggleLockProfiles()
 
 namespace NInput {
 
-void PostEvent(const string&, int, int)
+void PostEvent(const string& eventName, int, int)
 {
-    // Client-side event dispatch is connected when WorldClient is ported.
+    bk2::android::HandleLegacyInputEvent(eventName.c_str());
 }
 
 }

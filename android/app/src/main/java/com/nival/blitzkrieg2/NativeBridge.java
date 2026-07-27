@@ -20,6 +20,9 @@ final class NativeBridge {
     static native String startFirstCampaignMissionProbe();
     static native String runMissionProgressionProbe();
     static native String runMissionCheckpointProbe();
+    static native String getMissionOutcome();
+    static native String getMissionHudStatus();
+    static native void forfeitMission();
 
     static void attachActivity(Blitzkrieg2Activity activity) {
         activityRef = new WeakReference<>(activity);
