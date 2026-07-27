@@ -6,8 +6,11 @@
 #include "Track.h"
 #include "../System/Commands.h"
 #include "../System/VFSOperations.h"
+#if defined(BK2_ANDROID)
+#include "bk2_android_audio_backend.h"
+#endif
 
-float s_fMusicVolume;
+float s_fMusicVolume = 0.99f;
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 IMusicSystem * CreateMusicSystem()
 {
@@ -23,9 +26,14 @@ CMusicSystem * GetMusicSystem()
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 NTimer::STime GetAbsTime()
 {
+#if defined(BK2_ANDROID)
+	return static_cast<NTimer::STime>( GetTickCount() );
+#else
 	return Singleton<IGameTimer>()->GetAbsTime();
+#endif
 }
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#if !defined(BK2_ANDROID)
 FSOUND_STREAM * OpenTrack( CDataStream *pTrack )
 {
 	if ( pTrack == 0 || !pTrack->IsOk() )
@@ -34,6 +42,7 @@ FSOUND_STREAM * OpenTrack( CDataStream *pTrack )
 	FSOUND_STREAM *pStreamingSound = FSOUND_Stream_Open( (const char*)(pTrack->GetBuffer()), FSOUND_2D | FSOUND_LOOP_OFF | FSOUND_LOADMEMORY, 0, pTrack->GetSize() );
 	return pStreamingSound;
 }
+#endif
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 bool CMusicSystem::IsPaused( EStreamType eType ) const
 {
@@ -82,18 +91,32 @@ void CMusicSystem::Update()
 	
 	if ( channels[EST_MUSIC] > 0 )
 	{
+#if defined(BK2_ANDROID)
+		bk2::android::AudioBackend().set_volume(
+			channels[EST_MUSIC], fMusicVolume );
+		bk2::android::AudioBackend().set_channel_paused(
+			channels[EST_MUSIC], IsPaused( EST_MUSIC ) );
+#else
 		if ( int(fMusicVolume * 255) != FSOUND_GetVolume( channels[EST_MUSIC] ) )
 			FSOUND_SetVolume( channels[EST_MUSIC], fMusicVolume * 255 );
 		if ( bool(FSOUND_GetPaused( channels[EST_MUSIC] )) != IsPaused( EST_MUSIC ) )
 			FSOUND_SetPaused( channels[EST_MUSIC], IsPaused( EST_MUSIC ) );
+#endif
 	}
 
 	if ( channels[EST_VOICE] > 0 )
 	{
+#if defined(BK2_ANDROID)
+		bk2::android::AudioBackend().set_volume(
+			channels[EST_VOICE], fVoiceVolume );
+		bk2::android::AudioBackend().set_channel_paused(
+			channels[EST_VOICE], IsPaused( EST_VOICE ) );
+#else
 		if ( int(fVoiceVolume * 255) != FSOUND_GetVolume( channels[EST_VOICE] ) )
 			FSOUND_SetVolume( channels[EST_VOICE], fVoiceVolume * 255 );
 		if ( bool(FSOUND_GetPaused( channels[EST_VOICE] )) != IsPaused( EST_VOICE ) )
 			FSOUND_SetPaused( channels[EST_VOICE], IsPaused( EST_VOICE ) );
+#endif
 	}
 }
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -431,7 +431,7 @@ public:
 	CShellsStore() { }
 	void Clear();
 
-	void AddShell( CMomentShell	&shell ); 
+	void AddShell( CMomentShell shell ); 
 	void AddShell( CInvisShell *pShell );
 	void AddShell( CVisShell *pShell );
 

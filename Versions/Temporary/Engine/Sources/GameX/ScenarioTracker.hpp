@@ -28,7 +28,11 @@ class CScenarioTracker : public IScenarioTracker
 	typedef hash_map< CDBPtr<NDb::SMapInfo>, SMissionStats, SDBPtrHash > CMissionsStats;
 	typedef hash_map<int/*NDb::EReinforcementType*/, SLeaderInfo > CLeaderList;
 	typedef vector<bool> CKnownReinforcements;
-	typedef vector< CPtr<CMapObj> > CObjectiveObjects;
+	#if defined(BK2_ANDROID)
+typedef vector< CMapObj* > CObjectiveObjects;
+#else
+typedef vector< CPtr<CMapObj> > CObjectiveObjects;
+#endif
 	typedef hash_map< int, CObjectiveObjects > CObjectivesObjects;
 	
 	struct SFavoriteReinf

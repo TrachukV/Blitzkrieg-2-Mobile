@@ -28,7 +28,7 @@ private:
 
 	int VFT2TypeID( VFT t )
 	{
-		CTypeIndexHash::iterator i = typeIndex.find( t );
+		typename CTypeIndexHash::iterator i = typeIndex.find( t );
 		if ( i != typeIndex.end() )
 			return i->second;
 		for ( i = typeIndex.begin(); i != typeIndex.end(); ++i )
@@ -47,7 +47,7 @@ public:
 	{
 		typeInfo.erase( nTypeID );
 		vector<VFT> toErase;
-		for ( CTypeIndexHash::iterator i = typeIndex.begin(); i != typeIndex.end(); ++i )
+		for ( typename CTypeIndexHash::iterator i = typeIndex.begin(); i != typeIndex.end(); ++i )
 		{
 			if ( *i->first == *vft )
 				toErase.push_back( i->first );
@@ -65,7 +65,7 @@ public:
 	}
 	T* CreateObject( int nTypeID ) 
 	{ 
-		CTypeNewHash::iterator i = typeInfo.find( nTypeID );
+		typename CTypeNewHash::iterator i = typeInfo.find( nTypeID );
 		if ( i == typeInfo.end() )
 			return 0;
 		newFunc f = i->second;

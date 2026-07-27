@@ -20,18 +20,24 @@ interface IXmlSaver;
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 namespace NDb
 {
+#if !defined(BK2_ANDROID)
 	enum EUnitSpecialAbility;
 	enum EUnitSpecialAbilityGroup;
+#endif
 	struct SUnitStatsModifier;
 	struct SWeaponRPGStats;
+#if !defined(BK2_ANDROID)
 	enum EObjectVisType;
 	enum EObjGameType;
 	enum ESeason;
+#endif
 	struct SComplexSoundDesc;
 	struct SEffect;
 	struct SIconsSet;
 	struct SComplexEffect;
+#if !defined(BK2_ANDROID)
 	enum ESelectionType;
+#endif
 	struct SBurningFuel;
 	struct SModel;
 	struct SVisObj;
@@ -41,24 +47,36 @@ namespace NDb
 	struct SCraterSet;
 	struct SAttachedModelVisObj;
 	struct SDynamicDebrisSet;
+#if !defined(BK2_ANDROID)
 	enum EDesignBuildingType;
 	enum EBuildingType;
+#endif
 	struct SArmorPattern;
+#if !defined(BK2_ANDROID)
 	enum EUnitPoliticalSide;
+#endif
 	struct SUnitSpecialAblityDesc;
+#if !defined(BK2_ANDROID)
 	enum EDBUnitRPGType;
+#endif
 	struct SArmorPatternPlacement;
 	struct SM1UnitType;
 	struct SM1UnitActions;
 	struct SAnimBase;
 	struct SM1UnitSpecific;
+#if !defined(BK2_ANDROID)
 	enum EEncyclopediaFilterUnitType;
+#endif
 	struct SAckSetRPGStats;
 	struct SUnitActions;
+#if !defined(BK2_ANDROID)
 	enum EDesignUnitType;
+#endif
 	struct SComplexSeasonedEffect;
+#if !defined(BK2_ANDROID)
 	enum EReinforcementType;
 	enum EUserAction;
+#endif
 	struct SPartyDependentInfo;
 	struct SMechUnitRPGStats;
 	struct SInfantryRPGStats;
@@ -1888,9 +1906,9 @@ namespace NDb
 		DWORD CalcCheckSum() const;
 	};
 
-	enum EDBUnitRPGType
-	{
-		DB_RPG_TYPE_SOLDIER = 0,
+		enum EDBUnitRPGType
+		{
+			DB_RPG_TYPE_SOLDIER = 0,
 		DB_RPG_TYPE_ENGINEER = 1,
 		DB_RPG_TYPE_SNIPER = 2,
 		DB_RPG_TYPE_OFFICER = 3,
@@ -1927,10 +1945,13 @@ namespace NDb
 		DB_RPG_TYPE_TRAIN_CARRIER = 34,
 		DB_RPG_TYPE_TRAIN_SUPER = 35,
 		DB_RPG_TYPE_TRAIN_ARMOR = 36,
-		DB_RPG_TYPE_COUNT = 37,
-	};
+			DB_RPG_TYPE_COUNT = 37,
+		};
+#if defined(BK2_ANDROID)
+	EUnitRPGType ReMapRPGType( EDBUnitRPGType eType );
+#endif
 
-	enum EUnitPoliticalSide
+		enum EUnitPoliticalSide
 	{
 		POLITICAL_SIDE_UNKNOWN = 0,
 		POLITICAL_SIDE_ALLIES = 1,

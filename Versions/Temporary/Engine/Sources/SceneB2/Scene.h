@@ -35,7 +35,7 @@ namespace NAIVisInfo
 	class CDebugCircle;
 	class CDebugMarker;
 
-	enum EColor;
+	enum EColor : int;
 };
 
 interface IVisObj;

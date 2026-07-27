@@ -52,6 +52,9 @@ void CRotatingFireplacesObject::DeleteUnit( CSoldier *pSoldier )
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 bool CRotatingFireplacesObject::IsBetterToGoToFireplace( CSoldier *pSoldier, const int nFireplace ) const
 {
+	if ( pSoldier == 0 || nFireplace < 0 || nFireplace >= GetNFirePlaces() )
+		return false;
+
 	CSoldier *pFireplaceSoldier = GetSoldierInFireplace( nFireplace );
 
 	if ( pFireplaceSoldier == pSoldier )
@@ -77,15 +80,22 @@ bool CRotatingFireplacesObject::IsBetterToGoToFireplace( CSoldier *pSoldier, con
 			if ( nFireplaceSoldierMainAmmo == 0 )
 				return true;
 
-			const float fSoldierFireRange = pSoldier->GetGun( 0 )->GetFireRange( 0 );
-			const float fFireplaceSoldierFireRange = pFireplaceSoldier->GetGun( 0 )->GetFireRange( 0 );
+			CBasicGun *pSoldierGun = pSoldier->GetGun( 0 );
+			CBasicGun *pFireplaceSoldierGun = pFireplaceSoldier->GetGun( 0 );
+			if ( pSoldierGun == 0 )
+				return false;
+			if ( pFireplaceSoldierGun == 0 )
+				return true;
+
+			const float fSoldierFireRange = pSoldierGun->GetFireRange( 0 );
+			const float fFireplaceSoldierFireRange = pFireplaceSoldierGun->GetFireRange( 0 );
 			if ( fSoldierFireRange > fFireplaceSoldierFireRange )
 				return true;
 			if ( fSoldierFireRange < fFireplaceSoldierFireRange )
 				return false;
 
-			const float fSoldierDamageSpeed = pSoldier->GetGun( 0 )->GetFireRate() * pSoldier->GetGun( 0 )->GetDamage();
-			const float fFireplaceSoldierDamageSpeed = pFireplaceSoldier->GetGun( 0 )->GetFireRate() * pFireplaceSoldier->GetGun( 0 )->GetDamage();
+			const float fSoldierDamageSpeed = pSoldierGun->GetFireRate() * pSoldierGun->GetDamage();
+			const float fFireplaceSoldierDamageSpeed = pFireplaceSoldierGun->GetFireRate() * pFireplaceSoldierGun->GetDamage();
 
 			return ( fSoldierDamageSpeed > fFireplaceSoldierDamageSpeed );
 		}
@@ -112,7 +122,12 @@ void CRotatingFireplacesObject::Segment()
 		while ( !bChanged && iter != units.end() )
 		{
 			CSoldier *pSoldier = iter->pSoldier;
-			if ( pSoldier->IsAlive() )
+			if ( pSoldier == 0 )
+			{
+				bChanged = true;
+				units.erase( iter );
+			}
+			else if ( pSoldier->IsAlive() )
 			{
 				if ( !pSoldier->IsInEntrenchment() )
 				{

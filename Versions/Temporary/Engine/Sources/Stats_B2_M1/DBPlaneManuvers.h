@@ -8,12 +8,18 @@ interface IXmlSaver;
 namespace NDb
 {
 	struct SHeightRange;
+#if !defined(BK2_ANDROID)
 	enum EPlanesAttitude;
+#endif
 	struct SDirectionRange;
 	struct SDistanceRange;
+#if !defined(BK2_ANDROID)
 	enum EManuverDestination;
+#endif
 	struct SSpeedRange;
+#if !defined(BK2_ANDROID)
 	enum EManuverID;
+#endif
 
 	enum ESpeedRelation
 	{

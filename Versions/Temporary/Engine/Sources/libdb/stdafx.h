@@ -14,8 +14,17 @@
 #define WIN32_LEAN_AND_MEAN							// Exclude rarely-used stuff from Windows headers
 
 #define _WIN32_WINNT 0x400
+#if defined(BK2_ANDROID)
+#include "bk2_legacy_win_compat.h"
+#else
 #include <windows.h>
+#endif
+#if defined(BK2_ANDROID)
+#include <typeinfo>
+using std::type_info;
+#else
 #include <typeinfo.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -31,28 +40,38 @@
 #include <comutil.h>
 #endif // __AFX__
 
+#if !defined(BK2_ANDROID)
 #pragma component( mintypeinfo, on )
+#endif
 #include <math.h>
 #include <memory.h>
 #include <string.h>
 // 
 #include "../Misc/Asserts.h"
 //
+#if !defined(BK2_ANDROID)
 #pragma warning( disable: 4018 4355 4800 4244 4267 )
 #pragma warning( disable: 4127 4100 4201 4512 4389 )
+#endif
 #ifdef NIVAL_DLL
 #pragma warning( disable: 4273)
 #endif
 
 #include "../Misc/nlist.h"
+#if !defined(BK2_ANDROID)
 #pragma component( mintypeinfo, off )
+#endif
 #include "../Misc/nstring.h"
 #include "../Misc/nvector.h"
+#if !defined(BK2_ANDROID)
 #pragma component( mintypeinfo, on )
+#endif
 #include "../Misc/nhash_map.h"
 #include "../Misc/nhash_set.h"
 #include "../Misc/nset.h"
+#if !defined(BK2_ANDROID)
 #pragma component( mintypeinfo, off )
+#endif
 //#pragma warning( disable : 4503 4018 4786 4800 4290 4146 4244 4284 4267 )
 
 using namespace nstl;
@@ -60,8 +79,10 @@ using namespace nstl;
 #include "../Misc/nhelpdebug.h"
 
 //
-typedef __int64 int64;									// due to lack of 'long long' type support
+typedef long long int64;									// due to lack of 'long long' type support
+#if !defined(BK2_ANDROID)
 typedef unsigned __int64 QWORD;					// quadra word
+#endif
 #define for if(false); else for					// to achive standard variable scope resolving, declared inside 'for'
 
 // define 'interface' keyword

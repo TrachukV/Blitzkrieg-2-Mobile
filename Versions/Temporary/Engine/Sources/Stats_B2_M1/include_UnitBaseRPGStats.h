@@ -69,5 +69,5 @@ virtual const CUserActions* GetUserActions( bool bActionsBy ) const;
 //
 const SUnitActions* GetActions() const
 {
-	return pActions ? pActions : NDb::Get<NDb::SUnitActions>( CDBID("Other/UnitActions/Game/Units/dummy.xdb") );
+	return pActions ? pActions.GetPtr() : NDb::Get<NDb::SUnitActions>( CDBID("Other/UnitActions/Game/Units/dummy.xdb") );
 }

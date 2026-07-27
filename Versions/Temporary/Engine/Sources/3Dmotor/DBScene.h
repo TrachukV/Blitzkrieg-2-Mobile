@@ -15,7 +15,9 @@ namespace NDb
 	struct SSkeleton;
 	struct SAIGeometry;
 	struct SAmbientLight;
+#if !defined(BK2_ANDROID)
 	enum EConvertionType;
+#endif
 	struct SDistanceFog;
 	struct SModel;
 	struct SParticleInstance;

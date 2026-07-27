@@ -444,7 +444,7 @@ void CEventUpdater::PumpUpdates()
 	bool bSuspendableUpdatesChanged = false;
 	CUpdateData *pUpdate;
 	// find updates, that became visible
-	for ( hash_set<SVector, STilesHash>::const_iterator it = visibleTiles.begin(); it != visibleTiles.end(); ++it )
+	for ( hash_set<SVector, STilesHash>::iterator it = visibleTiles.begin(); it != visibleTiles.end(); ++it )
 	{
 		TUpdatesList &lst = suspended[(*it).y][(*it).x];
 		for ( TUpdatesList::const_iterator lit = lst.begin(); lit != lst.end(); ++lit )

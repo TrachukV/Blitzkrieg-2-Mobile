@@ -71,16 +71,16 @@ protected:
     
     pointer __new_start = alloc( __len );//this->_M_end_of_storage.allocate(__len);
     pointer __new_finish = __new_start;
-    __new_finish = uninitialized_copy(this->_M_start, __position, __new_start);
+    __new_finish = nstl::uninitialized_copy(this->_M_start, __position, __new_start);
     // handle insertion
     if (__fill_len == 1) {
       _Construct(__new_finish, __x);
       ++__new_finish;
     } else
-      __new_finish = uninitialized_fill_n(__new_finish, __fill_len, __x);
+      __new_finish = nstl::uninitialized_fill_n(__new_finish, __fill_len, __x);
     if (!__atend)
       // copy remainder
-      __new_finish = uninitialized_copy(__position, this->_M_finish, __new_finish);
+      __new_finish = nstl::uninitialized_copy(__position, this->_M_finish, __new_finish);
     _M_clear();
     _M_set(__new_start, __new_finish, __new_start + __len);
   }
@@ -93,16 +93,16 @@ protected:
 
 			pointer __new_start = alloc( __len );//this->_M_end_of_storage.allocate(__len);
 			pointer __new_finish = __new_start;
-			__new_finish = uninitialized_copy(this->_M_start, __position, __new_start);
+			__new_finish = nstl::uninitialized_copy(this->_M_start, __position, __new_start);
 			// handle insertion
 			if (__fill_len == 1) {
 				_Construct(__new_finish);
 				++__new_finish;
 			} else
-				__new_finish = uninitialized_fill_n(__new_finish, __fill_len);
+				__new_finish = nstl::uninitialized_fill_n(__new_finish, __fill_len);
 			if (!__atend)
 				// copy remainder
-				__new_finish = uninitialized_copy(__position, this->_M_finish, __new_finish);
+				__new_finish = nstl::uninitialized_copy(__position, this->_M_finish, __new_finish);
 			_M_clear();
 			_M_set(__new_start, __new_finish, __new_start + __len);
 		}
@@ -176,7 +176,7 @@ public:
   { 
 		_M_start = alloc(__n);//_M_end_of_storage.allocate(__n);
 		_M_end_of_storage = _M_start + __n;
-    this->_M_finish = uninitialized_fill_n(this->_M_start, __n, __val); 
+    this->_M_finish = nstl::uninitialized_fill_n(this->_M_start, __n, __val); 
 
 		LOOK_INIT( *this );
 		INST_LOOK_AT
@@ -186,7 +186,7 @@ public:
    {
 		 _M_start = alloc(__n);//_M_end_of_storage.allocate(__n);
 		 _M_end_of_storage = _M_start + __n;
-    _M_finish = uninitialized_fill_n(this->_M_start, __n); 
+    _M_finish = nstl::uninitialized_fill_n(this->_M_start, __n); 
 
 		LOOK_INIT( *this );
 		INST_LOOK_AT
@@ -196,7 +196,7 @@ public:
   { 
 		_M_start = alloc(__x.size());//_M_end_of_storage.allocate(__n);
 		_M_end_of_storage = _M_start + __x.size();
-    this->_M_finish = uninitialized_copy((const_pointer)__x._M_start, 
+    this->_M_finish = nstl::uninitialized_copy((const_pointer)__x._M_start, 
                                            (const_pointer)__x._M_finish, this->_M_start);
 
 		LOOK_INIT( *this );
@@ -316,7 +316,7 @@ public:
 				const int __elems_after = this->_M_finish - __position;
 				pointer __old_finish = this->_M_finish;
 				if (__elems_after > __n) {
-					uninitialized_copy(this->_M_finish - __n, this->_M_finish, this->_M_finish, _IsPODType());
+					nstl::uninitialized_copy(this->_M_finish - __n, this->_M_finish, this->_M_finish, _IsPODType());
 					this->_M_finish += __n;
 					__copy_backward_ptrs(__position, __old_finish - __n, __old_finish, _TrivialAss());
 					copy(__first, __last, __position);
@@ -324,9 +324,9 @@ public:
 				else {
 					_ForwardIterator __mid = __first;
 					advance(__mid, __elems_after);
-					uninitialized_copy(__mid, __last, this->_M_finish, _IsPODType());
+					nstl::uninitialized_copy(__mid, __last, this->_M_finish, _IsPODType());
 					this->_M_finish += __n - __elems_after;
-					uninitialized_copy(__position, __old_finish, this->_M_finish, _IsPODType());
+					nstl::uninitialized_copy(__position, __old_finish, this->_M_finish, _IsPODType());
 					this->_M_finish += __elems_after;
 					copy(__first, __mid, __position);
 				} // elems_after 
@@ -336,9 +336,9 @@ public:
 				const int __len = __old_size + (max)(__old_size, __n);
 				pointer __new_start = alloc( __len );//this->_M_end_of_storage.allocate(__len);
 				pointer __new_finish = __new_start;
-				__new_finish = uninitialized_copy(this->_M_start, __position, __new_start, _IsPODType());
-				__new_finish = uninitialized_copy(__first, __last, __new_finish, _IsPODType());
-				__new_finish = uninitialized_copy(__position, this->_M_finish, __new_finish, _IsPODType());
+				__new_finish = nstl::uninitialized_copy(this->_M_start, __position, __new_start, _IsPODType());
+				__new_finish = nstl::uninitialized_copy(__first, __last, __new_finish, _IsPODType());
+				__new_finish = nstl::uninitialized_copy(__position, this->_M_finish, __new_finish, _IsPODType());
 				_M_clear();
 				_M_set(__new_start, __new_finish, __new_start + __len);
 			}
@@ -407,7 +407,7 @@ protected:
 		_ForwardIterator __last)
 	{
 		pointer __result = alloc( __n );//this->_M_end_of_storage.allocate(__n);
-		uninitialized_copy(__first, __last, __result);
+		nstl::uninitialized_copy(__first, __last, __result);
 		return __result;
 	}
 
@@ -425,7 +425,7 @@ protected:
 				int __n = distance(__first, __last);
 				this->_M_start = alloc( __n );//this->_M_end_of_storage.allocate(__n);
 				this->_M_end_of_storage._M_data = this->_M_start + __n;
-				this->_M_finish = uninitialized_copy(__first, __last, this->_M_start, _IsPODType());
+				this->_M_finish = nstl::uninitialized_copy(__first, __last, this->_M_start, _IsPODType());
 			}*/
 
 };
@@ -460,15 +460,15 @@ vector<_Tp>::_M_fill_insert(
 				const int __elems_after = this->_M_finish - __position;
 				pointer __old_finish = this->_M_finish;
 				if (__elems_after > __n) {
-					uninitialized_copy(this->_M_finish - __n, this->_M_finish, this->_M_finish);
+					nstl::uninitialized_copy(this->_M_finish - __n, this->_M_finish, this->_M_finish);
 					this->_M_finish += __n;
 					copy_backward(__position, __old_finish - __n, __old_finish);
 					nstl::fill(__position, __position + __n, __x_copy);
 				}
 				else {
-					uninitialized_fill_n(this->_M_finish, __n - __elems_after, __x_copy);
+					nstl::uninitialized_fill_n(this->_M_finish, __n - __elems_after, __x_copy);
 					this->_M_finish += __n - __elems_after;
-					uninitialized_copy(__position, __old_finish, this->_M_finish);
+					nstl::uninitialized_copy(__position, __old_finish, this->_M_finish);
 					this->_M_finish += __elems_after;
 					nstl::fill(__position, __old_finish, __x_copy);
 				}
@@ -489,15 +489,15 @@ vector<_Tp>::_M_fill_insert(
 					const int __elems_after = this->_M_finish - __position;
 					pointer __old_finish = this->_M_finish;
 					if (__elems_after > __n) {
-						uninitialized_copy(this->_M_finish - __n, this->_M_finish, this->_M_finish);
+						nstl::uninitialized_copy(this->_M_finish - __n, this->_M_finish, this->_M_finish);
 						this->_M_finish += __n;
 						copy_backward(__position, __old_finish - __n, __old_finish);
 						nstl::fill(__position, __position + __n, _Tp());
 					}
 					else {
-						uninitialized_fill_n(this->_M_finish, __n - __elems_after);
+						nstl::uninitialized_fill_n(this->_M_finish, __n - __elems_after);
 						this->_M_finish += __n - __elems_after;
-						uninitialized_copy(__position, __old_finish, this->_M_finish);
+						nstl::uninitialized_copy(__position, __old_finish, this->_M_finish);
 						this->_M_finish += __elems_after;
 						nstl::fill(__position, __old_finish, _Tp());
 					}
@@ -526,7 +526,7 @@ vector<_Tp>::_M_fill_insert(
 				}
 				else {
 					copy((const_pointer)__x._M_start, (const_pointer)__x._M_start + size(), (pointer)this->_M_start);
-					uninitialized_copy((const_pointer)__x._M_start + size(), (const_pointer)__x._M_finish+0, this->_M_finish);
+					nstl::uninitialized_copy((const_pointer)__x._M_start + size(), (const_pointer)__x._M_finish+0, this->_M_finish);
 				}
 				this->_M_finish = this->_M_start + __xlen;
 			}
@@ -542,7 +542,7 @@ void vector<_Tp>::_M_fill_assign(int __n, const _Tp& __val) {
 				}
 				else if (__n > size()) {
 					fill(begin(), end(), __val);
-					this->_M_finish = uninitialized_fill_n(this->_M_finish, __n - size(), __val);
+					this->_M_finish = nstl::uninitialized_fill_n(this->_M_finish, __n - size(), __val);
 				}
 				else
 					erase(nstl::fill_n(begin(), __n, __val), end());

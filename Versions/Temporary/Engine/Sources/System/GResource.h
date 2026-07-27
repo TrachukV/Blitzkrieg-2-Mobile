@@ -63,7 +63,7 @@ protected:
 				AddFileRequest( pRequest );
 		}
 	}
-	bool NeedUpdate() { TParent::NeedUpdate(); if ( !IsValid(pValue) && IsValid(pRequest) && pRequest->IsReady() ) return true; return false; }
+	bool NeedUpdate() { TParent::NeedUpdate(); if ( !IsValid(this->pValue) && IsValid(pRequest) && pRequest->IsReady() ) return true; return false; }
 public:
 };
 ////////////////////////////////////////////////////////////////////////////////////////////////////

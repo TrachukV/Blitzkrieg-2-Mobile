@@ -200,8 +200,8 @@ public:                                                                         
 	TPtrName() {}                                                                      \
 	TPtrName( T *_ptr ): CBase( _ptr ) {}                                              \
 	TPtrName( const TPtrName &a ): CBase( a ) {}                                       \
-	TPtrName& operator=( T *_ptr ) { Set( _ptr ); return *this; }                      \
-	TPtrName& operator=( const TPtrName &a ) { SetObject( a.Get() ); return *this; }   \
+	TPtrName& operator=( T *_ptr ) { this->Set( _ptr ); return *this; }                      \
+	TPtrName& operator=( const TPtrName &a ) { this->SetObject( a.Get() ); return *this; }   \
 	int operator&( IBinSaver &f ) { return (*(CBase*)this) & (f); }                    \
 };
 #ifdef STUPID_VISUAL_ASSIST

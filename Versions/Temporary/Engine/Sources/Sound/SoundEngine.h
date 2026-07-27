@@ -1,7 +1,9 @@
 #ifndef __SOUNDENGINE_H__
 #define __SOUNDENGINE_H__
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#if !defined(BK2_ANDROID)
 #include "../vendor/fmod/api/inc/fmod.h"
+#endif
 #include "SFX.h"
 #include "..\Misc\HashFuncs.h"
 

@@ -124,6 +124,43 @@ IAIScenarioTracker *GetScenarioTracker()
 	//CRAP}
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#if defined(BK2_ANDROID)
+extern "C" {
+int bk2_android_ai_debug_load_objects = 0;
+int bk2_android_ai_debug_load_candidates = 0;
+int bk2_android_ai_debug_reinforcement_deferred = 0;
+int bk2_android_ai_debug_add_calls = 0;
+int bk2_android_ai_debug_add_success = 0;
+int bk2_android_ai_debug_add_failed = 0;
+int bk2_android_ai_debug_empty_stats = 0;
+int bk2_android_ai_debug_bare_infantry = 0;
+int bk2_android_ai_debug_bad_visual = 0;
+int bk2_android_ai_debug_outside_map = 0;
+int bk2_android_ai_debug_player_missing = 0;
+int bk2_android_ai_debug_unit_case = 0;
+int bk2_android_ai_debug_squad_case = 0;
+int bk2_android_ai_debug_other_case = 0;
+}
+
+static void BK2AndroidResetAIDebugCounters()
+{
+	bk2_android_ai_debug_load_objects = 0;
+	bk2_android_ai_debug_load_candidates = 0;
+	bk2_android_ai_debug_reinforcement_deferred = 0;
+	bk2_android_ai_debug_add_calls = 0;
+	bk2_android_ai_debug_add_success = 0;
+	bk2_android_ai_debug_add_failed = 0;
+	bk2_android_ai_debug_empty_stats = 0;
+	bk2_android_ai_debug_bare_infantry = 0;
+	bk2_android_ai_debug_bad_visual = 0;
+	bk2_android_ai_debug_outside_map = 0;
+	bk2_android_ai_debug_player_missing = 0;
+	bk2_android_ai_debug_unit_case = 0;
+	bk2_android_ai_debug_squad_case = 0;
+	bk2_android_ai_debug_other_case = 0;
+}
+#endif
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //*******************************************************************
 //*		 								   CAILogic																		*
 //*******************************************************************
@@ -260,14 +297,29 @@ void CAILogic::SendAcknowlegdementForced( CObjectBase *pObj, const EUnitAckType 
 CObjectBase* CAILogic::AddObject( const int nUniqueID, const SMapObjectInfo &object, LinkInfo *linksInfo, bool bInitialization, const SHPObjectRPGStats *pPassedStats, EReinforcementType eType )
 {
 	CUpdatableObj *pResult = 0;
+#if defined(BK2_ANDROID)
+	++bk2_android_ai_debug_add_calls;
+#endif
 
 	NI_ASSERT( object.pObject != 0, "Trying to add object with empty stats... ignoring" );
 	if ( object.pObject == 0 ) 
+	{
+#if defined(BK2_ANDROID)
+		++bk2_android_ai_debug_empty_stats;
+		++bk2_android_ai_debug_add_failed;
+#endif
 		return 0;
+	}
 
 	NI_ASSERT( object.pObject->GetTypeID() != NDb::SInfantryRPGStats::typeID, "Trying to add bare infantry w/o squad - ignoring" );
 	if ( object.pObject->GetTypeID() == NDb::SInfantryRPGStats::typeID ) 
+	{
+#if defined(BK2_ANDROID)
+		++bk2_android_ai_debug_bare_infantry;
+		++bk2_android_ai_debug_add_failed;
+#endif
 		return 0;
+	}
 
 	{
 		const bool bGoodVisObj = object.pObject->pvisualObject != 0 || 
@@ -277,21 +329,42 @@ CObjectBase* CAILogic::AddObject( const int nUniqueID, const SMapObjectInfo &obj
 			object.pObject->GetTypeID() == NDb::SEntrenchmentRPGStats::typeID;
 		NI_ASSERT( bGoodVisObj , StrFmt( "object (ID = \"%s\") of type \"%s\" with empty visual part, ignoring", NDb::GetResName(object.pObject), typeid(*object.pObject.GetPtr()).name() ) );
 		if ( !bGoodVisObj ) 
+		{
+#if defined(BK2_ANDROID)
+			++bk2_android_ai_debug_bad_visual;
+			++bk2_android_ai_debug_add_failed;
+#endif
 			return 0;
+		}
 	}
 	bool bNotAllowedObject = !GetAIMap()->IsPointInside( CVec2( object.vPos.x,object.vPos.y ) ) && object.pObject->GetTypeID() != NDb::SMechUnitRPGStats::typeID &&
 														object.pObject->GetTypeID() != NDb::SSquadRPGStats::typeID && object.pObject->GetTypeID() != NDb::SInfantryRPGStats::typeID ;
 	// check if object is inside map
 	NI_ASSERT( !bNotAllowedObject, "object is outside map, deleting. see next assert about object number in MapInfo" );
 	if ( bNotAllowedObject )
+	{
+#if defined(BK2_ANDROID)
+		++bk2_android_ai_debug_outside_map;
+		++bk2_android_ai_debug_add_failed;
+#endif
 		return 0;
+	}
 
 	const int nPlayer = object.nPlayer;
+#if defined(BK2_ANDROID)
+	if ( object.pObject->eGameType != SGVOGT_UNIT && object.pObject->eGameType != SGVOGT_SQUAD )
+		++bk2_android_ai_debug_other_case;
+#endif
 
 	switch ( object.pObject->eGameType )
 	{
 		case SGVOGT_UNIT:
 		{
+#if defined(BK2_ANDROID)
+			++bk2_android_ai_debug_unit_case;
+			if ( !theDipl.IsPlayerExist( nPlayer ) )
+				++bk2_android_ai_debug_player_missing;
+#endif
 			if ( theDipl.IsPlayerExist( nPlayer ) )
 			{
 				const SMechUnitRPGStats *pNewStats = 0;
@@ -345,6 +418,11 @@ CObjectBase* CAILogic::AddObject( const int nUniqueID, const SMapObjectInfo &obj
 
 		case SGVOGT_SQUAD:
 		{
+#if defined(BK2_ANDROID)
+			++bk2_android_ai_debug_squad_case;
+			if ( !theDipl.IsPlayerExist( object.nPlayer ) )
+				++bk2_android_ai_debug_player_missing;
+#endif
 			if ( theDipl.IsPlayerExist( object.nPlayer ) )
 			{
 				CDBPtr<SSquadRPGStats> pStats = checked_cast<const SSquadRPGStats*>(pPassedStats);
@@ -499,6 +577,9 @@ CObjectBase* CAILogic::AddObject( const int nUniqueID, const SMapObjectInfo &obj
 
 	if ( pResult != 0 )
 	{
+#if defined(BK2_ANDROID)
+		++bk2_android_ai_debug_add_success;
+#endif
 		NI_ASSERT( dynamic_cast<CLinkObject*>( pResult ) != 0, StrFmt("Wrong object of type \"%s\" created - CLinkObject expected", typeid(*pResult).name()) );
 		CLinkObject *pLinkResult = checked_cast<CLinkObject*>( pResult );
 		pLinkResult->SetLink( object.link.nLinkID );
@@ -507,11 +588,20 @@ CObjectBase* CAILogic::AddObject( const int nUniqueID, const SMapObjectInfo &obj
 			(*linksInfo)[pLinkResult->GetUniqueId()] = object.link;
 	}
 
+#if defined(BK2_ANDROID)
+	if ( pResult == 0 )
+		++bk2_android_ai_debug_add_failed;
+#endif
+
 	return pResult;
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void CAILogic::LoadUnits( const SMapInfo *pMapInfo, LinkInfo *linksInfo )
 {
+#if defined(BK2_ANDROID)
+	BK2AndroidResetAIDebugCounters();
+	bk2_android_ai_debug_load_objects = pMapInfo ? pMapInfo->objects.size() : 0;
+#endif
 	list<int> transports;
 //	ConstructorInfo() = Singleton<CConstructorInfo>();
 	for ( int i = 0; i < pMapInfo->objects.size(); ++i )
@@ -521,6 +611,9 @@ void CAILogic::LoadUnits( const SMapInfo *pMapInfo, LinkInfo *linksInfo )
 			
 		if ( pMapInfo->objects[i].pObject == 0 || pMapInfo->objects[i].link.nLinkID == -1 ) 
 			continue;
+#if defined(BK2_ANDROID)
+		++bk2_android_ai_debug_load_candidates;
+#endif
 #ifndef _FINALRELEASE
 		if ( pMapInfo->objects[i].pObject->GetTypeID() == NDb::SMechUnitRPGStats::typeID ) 
 		{
@@ -547,7 +640,12 @@ void CAILogic::LoadUnits( const SMapInfo *pMapInfo, LinkInfo *linksInfo )
 		// â reinforcement
 		const int nGroup = pMapInfo->reinforcements.GetGroupById( pMapInfo->objects[i].nScriptID );
 		if ( nGroup != -1 )
+		{
+#if defined(BK2_ANDROID)
+			++bk2_android_ai_debug_reinforcement_deferred;
+#endif
 			scripts.AddUnitToReinforcGroup( pMapInfo->objects[i], nGroup, 0/*, 0 */);
+		}
 		else
 		{
 			const SUnitBaseRPGStats *pStats = dynamic_cast_ptr<const SUnitBaseRPGStats*>( pMapInfo->objects[i].pObject );

@@ -1,6 +1,8 @@
 #include "MusicSystem.h"
 
+#if !defined(BK2_ANDROID)
 #include "../vendor/fmod/api/inc/fmod.h"
+#endif
 #include "Fade.h"
 
 namespace NDb
@@ -11,7 +13,9 @@ namespace NDb
 }
 namespace NMusicSystem
 {
+#if !defined(BK2_ANDROID)
 FSOUND_STREAM* OpenTrack( CDataStream *pTrack );
+#endif
 NTimer::STime GetAbsTime();
 class CTrack;
 class CPlayList;

@@ -11,7 +11,9 @@ interface IXmlSaver;
 namespace NDb
 {
 	struct SM1UnitStatsModifier;
+#if !defined(BK2_ANDROID)
 	enum EM1Action;
+#endif
 	struct SM1UnitSpecAction;
 
 	struct SM1UnitSpecAction : public CResource

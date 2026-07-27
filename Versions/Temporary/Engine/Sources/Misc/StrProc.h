@@ -165,7 +165,7 @@ void String2GUID( const string &szString, GUID *pGuid );
 template <class TChar>
 void ReplaceAllChars( basic_string<TChar> *pString, const TChar tFrom, const TChar tTo )
 {
-	for ( basic_string<TChar>::iterator it = pString->begin(); it != pString->end(); ++it )
+	for ( typename basic_string<TChar>::iterator it = pString->begin(); it != pString->end(); ++it )
 	{
 		if ( *it == tFrom ) 
 			*it = tTo;

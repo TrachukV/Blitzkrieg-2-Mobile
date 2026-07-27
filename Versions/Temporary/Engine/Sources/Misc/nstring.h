@@ -136,6 +136,9 @@ class basic_string : protected _String_base<T>
 private:                        // Protected members inherited from base.
   typedef _String_base<T> _Base;
   typedef basic_string<T> _Self;
+  using _Base::_M_start;
+  using _Base::_M_finish;
+  using _Base::_M_end_of_storage;
   // fbp : used to optimize char/wchar_t cases, and to simplify
   // _STLP_DEFAULT_CONSTRUCTOR_BUG problem workaround
 //  typedef typename _Is_integer<T>::_Integral _Char_Is_Integral;

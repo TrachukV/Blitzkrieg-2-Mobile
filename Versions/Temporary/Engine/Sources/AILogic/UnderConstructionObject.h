@@ -1,10 +1,15 @@
 #pragma once
+#if defined(BK2_ANDROID)
+#include "../Stats_B2_M1/ActionCommand.h"
+#endif
 
 class CLongObjectCreation;
 class CGivenPassabilityStObject;
 struct SAIObjectsUnderConstructionUpdate;
 class CAILogic;
+#if !defined(BK2_ANDROID)
 enum EActionCommand;
+#endif
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // stores objects under construction (that player is being ordered to build)
 // untill played issues command to actually build this object

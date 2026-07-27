@@ -155,14 +155,20 @@ namespace NDb
 		int operator&( IXmlSaver &saver );
 		DWORD CalcCheckSum() const;
 	};
+#if !defined(BK2_ANDROID)
 	enum EReinforcementType;
+#endif
 	struct SMapInfo;
+#if !defined(BK2_ANDROID)
 	enum EMissionEnableType;
 	enum EDBUnitRPGType;
+#endif
 	struct SChapterBonus;
 	struct STexture;
 	struct SReinforcement;
+#if !defined(BK2_ANDROID)
 	enum EChapterBonusType;
+#endif
 
 	struct SUnitClassEntry
 	{

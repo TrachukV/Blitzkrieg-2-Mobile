@@ -9,6 +9,8 @@
 #include "../Common_RTS_AI/ChecksumSaver.h"
 using namespace NDb;
 
+class CGroupLogic;
+
 #ifndef _FINALRELEASE
 #define CONSOLE_BUFFER_LOG(n,s)	Singleton<IConsoleBuffer>()->WriteASCII( n, s )
 #define CONSOLE_BUFFER_LOG1(n,s,c)	Singleton<IConsoleBuffer>()->WriteASCII( n, s, c )

@@ -5,6 +5,9 @@
 #endif // _MSC_VER > 1000
 //
 #include "GPixelFormat.h"
+#if defined(BK2_ANDROID)
+#include "GfxBuffers.h"
+#endif
 struct SPShader;
 struct SVShader;
 struct SHLSLShader;
@@ -165,7 +168,9 @@ struct S3DTriangle;
 class CPixelShader;
 class CVertexShader;
 
+#if !defined(BK2_ANDROID)
 enum EFace;
+#endif
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 class IQuery : public CObjectBase
 {

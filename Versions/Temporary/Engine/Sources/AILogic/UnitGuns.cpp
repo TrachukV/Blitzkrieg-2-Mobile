@@ -22,6 +22,7 @@ BASIC_REGISTER_CLASS( CUnitGuns );
 bool CUnitGuns::AddGun( const interface IGunsFactory &gunsFactory, const int nPlatform, const int nGunInStats, const SWeaponRPGStats *pWeapon, int *nGuns, const int nAmmo )
 {
 	NI_VERIFY( pWeapon != 0, "Gun w/o weapon! See next assert for unit ID", return false );
+	NI_VERIFY( !pWeapon->shells.empty(), "Gun w/o shells! See next assert for unit ID", return false );
 	//
 	const int nCommonGun = gunsFactory.GetNCommonGun();
 	if ( commonGunsInfo.size() <= nCommonGun )
@@ -205,18 +206,26 @@ void CUnitGuns::SetOwner( CAIUnit *pUnit )
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 const SBaseGunRPGStats& CUnitGuns::GetCommonGunStats( const int nCommonGun ) const
 {
+	static SBaseGunRPGStats emptyGunStats;
 	NI_ASSERT( nCommonGun < nCommonGuns, StrFmt( "Wrong number of gun (%d), total number of guns (%d)", nCommonGun, nCommonGuns ) );
-	return guns[gunsBegins[nCommonGun]]->GetGun();
+	if ( nCommonGun < 0 || nCommonGun >= nCommonGuns || nCommonGun >= int(gunsBegins.size()) )
+		return emptyGunStats;
+	const int nGun = gunsBegins[nCommonGun];
+	if ( nGun < 0 || nGun >= int(guns.size()) || !guns[nGun] )
+		return emptyGunStats;
+	return guns[nGun]->GetGun();
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 int CUnitGuns::GetNAmmo( const int nCommonGun ) const
 {
 	NI_ASSERT( nCommonGun < nCommonGuns, StrFmt( "Wrong number of gun (%d), total number of guns (%d)", nCommonGun, nCommonGuns ) );
+	if ( nCommonGun < 0 || nCommonGun >= nCommonGuns || nCommonGun >= int(commonGunsInfo.size()) || !commonGunsInfo[nCommonGun] )
+		return 0;
 	return commonGunsInfo[nCommonGun]->nAmmo;
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // nAmmo со знаком
-void CUnitGuns::ChangeAmmo( const int nCommonGun, const nAmmo )
+void CUnitGuns::ChangeAmmo( const int nCommonGun, const int nAmmo )
 {
 	NI_ASSERT( nCommonGun < nCommonGuns, StrFmt( "Wrong number of gun (%d), total number of guns (%d)", nCommonGun, nCommonGuns ) );
 	commonGunsInfo[nCommonGun]->nAmmo += nAmmo;
@@ -301,7 +310,8 @@ void CMechUnitGuns::Init( CCommonUnit *pCommonUnit )
 			const SBaseGunRPGStats &gun = pStats->GetGun( pUnit->GetUniqueId(), i, j );
 			if ( gun.pWeapon  )
 			{
-				AddGun( CUnitsGunsFactory( pUnit, nCommonGun++, i-1 ), i, j, gun.pWeapon, &nGuns, gun.nAmmo );
+				if ( AddGun( CUnitsGunsFactory( pUnit, nCommonGun, i-1 ), i, j, gun.pWeapon, &nGuns, gun.nAmmo ) )
+					++nCommonGun;
 
 				if ( gun.pWeapon->fRevealRadius > fMaxRevealRadius )
 					fMaxRevealRadius = gun.pWeapon->fRevealRadius;
@@ -388,11 +398,14 @@ void CInfantryGuns::Init( CCommonUnit *pCommonUnit )
 	const SInfantryRPGStats *pStats = checked_cast<const SInfantryRPGStats*>( pUnit->GetStats() );
 
 	int nGuns = 0;
+	int nCommonGun = 0;
 	const int nUnitUniqueID = pUnit->GetUniqueId();
 	for ( int i = 0; i < pStats->GetGunsSize( nUnitUniqueID, 0 ); ++i )
 	{
-		bool bSuccess = AddGun( CUnitsGunsFactory( pUnit, i, -1 ), 0, i, pStats->GetGun( nUnitUniqueID, 0, i ).pWeapon, &nGuns, pStats->GetGun( nUnitUniqueID, 0, i ).nAmmo );
+		bool bSuccess = AddGun( CUnitsGunsFactory( pUnit, nCommonGun, -1 ), 0, i, pStats->GetGun( nUnitUniqueID, 0, i ).pWeapon, &nGuns, pStats->GetGun( nUnitUniqueID, 0, i ).nAmmo );
 		NI_ASSERT( bSuccess, StrFmt("Can't add gun to unit \"%s\"", NDb::GetResName(pStats)) );
+		if ( bSuccess )
+			++nCommonGun;
 	}
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

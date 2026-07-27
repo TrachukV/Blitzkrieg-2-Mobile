@@ -45,7 +45,12 @@ bool OpenDatabase( NVFS::IVFS *pVFS, NVFS::IFileCreator *pFileCreator, EDatabase
 {
 	if ( eMode == DATABASE_MODE_EDITOR )
 	{
+#if defined(BK2_ANDROID)
+		NI_ASSERT( false, "Editor database is not part of the Android single-player runtime" );
+		return false;
+#else
 		s_pMainDatabase = CreateEditorDatabase();
+#endif
 	}
 	else if ( eMode == DATABASE_MODE_GAME )
 	{

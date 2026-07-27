@@ -5,7 +5,11 @@ template<class T> class CArray2D;
 interface IDirect3DDevice9;
 namespace NGfx
 {
+#if defined(BK2_ANDROID)
+enum EPixelFormat : int;
+#else
 enum EPixelFormat;
+#endif
 }
 namespace NImage
 {

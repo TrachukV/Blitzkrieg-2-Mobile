@@ -48,7 +48,7 @@ public:
 
 	//
 	virtual int GetNGuns() const { return guns.size(); }
-	virtual class CBasicGun* GetGun( const int n ) const { return guns[n]; }
+	virtual class CBasicGun* GetGun( const int n ) const { return ( n >= 0 && n < int(guns.size()) ) ? guns[n] : 0; }
 	// если есть пушки, которыми можно пристреливаться, то выдаёт первую из них, иначе 0
 	virtual class CBasicGun* GetFirstArtilleryGun() const = 0;
 

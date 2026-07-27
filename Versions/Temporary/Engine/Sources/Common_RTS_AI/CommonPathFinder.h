@@ -1,6 +1,7 @@
 #pragma once
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #include "AIClasses.h"
+#include "Terrain.h"
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 interface IPointChecking;
 class CAIMap;
@@ -78,7 +79,7 @@ private:
 		}
 	}
 
-	const enum EFreeTileInfo CanUnitGoByDir( const int nBoundTileRadius, const EAIClasses aiClass, const SVector &tile, const SVector &dir );
+	const EFreeTileInfo CanUnitGoByDir( const int nBoundTileRadius, const EAIClasses aiClass, const SVector &tile, const SVector &dir );
 	void NextMapBufIndex();
 
 	//DEBUG{

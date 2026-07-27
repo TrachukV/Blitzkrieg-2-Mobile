@@ -1,7 +1,11 @@
-#include "StdAfx.h"
+#include "stdafx.h"
 
 #include "FilePath.h"
 #include "../Misc/StrProc.h"
+#if defined(BK2_ANDROID)
+#include <cerrno>
+#include <sys/stat.h>
+#endif
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 namespace NFile
 {
@@ -242,6 +246,23 @@ void ConvertSlashes( string *pFilePath, const char cFrom, const char cTo )
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void CreatePath( const string &_szFullPath )
 {	
+#if defined(BK2_ANDROID)
+	string szFullPath = _szFullPath;
+	NormalizePath( &szFullPath );
+	string szDir;
+	for ( NStr::CStringIterator<char> it(szFullPath, '/'); !it.IsEnd(); it.Next() )
+	{
+		string szPart;
+		it.Get( &szPart );
+		if ( szPart.empty() )
+			continue;
+		if ( !szDir.empty() )
+			szDir += "/";
+		szDir += szPart;
+		if ( mkdir( szDir.c_str(), 0775 ) != 0 && errno != EEXIST )
+			break;
+	}
+#else
 	static char buffer[1024];
 	string szFullPath = _szFullPath;
 	NStr::ReplaceAllChars( &szFullPath, '/', '\\' );
@@ -262,6 +283,7 @@ void CreatePath( const string &_szFullPath )
 	}
 	// restore old current directory
 	SetCurrentDirectory( buffer );
+#endif
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // ************************************************************************************************************************ //

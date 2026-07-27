@@ -25,6 +25,8 @@ $RECYCLE.BIN/
 *.swo
 .#*
 ~$*
+__pycache__/
+*.pyc
 
 # Version control directories
 .svn/
@@ -50,6 +52,16 @@ CVS/
 
 # Log files
 *.log
+build/
+DataAndroid/
+
+# Android build outputs
+android/.gradle/
+android/**/build/
+android/local.properties
+android/.cxx/
+android/**/.cxx/
+android/captures/
 
 # OS generated files
 Icon?

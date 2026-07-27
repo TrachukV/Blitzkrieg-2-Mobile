@@ -1,0 +1,721 @@
+#include "bk2_android_legacy_game_runtime.h"
+
+#include "bk2_android_platform.h"
+
+#include "GameX/stdafx.h"
+#include "AILogic/Specific.h"
+#include "AILogic/AIConsts.h"
+#include "AILogic/B2AI.h"
+#include "AILogic/CreateAI.h"
+#include "AILogic/GlobeUpdater.h"
+#include "AILogic/AIMap.h"
+#include "AILogic/AIUnit.h"
+#include "AILogic/UnitsIterators.h"
+#include "B2_M1_Terrain/DBTerrain.h"
+#include "Common_RTS_AI/AIClasses.h"
+#include "Common_RTS_AI/aiobjectbase.h"
+#include "Common_RTS_AI/CommonPathFinder.h"
+#include "Common_RTS_AI/Pathfinders.h"
+#include "GameX/DBGameRoot.h"
+#include "GameX/GetConsts.h"
+#include "GameX/ScenarioTracker.h"
+#include "Main/GameTimer.h"
+#include "SceneB2/TerrainInfo.h"
+#include "Stats_B2_M1/DBMapInfo.h"
+#include "Stats_B2_M1/TerraAIObserver.h"
+#include "Stats_B2_M1/Vis2AI.h"
+#include "System/VFSOperations.h"
+
+#include <algorithm>
+#include <set>
+#include <sstream>
+#include <vector>
+
+extern "C" {
+extern int bk2_android_ai_debug_load_objects;
+extern int bk2_android_ai_debug_load_candidates;
+extern int bk2_android_ai_debug_reinforcement_deferred;
+extern int bk2_android_ai_debug_add_calls;
+extern int bk2_android_ai_debug_add_success;
+extern int bk2_android_ai_debug_add_failed;
+extern int bk2_android_ai_debug_empty_stats;
+extern int bk2_android_ai_debug_bare_infantry;
+extern int bk2_android_ai_debug_bad_visual;
+extern int bk2_android_ai_debug_outside_map;
+extern int bk2_android_ai_debug_player_missing;
+extern int bk2_android_ai_debug_unit_case;
+extern int bk2_android_ai_debug_squad_case;
+extern int bk2_android_ai_debug_other_case;
+}
+
+namespace bk2::android {
+namespace {
+
+constexpr float kPackedHeightScale = 0.01f;
+
+CPtr<IScenarioTracker> g_scenario_tracker;
+CPtr<ITerraAIObserver> g_terrain_observer;
+CPtr<IGameTimer> g_game_timer;
+IAILogic* g_ai_logic = nullptr;
+bool g_ready = false;
+uint64_t g_timer_millis = 1;
+uint64_t g_segment_count = 0;
+int g_unit_count = 0;
+int g_terrain_type_count = 0;
+int g_terrain_grid_width = 0;
+int g_terrain_grid_height = 0;
+int g_terrain_feature_count = 0;
+int g_map_player_count = 0;
+int g_diplomacy_count = 0;
+int g_start_unit_object_count = 0;
+int g_ai_unit_total_count = 0;
+int g_ai_unit_alive_count = 0;
+int g_ai_unit_ref_valid_count = 0;
+int g_normalized_rpg_stats_count = 0;
+int g_normalized_unit_stats_count = 0;
+int g_normalized_squad_stats_count = 0;
+int g_normalize_skipped_no_visual_count = 0;
+std::set<std::string> g_missing_unit_payload_refs;
+std::set<std::string> g_missing_squad_payload_refs;
+std::string g_stage = "not_started";
+
+void SetStage(const char* stage) {
+    g_stage = stage;
+    PlatformRuntime::instance().log_info(
+            std::string("legacy_game_stage=") + stage);
+}
+
+int HeightWidth(const STerrainInfo& info) {
+    return info.heights.GetSizeX() > 0
+            ? info.heights.GetSizeX()
+            : info.optimizedHeights.GetSizeX();
+}
+
+int HeightHeight(const STerrainInfo& info) {
+    return info.heights.GetSizeY() > 0
+            ? info.heights.GetSizeY()
+            : info.optimizedHeights.GetSizeY();
+}
+
+float FullVisualHeight(const STerrainInfo& info, int x, int y) {
+    float height = info.heights.GetSizeX() > 0
+            ? info.heights[y][x]
+            : static_cast<float>(info.optimizedHeights[y][x]) *
+                    kPackedHeightScale;
+    if (info.addHeights.GetSizeX() == HeightWidth(info) &&
+        info.addHeights.GetSizeY() == HeightHeight(info)) {
+        height += info.addHeights[y][x];
+    } else if (
+            info.optimizedAddHeights.GetSizeX() == HeightWidth(info) &&
+            info.optimizedAddHeights.GetSizeY() == HeightHeight(info)) {
+        height += static_cast<float>(info.optimizedAddHeights[y][x]) *
+                kPackedHeightScale;
+    }
+    return height;
+}
+
+bool IsSeaTile(const STerrainInfo& info, int x, int y) {
+    if (!info.seaMask.IsEmpty() &&
+        x < info.seaMask.GetSizeX() &&
+        y < info.seaMask.GetSizeY()) {
+        return info.seaMask[y][x] != 0;
+    }
+    if (!info.optimizedSeaMask.IsEmpty() &&
+        x < info.optimizedSeaMask.GetSizeX() &&
+        y < info.optimizedSeaMask.GetSizeY()) {
+        return info.optimizedSeaMask.GetData(x, y) != 0;
+    }
+    return false;
+}
+
+int RequiredTerrainTypeCount(const STerrainInfo& info) {
+    int count = 1;
+    for (int y = 0; y < info.tileTerraMap.GetSizeY(); ++y) {
+        for (int x = 0; x < info.tileTerraMap.GetSizeX(); ++x) {
+            count = std::max(
+                    count,
+                    static_cast<int>(info.tileTerraMap[y][x]) + 1);
+        }
+    }
+    return count;
+}
+
+NDb::STerrainAIProperties DefaultTerrainAIProperties() {
+    NDb::STerrainAIProperties properties;
+    properties.fPassability = 1.0f;
+    properties.nAIClass = EAC_TERRAIN;
+    properties.nAIPassabilityClass = EAC_TERRAIN;
+    properties.bCanEntrench = true;
+    properties.nSoilType = 0;
+    return properties;
+}
+
+bool IsStartUnitObject(const NDb::SMapObjectInfo& object) {
+    const NDb::SHPObjectRPGStats* stats = object.pObject.GetPtrNoLoad();
+    if (stats == nullptr) {
+        return false;
+    }
+    const int type_id = stats->GetTypeID();
+    return type_id == NDb::SMechUnitRPGStats::typeID ||
+           type_id == NDb::SSquadRPGStats::typeID ||
+           type_id == NDb::SInfantryRPGStats::typeID;
+}
+
+bool IsUnitStats(const NDb::SHPObjectRPGStats* stats) {
+    if (stats == nullptr) {
+        return false;
+    }
+    const int type_id = stats->GetTypeID();
+    return type_id == NDb::SMechUnitRPGStats::typeID ||
+           type_id == NDb::SInfantryRPGStats::typeID;
+}
+
+bool IsSquadStats(const NDb::SHPObjectRPGStats* stats) {
+    return stats != nullptr && stats->GetTypeID() == NDb::SSquadRPGStats::typeID;
+}
+
+std::string NormalizeLegacyResourcePath(std::string path) {
+    const size_t xpointer = path.find('#');
+    if (xpointer != std::string::npos) {
+        path.resize(xpointer);
+    }
+    std::replace(path.begin(), path.end(), '\\', '/');
+    while (!path.empty() && path[0] == '/') {
+        path.erase(0, 1);
+    }
+    return path;
+}
+
+bool VfsFileExists(const std::string& path) {
+    NVFS::IVFS* vfs = NVFS::GetMainVFS();
+    if (vfs == nullptr) {
+        return false;
+    }
+    const string legacy_path(path.c_str());
+    if (vfs->DoesFileExist(legacy_path)) {
+        return true;
+    }
+    const std::string normalized = NormalizeLegacyResourcePath(path);
+    if (normalized == path) {
+        return false;
+    }
+    const string normalized_path(normalized.c_str());
+    return vfs->DoesFileExist(normalized_path);
+}
+
+bool HasDbPayload(const NDb::SHPObjectRPGStats* stats) {
+    if (stats == nullptr) {
+        return false;
+    }
+    return VfsFileExists(std::string(stats->GetDBID().ToString().c_str()));
+}
+
+void RecordMissingPayload(const NDb::SHPObjectRPGStats* stats) {
+    if (stats == nullptr) {
+        return;
+    }
+    const std::string dbid = NormalizeLegacyResourcePath(
+            std::string(stats->GetDBID().ToString().c_str()));
+    if (IsUnitStats(stats)) {
+        g_missing_unit_payload_refs.insert(dbid);
+    } else if (IsSquadStats(stats)) {
+        g_missing_squad_payload_refs.insert(dbid);
+    }
+}
+
+std::string JoinRefSamples(const std::set<std::string>& refs, size_t limit) {
+    std::ostringstream stream;
+    size_t count = 0;
+    for (const std::string& ref : refs) {
+        if (count >= limit) {
+            stream << ",...";
+            break;
+        }
+        if (count != 0) {
+            stream << ",";
+        }
+        stream << ref;
+        ++count;
+    }
+    return stream.str();
+}
+
+bool HasRequiredUnitVisual(const NDb::SHPObjectRPGStats* stats) {
+    return !IsUnitStats(stats) || !stats->pvisualObject.IsEmpty();
+}
+
+void NormalizeMapObjectRPGStats(
+        const NDb::SMapObjectInfo& object,
+        std::set<const NDb::SHPObjectRPGStats*>* seen) {
+    const NDb::SHPObjectRPGStats* raw_stats = object.pObject.GetPtrNoLoad();
+    if (raw_stats != nullptr &&
+        (IsUnitStats(raw_stats) || IsSquadStats(raw_stats))) {
+        if (seen->find(raw_stats) != seen->end()) {
+            return;
+        }
+        if (!HasDbPayload(raw_stats)) {
+            seen->insert(raw_stats);
+            RecordMissingPayload(raw_stats);
+            return;
+        }
+    }
+
+    const NDb::SHPObjectRPGStats* loaded_stats = object.pObject.GetPtr();
+    if (loaded_stats == nullptr || seen->find(loaded_stats) != seen->end()) {
+        return;
+    }
+    seen->insert(loaded_stats);
+
+    if (!IsUnitStats(loaded_stats) && !IsSquadStats(loaded_stats)) {
+        return;
+    }
+    if (!HasDbPayload(loaded_stats)) {
+        RecordMissingPayload(loaded_stats);
+        return;
+    }
+    if (!HasRequiredUnitVisual(loaded_stats)) {
+        ++g_normalize_skipped_no_visual_count;
+        return;
+    }
+
+    NDb::SHPObjectRPGStats* stats =
+            const_cast<NDb::SHPObjectRPGStats*>(loaded_stats);
+    stats->PostLoad(false);
+    ++g_normalized_rpg_stats_count;
+    if (IsUnitStats(stats)) {
+        ++g_normalized_unit_stats_count;
+    } else if (IsSquadStats(stats)) {
+        ++g_normalized_squad_stats_count;
+    }
+}
+
+void NormalizeMapRPGStats(const NDb::SMapInfo* map) {
+    g_normalized_rpg_stats_count = 0;
+    g_normalized_unit_stats_count = 0;
+    g_normalized_squad_stats_count = 0;
+    g_normalize_skipped_no_visual_count = 0;
+    g_missing_unit_payload_refs.clear();
+    g_missing_squad_payload_refs.clear();
+    if (map == nullptr) {
+        return;
+    }
+
+    std::set<const NDb::SHPObjectRPGStats*> seen;
+    for (const NDb::SMapObjectInfo& object : map->objects) {
+        NormalizeMapObjectRPGStats(object, &seen);
+    }
+    for (const NDb::SMapObjectInfo& object : map->scenarioObjects) {
+        NormalizeMapObjectRPGStats(object, &seen);
+    }
+}
+
+int CountStartUnitObjects(const NDb::SMapInfo* map) {
+    int count = 0;
+    if (map == nullptr) {
+        return count;
+    }
+    for (const NDb::SMapObjectInfo& object : map->objects) {
+        if (IsStartUnitObject(object)) {
+            ++count;
+        }
+    }
+    for (const NDb::SMapObjectInfo& object : map->scenarioObjects) {
+        if (IsStartUnitObject(object)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+void CountAIUnits() {
+    g_ai_unit_total_count = 0;
+    g_ai_unit_alive_count = 0;
+    g_ai_unit_ref_valid_count = 0;
+    for (CGlobalIter iter(0, ANY_PARTY); !iter.IsFinished(); iter.Iterate()) {
+        CAIUnit* unit = *iter;
+        if (unit == nullptr) {
+            continue;
+        }
+        ++g_ai_unit_total_count;
+        if (unit->IsAlive()) {
+            ++g_ai_unit_alive_count;
+        }
+        if (unit->IsRefValid()) {
+            ++g_ai_unit_ref_valid_count;
+        }
+    }
+}
+
+bool InitializeScenarioTracker(
+        const NDb::SMapInfo* map,
+        int campaign_index,
+        int chapter_index,
+        int difficulty,
+        std::string* error) {
+    IScenarioTracker* tracker = CreateScenarioTracker();
+    if (tracker == nullptr) {
+        *error = "scenario_tracker_create_failed";
+        return false;
+    }
+    g_scenario_tracker = tracker;
+    NSingleton::RegisterSingleton(
+            tracker,
+            IScenarioTracker::tidTypeID);
+    NSingleton::RegisterSingleton(
+            tracker,
+            IAIScenarioTracker::tidTypeID);
+
+    const NDb::SGameRoot* root = NGameX::GetGameRoot();
+    const NDb::SCampaign* campaign = nullptr;
+    if (root != nullptr &&
+        campaign_index >= 0 &&
+        campaign_index < static_cast<int>(root->campaigns.size())) {
+        campaign = root->campaigns[campaign_index].GetPtr();
+    }
+
+    if (campaign == nullptr) {
+        tracker->CustomMissionStart(map, difficulty, false);
+        return true;
+    }
+
+    tracker->CampaignStart(campaign, difficulty, false, false);
+    const int last_chapter = std::min(
+            chapter_index,
+            static_cast<int>(campaign->chapters.size()) - 1);
+    for (int index = 0; index <= last_chapter; ++index) {
+        tracker->NextChapter();
+    }
+    tracker->MissionStart(map);
+    return true;
+}
+
+bool FeedTerrainObserver(
+        const NDb::SMapInfo* map,
+        const STerrainInfo& info,
+        ITerraAIObserver* observer,
+        std::string* error) {
+    if (map->pTerraSet.IsEmpty()) {
+        *error = "ai_terrain_set_missing";
+        return false;
+    }
+
+    const int database_type_count =
+            static_cast<int>(map->pTerraSet->terraTypes.size());
+    const int required_type_count =
+            std::max(database_type_count, RequiredTerrainTypeCount(info));
+    vector<NDb::STerrainAIProperties> properties;
+    properties.reserve(required_type_count);
+    for (int index = 0; index < required_type_count; ++index) {
+        if (index < database_type_count &&
+            map->pTerraSet->terraTypes[index]) {
+            properties.push_back(
+                    map->pTerraSet->terraTypes[index]->aIProperty);
+        } else {
+            properties.push_back(DefaultTerrainAIProperties());
+        }
+    }
+    if (properties.empty()) {
+        *error = "ai_terrain_types_missing";
+        return false;
+    }
+    observer->SetTerraTypes(properties);
+    g_terrain_type_count = static_cast<int>(properties.size());
+
+    const int map_width = map->nNumPatchesX * AI_TILES_IN_PATCH;
+    const int map_height = map->nNumPatchesY * AI_TILES_IN_PATCH;
+    g_terrain_grid_width = std::min(
+            info.tileTerraMap.GetSizeX(),
+            map_width / 2);
+    g_terrain_grid_height = std::min(
+            info.tileTerraMap.GetSizeY(),
+            map_height / 2);
+    if (g_terrain_grid_width <= 0 || g_terrain_grid_height <= 0) {
+        *error = "ai_terrain_type_grid_missing";
+        return false;
+    }
+
+    CArray2D<BYTE> terrain_types(
+            g_terrain_grid_width,
+            g_terrain_grid_height);
+    for (int y = 0; y < g_terrain_grid_height; ++y) {
+        for (int x = 0; x < g_terrain_grid_width; ++x) {
+            terrain_types[y][x] = IsSeaTile(info, x, y)
+                    ? 0xff
+                    : info.tileTerraMap[y][x];
+        }
+    }
+    observer->UpdateTypes(
+            0,
+            0,
+            g_terrain_grid_width,
+            g_terrain_grid_height,
+            terrain_types);
+
+    const int height_width = HeightWidth(info);
+    const int height_height = HeightHeight(info);
+    if (height_width <= 0 || height_height <= 0) {
+        *error = "ai_terrain_heights_missing";
+        return false;
+    }
+    CArray2D<float> heights(height_width, height_height);
+    for (int y = 0; y < height_height; ++y) {
+        for (int x = 0; x < height_width; ++x) {
+            heights[y][x] = std::max(
+                    Vis2AI(FullVisualHeight(info, x, y)),
+                    0.0f);
+        }
+    }
+    observer->UpdateHeights(
+            0,
+            0,
+            height_width,
+            height_height,
+            heights);
+
+    g_terrain_feature_count = 0;
+    for (const NDb::SVSOInstance& road : map->roads) {
+        if (road.pDescriptor && road.points.size() >= 2) {
+            observer->AddRoad(&road);
+            ++g_terrain_feature_count;
+        }
+    }
+    for (const NDb::SVSOInstance& river : map->rivers) {
+        if (river.pDescriptor && river.points.size() >= 2) {
+            observer->AddRiver(&river);
+            ++g_terrain_feature_count;
+        }
+    }
+    for (const NDb::SVSOInstance& crag : map->crags) {
+        if (crag.pDescriptor && crag.points.size() >= 2) {
+            observer->AddCrag(&crag);
+            ++g_terrain_feature_count;
+        }
+    }
+    if (map->bHasCoast &&
+        map->coast.pDescriptor &&
+        map->coast.points.size() >= 2) {
+        observer->AddWaterLine(&map->coast, false);
+        ++g_terrain_feature_count;
+    }
+    for (const NDb::SVSOInstance& lake : map->lakes) {
+        if (lake.pDescriptor && lake.points.size() >= 2) {
+            observer->AddWaterLine(&lake, true);
+            ++g_terrain_feature_count;
+        }
+    }
+    observer->FinalizeUpdates();
+    return true;
+}
+
+void ResetReportState() {
+    g_ready = false;
+    g_ai_logic = nullptr;
+    g_timer_millis = 1;
+    g_segment_count = 0;
+    g_unit_count = 0;
+    g_terrain_type_count = 0;
+    g_terrain_grid_width = 0;
+    g_terrain_grid_height = 0;
+    g_terrain_feature_count = 0;
+    g_map_player_count = 0;
+    g_diplomacy_count = 0;
+    g_start_unit_object_count = 0;
+    g_ai_unit_total_count = 0;
+    g_ai_unit_alive_count = 0;
+    g_ai_unit_ref_valid_count = 0;
+    g_normalized_rpg_stats_count = 0;
+    g_normalized_unit_stats_count = 0;
+    g_normalized_squad_stats_count = 0;
+    g_normalize_skipped_no_visual_count = 0;
+    g_missing_unit_payload_refs.clear();
+    g_missing_squad_payload_refs.clear();
+    g_stage = "not_started";
+}
+
+}
+
+bool InitializeLegacyGameRuntime(
+        const NDb::SMapInfo* map,
+        const STerrainInfo& terrain_info,
+        int campaign_index,
+        int chapter_index,
+        int difficulty,
+        std::string* error) {
+    ShutdownLegacyGameRuntime();
+    if (map == nullptr) {
+        *error = "legacy_game_map_missing";
+        return false;
+    }
+    const NDb::SAIGameConsts* constants = NGameX::GetAIConsts();
+    if (constants == nullptr) {
+        *error = "legacy_game_ai_constants_missing";
+        return false;
+    }
+    g_map_player_count = static_cast<int>(map->players.size());
+    g_diplomacy_count = static_cast<int>(map->diplomacies.size());
+
+    SetStage("normalize_rpg_stats");
+    NormalizeMapRPGStats(map);
+
+    g_start_unit_object_count = CountStartUnitObjects(map);
+
+    SetStage("register_timer");
+    IGameTimer* timer = CreateGameTimer(SAIConsts::AI_SEGMENT_DURATION);
+    g_game_timer = timer;
+    NSingleton::RegisterSingleton(timer, IGameTimer::tidTypeID);
+    timer->Reset(g_timer_millis);
+
+    SetStage("register_pathfinder");
+    RegisterPathfinderSingleton();
+
+    SetStage("scenario_tracker");
+    if (!InitializeScenarioTracker(
+                map,
+                campaign_index,
+                chapter_index,
+                difficulty,
+                error)) {
+        ShutdownLegacyGameRuntime();
+        return false;
+    }
+
+    SetStage("create_ai");
+    CreateAI();
+    g_ai_logic = Singleton<IAILogic>();
+    if (g_ai_logic == nullptr) {
+        *error = "legacy_game_ai_create_failed";
+        ShutdownLegacyGameRuntime();
+        return false;
+    }
+
+    SetStage("ai_init");
+    g_ai_logic->Init(
+            nullptr,
+            map,
+            constants,
+            g_scenario_tracker);
+
+    SetStage("terrain_observer");
+    const int map_width = map->nNumPatchesX * AI_TILES_IN_PATCH;
+    const int map_height = map->nNumPatchesY * AI_TILES_IN_PATCH;
+    g_terrain_observer =
+            g_ai_logic->CreateTerraAIObserver(map_width, map_height);
+    if (!g_terrain_observer) {
+        *error = "legacy_game_terrain_observer_create_failed";
+        ShutdownLegacyGameRuntime();
+        return false;
+    }
+    if (!FeedTerrainObserver(
+                map,
+                terrain_info,
+                g_terrain_observer,
+                error)) {
+        ShutdownLegacyGameRuntime();
+        return false;
+    }
+
+    SetStage("load_units_and_scripts");
+    g_ai_logic->SetMyDiplomacyInfo(
+            g_scenario_tracker->GetPlayerSide(0),
+            0);
+    g_ai_logic->InitAfterMapLoad(map);
+
+    SetStage("post_map_load");
+    g_ai_logic->PostMapLoad();
+    g_ai_logic->Resume();
+
+    g_unit_count = 0;
+    const int players_to_count = static_cast<int>(map->diplomacies.size());
+    for (int player = 0; player < players_to_count; ++player) {
+        g_unit_count += g_ai_logic->GetUnitCount(player);
+    }
+    CountAIUnits();
+    g_ready = g_ai_logic->IsMissionLoaded();
+    SetStage(g_ready ? "ready" : "mission_not_loaded");
+    if (!g_ready) {
+        *error = "legacy_game_mission_not_loaded";
+        ShutdownLegacyGameRuntime();
+        return false;
+    }
+    return true;
+}
+
+void TickLegacyGameRuntime(uint32_t elapsed_millis) {
+    if (!g_ready || g_ai_logic == nullptr || !g_game_timer) {
+        return;
+    }
+    g_timer_millis += elapsed_millis;
+    g_game_timer->Update(g_timer_millis);
+    while (g_game_timer->NextSegment()) {
+        g_ai_logic->Segment();
+        ++g_segment_count;
+    }
+}
+
+void ShutdownLegacyGameRuntime() {
+    if (g_ai_logic != nullptr) {
+        g_ai_logic->Suspend();
+        g_ai_logic->ClearAI();
+    }
+    g_terrain_observer = nullptr;
+
+    NSingleton::UnRegisterSingleton(CUpdates2Globe::tidTypeID);
+    NSingleton::UnRegisterSingleton(ICommonB2M1AI::tidTypeID);
+    NSingleton::UnRegisterSingleton(IAILogic::tidTypeID);
+    NSingleton::UnRegisterSingleton(IAIScenarioTracker::tidTypeID);
+    NSingleton::UnRegisterSingleton(IScenarioTracker::tidTypeID);
+    NSingleton::UnRegisterSingleton(CCommonPathFinder::tidTypeID);
+    NSingleton::UnRegisterSingleton(IGameTimer::tidTypeID);
+
+    g_scenario_tracker = nullptr;
+    g_game_timer = nullptr;
+    SetAIMap(nullptr);
+    ResetReportState();
+}
+
+bool IsLegacyGameRuntimeReady() {
+    return g_ready;
+}
+
+std::string LegacyGameRuntimeReport() {
+    std::ostringstream report;
+    report << "legacy_game=" << (g_ready ? "ready" : "not_ready")
+           << "; stage=" << g_stage
+           << "; units=" << g_unit_count
+           << "; segments=" << g_segment_count
+           << "; map_players=" << g_map_player_count
+           << "; diplomacies=" << g_diplomacy_count
+           << "; start_unit_objects=" << g_start_unit_object_count
+           << "; ai_units_total=" << g_ai_unit_total_count
+           << "; ai_units_alive=" << g_ai_unit_alive_count
+           << "; ai_units_ref_valid=" << g_ai_unit_ref_valid_count
+           << "; normalized_rpg_stats=" << g_normalized_rpg_stats_count
+           << "; normalized_unit_stats=" << g_normalized_unit_stats_count
+           << "; normalized_squad_stats=" << g_normalized_squad_stats_count
+           << "; normalize_skipped_no_visual=" << g_normalize_skipped_no_visual_count
+           << "; missing_unit_payload=" << g_missing_unit_payload_refs.size()
+           << "; missing_squad_payload=" << g_missing_squad_payload_refs.size()
+           << "; ai_load_objects=" << bk2_android_ai_debug_load_objects
+           << "; ai_load_candidates=" << bk2_android_ai_debug_load_candidates
+           << "; ai_reinforcement_deferred=" << bk2_android_ai_debug_reinforcement_deferred
+           << "; ai_add_calls=" << bk2_android_ai_debug_add_calls
+           << "; ai_add_success=" << bk2_android_ai_debug_add_success
+           << "; ai_add_failed=" << bk2_android_ai_debug_add_failed
+           << "; ai_empty_stats=" << bk2_android_ai_debug_empty_stats
+           << "; ai_bare_infantry=" << bk2_android_ai_debug_bare_infantry
+           << "; ai_bad_visual=" << bk2_android_ai_debug_bad_visual
+           << "; ai_outside_map=" << bk2_android_ai_debug_outside_map
+           << "; ai_player_missing=" << bk2_android_ai_debug_player_missing
+           << "; ai_unit_case=" << bk2_android_ai_debug_unit_case
+           << "; ai_squad_case=" << bk2_android_ai_debug_squad_case
+           << "; ai_other_case=" << bk2_android_ai_debug_other_case
+           << "; terrain_types=" << g_terrain_type_count
+           << "; terrain_grid=" << g_terrain_grid_width
+           << "x" << g_terrain_grid_height
+           << "; terrain_features=" << g_terrain_feature_count
+           << "; missing_unit_payload_sample=" << JoinRefSamples(g_missing_unit_payload_refs, 2)
+           << "; missing_squad_payload_sample=" << JoinRefSamples(g_missing_squad_payload_refs, 2);
+    return report.str();
+}
+
+}

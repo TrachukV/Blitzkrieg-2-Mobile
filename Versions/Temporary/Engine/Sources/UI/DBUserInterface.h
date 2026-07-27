@@ -9,7 +9,9 @@ interface IXmlSaver;
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 namespace NDb
 {
+#if !defined(BK2_ANDROID)
 	enum EPositionAllign;
+#endif
 	struct SUIStateBase;
 	struct SUIStateBaseShared;
 	struct SForegroundTextString;
@@ -1288,7 +1290,9 @@ namespace NDb
 		int operator&( IXmlSaver &saver );
 		DWORD CalcCheckSum() const { return 0; }
 	};
+#if !defined(BK2_ANDROID)
 	enum ETextEntryType;
+#endif
 
 	enum ETextEntryType
 	{
@@ -1827,9 +1831,13 @@ namespace NDb
 		int operator&( IXmlSaver &saver );
 		DWORD CalcCheckSum() const { return 0; }
 	};
+#if !defined(BK2_ANDROID)
 	enum EButtonSubstateType;
+#endif
 	struct STextFormat;
+#if !defined(BK2_ANDROID)
 	enum EButtonChangeStateType;
+#endif
 
 	enum EButtonSubstateType
 	{

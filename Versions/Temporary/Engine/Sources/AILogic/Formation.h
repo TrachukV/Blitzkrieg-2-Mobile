@@ -2,6 +2,9 @@
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #include "CommonUnit.h"
 #include "../Stats_B2_M1/RPGStats.h"
+#if defined(BK2_ANDROID)
+#include "../Stats_B2_M1/ActionCommand.h"
+#endif
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 class CArtillery;
 class CCommonPathFinder;
@@ -10,7 +13,9 @@ class CGroupSmoothPath;
 class CSoldier;
 class CMineStaticObject;
 class CAITransportUnit;
+#if !defined(BK2_ANDROID)
 enum EActionCommand;
+#endif
 interface ICollisionsCollector;
 namespace NDb
 {
@@ -283,7 +288,7 @@ public:
 	virtual bool IsResupplyable() const { return bCanBeResupplied; }
 	virtual void SetResupplyable( const bool _bCanBeResupplied ) { bCanBeResupplied = _bCanBeResupplied; }
 
-	virtual const IsWithMoraleOfficer() const { return bWithMoraleOfficer; }
+	virtual const bool IsWithMoraleOfficer() const { return bWithMoraleOfficer; }
 
 	virtual void FreezeByState( const bool bFreeze );
 

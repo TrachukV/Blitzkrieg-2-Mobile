@@ -1782,7 +1782,7 @@ void CPlaneShturmovikPatrolState::Segment()
 	if ( eState != eRem )
 	{
 		CONSOLE_BUFFER_LOG( CONSOLE_STREAM_DEBUG_WINDOW + 2, 
-			StrFmt( "GunplaneSubstate =  \"%s\"", nameconv[eState] ) );
+			StrFmt( "GunplaneSubstate =  \"%s\"", nameconv[eState].c_str() ) );
 		Singleton<IStatSystem>()->UpdateEntry( "test: ", nameconv[eState], 0xffff0000 );
 	}
 	//DEBUG}

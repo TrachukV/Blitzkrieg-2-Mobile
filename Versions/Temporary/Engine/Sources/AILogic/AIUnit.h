@@ -13,9 +13,13 @@ interface ICollisionsCollector;
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 namespace NDb
 {
+#if !defined(BK2_ANDROID)
 	enum EReinforcementType;
+#endif
 	struct SUnitStatsModifier;
+#if !defined(BK2_ANDROID)
 	enum EUnitSpecialAbility;
+#endif
 	struct SUnitBaseRPGStats;
 };
 enum EActionNotify;

@@ -98,22 +98,41 @@ void SUnitBaseRPGStats::ToAIUnits( bool bInEditor )
 		animdescs.clear();
 		animdescs.resize( NDb::__ANIMATION_TYPE_COUNTER );
 		const SSkeleton *pSkeleton = 0;
-		for ( int i = 0; i < pvisualObject->models.size(); ++i )
+		if ( pvisualObject )
 		{
-			if ( pvisualObject->models[i].eSeason == SEASON_SUMMER )
+			for ( int i = 0; i < pvisualObject->models.size(); ++i )
 			{
-				pSkeleton = pvisualObject->models[i].pModel->pSkeleton;
-				break;
+				if ( pvisualObject->models[i].eSeason == SEASON_SUMMER )
+				{
+					const SModel *pModel = pvisualObject->models[i].pModel;
+					if ( pModel )
+					{
+						pSkeleton = pModel->pSkeleton;
+						break;
+					}
+				}
+			}
+			if ( pSkeleton == 0 )
+			{
+				for ( int i = 0; i < pvisualObject->models.size(); ++i )
+				{
+					const SModel *pModel = pvisualObject->models[i].pModel;
+					if ( pModel && pModel->pSkeleton )
+					{
+						pSkeleton = pModel->pSkeleton;
+						break;
+					}
+				}
 			}
 		}
-		if ( pSkeleton == 0 && !pvisualObject->models.empty() )
-			pSkeleton = pvisualObject->models[0].pModel->pSkeleton;
 		//
 		if ( pSkeleton )
 		{
 			for ( int i = 0; i < pSkeleton->animations.size(); ++i )
 			{
 				const SAnimB2 *pAnim = checked_cast_ptr<const SAnimB2 *>( pSkeleton->animations[i] );
+				if ( pAnim == 0 || pAnim->eType < 0 || pAnim->eType >= NDb::__ANIMATION_TYPE_COUNTER )
+					continue;
 				vector<SAnimDesc>::iterator pos = animdescs[pAnim->eType].anims.insert( animdescs[pAnim->eType].anims.end(), SAnimDesc() );
 				pos->nLength = pAnim->nLength;
 				pos->nAction = pAnim->nAction;

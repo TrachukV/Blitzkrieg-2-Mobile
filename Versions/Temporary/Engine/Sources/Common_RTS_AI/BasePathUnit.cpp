@@ -176,7 +176,7 @@ void CBasePathUnit::SetDirection( const WORD _wDirection, const bool bNeedUpdate
 			UnlockTiles();
 
 		wDirection = _wDirection;
-		wFrontDirection = IsGoForward() ? wDirection : wDirection + 32768;
+		wFrontDirection = IsGoForward() ? int(wDirection) : int(wDirection) + 32768;
 
 		if ( bNeedLockTiles )
 			LockTiles();
@@ -742,7 +742,7 @@ const float CBasePathUnit::GetMaxSpeedHere( const CVec2 &vPosition, const bool b
 IStaticPath *CBasePathUnit::CreateBigStaticPath( const CVec2 &vStartPoint, const CVec2 &vFinishPoint, IPointChecking *pChecking )
 {
 	CPtr<IStaticPath> pPath = 0;
-	const bNeedRelock = IsLockingTiles();
+	const bool bNeedRelock = IsLockingTiles();
 	if ( bNeedRelock )
 		UnlockTiles();
 	{

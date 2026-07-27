@@ -16,7 +16,9 @@ namespace NDb
 	struct SLightInstance;
 	struct STGTerraSet;
 	struct SPreLight;
+#if !defined(BK2_ANDROID)
 	enum EWeatherType;
+#endif
 	struct SComplexSoundDesc;
 	struct SWater;
 

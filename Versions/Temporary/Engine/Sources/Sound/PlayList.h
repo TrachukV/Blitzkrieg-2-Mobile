@@ -1,6 +1,8 @@
 #pragma once
 
+#if !defined(BK2_ANDROID)
 #include "../vendor/fmod/api/inc/fmod.h"
+#endif
 #include "Fade.h"
 
 namespace NDb

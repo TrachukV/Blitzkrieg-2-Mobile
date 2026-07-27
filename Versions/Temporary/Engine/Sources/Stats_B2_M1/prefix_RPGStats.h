@@ -8,8 +8,10 @@
 namespace NDb
 {
 	struct SComplexSoundDesc;
+#if !defined(BK2_ANDROID)
 	enum EUnitAckType;
 	enum EReinforcementType;
+#endif
 };
 // optimisation (singleton cache)
 typedef class CConstructorInfo * PCConstructorInfo;
@@ -78,7 +80,9 @@ inline float GetPositiveRandom( float fAverage, int nRandom )
 namespace NDb
 {
 	struct SUnitSpecialAblityDesc;
+#if !defined(BK2_ANDROID)
 	enum EUnitSpecialAbility;
+#endif
 	struct SAIGameConsts;
 	struct SAckSetRPGStats;
 };

@@ -178,7 +178,7 @@ inline CVec2 GetVec2( const CVec3 &v )
 template <class TYPE>
 inline bool PushBackUnique( vector<TYPE> *arr, const TYPE &elem )
 {
-	for ( vector<TYPE>::const_iterator it = arr->begin(); it != arr->end(); ++it )
+	for ( typename vector<TYPE>::const_iterator it = arr->begin(); it != arr->end(); ++it )
 	{
 		if ( *it == elem )
 			return false;

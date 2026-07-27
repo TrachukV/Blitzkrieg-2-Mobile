@@ -62,7 +62,7 @@ public:
 			DataCheckSum( &(vec[0]), vec.size() * sizeof(T) );
 		else
 		{
-			for ( vector<T>::const_iterator iter = vec.begin(); iter != vec.end(); ++iter )
+			for ( typename vector<T>::const_iterator iter = vec.begin(); iter != vec.end(); ++iter )
 				(*this) << *iter;
 		}
 

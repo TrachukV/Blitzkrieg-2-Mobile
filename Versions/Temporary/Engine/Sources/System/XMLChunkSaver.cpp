@@ -1,13 +1,13 @@
-#include "StdAfx.h"
+#include "stdafx.h"
 
 #include "FilePath.h"
 #include "XMLChunkSaver.h"
-#include "XmlReader.h"
+#include "XMLReader.h"
 #include "XmlUtils.h"
 #include "../Misc/StrProc.h"
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 typedef IXmlSaver::chunk_id chunk_id;
-static const START_CHUNK_LEVELS = 50;
+static const int START_CHUNK_LEVELS = 50;
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 IXmlSaver *CreateXmlSaver( CDataStream *pStream, ESaverMode mode )
 {

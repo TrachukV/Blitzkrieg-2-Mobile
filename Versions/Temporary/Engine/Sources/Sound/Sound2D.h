@@ -25,7 +25,7 @@ public:
 		: pDesc( _pDesc ), bLooped( _bLooped ), nVolumeType( 2 )
 	{
 	}
-	CSFXSound() : nChannel( -1 ), bLooped( false )
+	CSFXSound() : nChannel( -1 ), bLooped( false ), nVolumeType( 2 )
 	{  }
 	virtual ~CSFXSound() {  }
 
@@ -54,7 +54,7 @@ public:
 	int operator&( IBinSaver &saver ); 
 
 	CSound2D( const NDb::SSoundDesc *pDesc, const bool bLooped );
-	CSound2D() : fVolume( 0.0f ), fPan( 0.0f )
+	CSound2D() : fVolume( 1.0f ), fPan( 0.0f )
 	{  }
 
 	int Visit( interface ISFXVisitor *pVisitor );

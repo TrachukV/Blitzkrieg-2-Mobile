@@ -7,7 +7,11 @@
 namespace NGfx
 {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+#if defined(BK2_ANDROID)
+enum EPixelFormat : int
+#else
 enum EPixelFormat
+#endif
 {
 	CF_DXT1     = 1,
 	CF_DXT2     = 2,

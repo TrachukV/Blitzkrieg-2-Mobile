@@ -10,6 +10,107 @@
 namespace NWin32Helper
 {
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#if defined(BK2_ANDROID)
+class CEvent
+{
+	HANDLE h;
+	CEvent( const CEvent& ) {}
+	CEvent& operator=( const CEvent& ) { return *this; }
+public:
+	CEvent( bool bInitState = false, bool bManualReset = true ) { h = CreateEvent(0, bManualReset, bInitState, 0 ); }
+	~CEvent() { CloseHandle(h); }
+	bool Set() { return SetEvent(h) != 0; }
+	bool Pulse() { return SetEvent(h) != 0; }
+	bool Reset() { return ResetEvent(h) != 0; }
+	void Wait() { WaitForSingleObject(h, INFINITE ); }
+	bool IsSet() { return WaitForSingleObject( h, 0 ) == WAIT_OBJECT_0; }
+};
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+template<class TSection>
+class CTLock
+{
+	TSection &lock;
+public:
+	CTLock( TSection &_lock ): lock(_lock) { lock.Enter(); }
+	~CTLock() { lock.Leave(); }
+
+	__declspec(deprecated) void Enter() { lock.Enter(); }
+	__declspec(deprecated) void Leave() { lock.Leave(); }
+};
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+class CCriticalSection
+{
+	std::recursive_mutex mutex;
+	CCriticalSection( const CCriticalSection & ) {}
+	CCriticalSection& operator=( const CCriticalSection & ) { return *this; }
+	//
+	void Enter() { mutex.lock(); }
+	void Leave() { mutex.unlock(); }
+public:
+	CCriticalSection() {}
+	~CCriticalSection() {}
+	friend class CTLock<CCriticalSection>;
+};
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+typedef CTLock<CCriticalSection> CCriticalSectionLock;
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+template <class T>
+class com_ptr
+{
+	T *pData;
+	void Assign( T *_pData ) { if ( _pData ) { _pData->AddRef(); } pData = _pData; }
+	void Free() { if ( pData ) pData->Release(); }
+public:
+	com_ptr( T *_pData = 0 ) { Assign( _pData ); }
+	~com_ptr() { Free(); }
+	com_ptr( const com_ptr &a ) { Assign( a.pData ); }
+	com_ptr& operator=( const com_ptr &a ) { if ( pData == a.pData ) return *this; Free(); Assign( a.pData ); return *this; }
+	com_ptr& operator=( T *pObj ) { if ( pData == pObj ) return *this; Free(); Assign( pObj ); return *this; }
+	operator T*() const { return pData; }
+	T* operator->() const { return pData; }
+	void Create( T *_pData ) { Free(); pData = _pData; }
+	T** GetAddr() { Free(); pData = 0; return &pData; }
+};
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+class CControl87Guard
+{
+public:
+	CControl87Guard() {}
+	~CControl87Guard() {}
+};
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+class CPrecisionControl
+{
+public:
+	enum EPrecisionControlMode{ PCM_HIGH, PCM_MEDIUM, PCM_LOW };
+	CPrecisionControl( EPrecisionControlMode mode = PCM_HIGH ) {}
+	void Set( EPrecisionControlMode mode ) {}
+};
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+class CRoundingControl
+{
+public:
+	enum ERoundingControlMode{ RCM_NEAR, RCM_DOWN, RCM_UP, RCM_CHOP };
+	CRoundingControl( ERoundingControlMode mode = RCM_NEAR ) {}
+	void Set( ERoundingControlMode mode ) {}
+};
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+class CSimpleCriticalSection
+{
+	std::recursive_mutex mutex;
+	CSimpleCriticalSection( const CSimpleCriticalSection & ) {}
+	CSimpleCriticalSection& operator=( const CSimpleCriticalSection & ) { return *this; }
+	//
+	void Enter() { mutex.lock(); }
+	void Leave() { mutex.unlock(); }
+public:
+	CSimpleCriticalSection() {}
+	friend class CTLock<CSimpleCriticalSection>;
+};
+typedef CTLock<CSimpleCriticalSection> CSimpleCriticalSectionLock;
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#else
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 class CEvent
 {
 	HANDLE h;
@@ -128,6 +229,8 @@ public:
 	friend class CTLock<CSimpleCriticalSection>;
 };
 typedef CTLock<CSimpleCriticalSection> CSimpleCriticalSectionLock;
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#endif
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

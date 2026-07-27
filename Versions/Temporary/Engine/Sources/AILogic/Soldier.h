@@ -90,7 +90,7 @@ public:
 	virtual ~CSoldier();
 	virtual void Init( const CVec2 &center, const int z, const SUnitBaseRPGStats *pStats, const float fHP, const WORD dir, const BYTE player, ICollisionsCollector *pCollisionsCollector );
 	
-	void SetRememberedStats( const NDb::SInfantryRPGStats *_pRememberedStats ) { pRememberedStats = pRememberedStats; }
+	void SetRememberedStats( const NDb::SInfantryRPGStats *_pRememberedStats ) { pRememberedStats = _pRememberedStats; }
 	virtual const SUnitBaseRPGStats *GetStats() const { return pStats; }
 	virtual IStatesFactory* GetStatesFactory() const;
 	

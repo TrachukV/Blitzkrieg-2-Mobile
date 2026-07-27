@@ -29,7 +29,7 @@ public:
 			if ( nLength > 0 )
 			{
 				szBuffer[nLength] = 0;
-				fprintf( f, szBuffer );
+				fprintf( f, "%s", szBuffer );
 			}
 			fclose( f );
 		}
@@ -77,7 +77,7 @@ CLogger &CLogger::operator<<( const bool bVal )
 CLogger &CLogger::operator<<( const int nVal )
 {
 	wchar_t wszBuffer[1024];
-	swprintf( wszBuffer, L"%d", nVal );
+	swprintf( wszBuffer, 1024, L"%d", nVal );
 	wszLogBuffer += wszBuffer;
 	return *this;
 }
@@ -85,7 +85,7 @@ CLogger &CLogger::operator<<( const int nVal )
 CLogger &CLogger::operator<<( const long lVal )
 {
 	wchar_t wszBuffer[1024];
-	swprintf( wszBuffer, L"%d", lVal );
+	swprintf( wszBuffer, 1024, L"%ld", lVal );
 	wszLogBuffer += wszBuffer;
 	return *this;
 }
@@ -93,7 +93,7 @@ CLogger &CLogger::operator<<( const long lVal )
 CLogger &CLogger::operator<<( const double fVal )
 {
 	wchar_t wszBuffer[1024];
-	swprintf( wszBuffer, L"%g", fVal );
+	swprintf( wszBuffer, 1024, L"%g", fVal );
 	wszLogBuffer += wszBuffer;
 	return *this;
 }

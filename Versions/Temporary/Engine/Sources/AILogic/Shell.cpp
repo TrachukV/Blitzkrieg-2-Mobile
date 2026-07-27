@@ -595,7 +595,7 @@ float CVisShell::GetTerrainHeight( const float x, const float y, const NTimer::S
 //*								  CShellsStore																		*
 //*******************************************************************
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void CShellsStore::AddShell( CMomentShell &shell )
+void CShellsStore::AddShell( CMomentShell shell )
 {
 	shell.Explode();
 	theCombatEstimator.AddShell( curTime, shell.GetMaxDamage() );

@@ -90,7 +90,7 @@ if ( !(bCond) )																																												\
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-static const string Convert2Param( Script::Object &object )
+static const string Convert2Param( const Script::Object &object )
 {
 	if ( object.IsNumber() )
 		return object.GetString();

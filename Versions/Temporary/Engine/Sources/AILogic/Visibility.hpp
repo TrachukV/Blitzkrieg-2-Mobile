@@ -30,8 +30,13 @@ public:
 class CVisForGroundUnitBasis : public CWarFogVisibility
 {
 	const CArray1Bit &visibleInfo;
+	static const CArray1Bit& EmptyVisibleInfo()
+	{
+		static const CArray1Bit empty( 0 );
+		return empty;
+	}
 public:
-	CVisForGroundUnitBasis() : CWarFogVisibility(), visibleInfo( CArray1Bit( 0 ) ) {}
+	CVisForGroundUnitBasis() : CWarFogVisibility(), visibleInfo( EmptyVisibleInfo() ) {}
 	CVisForGroundUnitBasis( CGlobalWarFog *pWarFog, const SVector &vTile ) : CWarFogVisibility( pWarFog ), visibleInfo( GetVisibleInfoForTile( vTile ) ) {}
 
 	virtual const bool IsVisible( const SVector &vTile, const int nSpiralIndex ) const { return visibleInfo.GetData( nSpiralIndex ) > 0; }
@@ -73,4 +78,3 @@ CWarFogVisibility* CreateWarFogVisibility( CGlobalWarFog *pWarFog, const SWarFog
 		return new CVisForGroundUnitWithSector( pWarFog, unitInfo.vPos, unitInfo.sector );
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-

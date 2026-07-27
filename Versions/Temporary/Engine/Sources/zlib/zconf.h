@@ -200,7 +200,11 @@
 #  define ZEXPORT
 #endif
 #ifndef ZEXPORTVA
-#  define ZEXPORTVA __cdecl
+#  if defined(_MSC_VER)
+#    define ZEXPORTVA __cdecl
+#  else
+#    define ZEXPORTVA
+#  endif
 #endif
 #ifndef ZEXTERN
 #  define ZEXTERN extern

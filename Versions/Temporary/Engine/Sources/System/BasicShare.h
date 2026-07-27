@@ -31,7 +31,7 @@ private:
 	//
 	virtual void CreateHolder( list<CObj<CObjectBase> > *pHolder )
 	{
-		for ( CDataHash::const_iterator i = data.begin(); i != data.end(); ++i )
+		for ( typename CDataHash::const_iterator i = data.begin(); i != data.end(); ++i )
 			pHolder->push_back( i->second.GetPtr() );
 	}
 protected:
@@ -43,7 +43,7 @@ public:
 	//DEBUG}
 	TValue* Get( const TKey &key )
 	{
-		CDataHash::iterator i = data.find( key );
+		typename CDataHash::iterator i = data.find( key );
 		if ( i == data.end() )
 		{
 			TValue *pRes = Create( key );
@@ -63,9 +63,9 @@ public:
 		{
 			CDataHash keeper( data );
 			f.Add( GetID(), &data ); 
-			for ( CDataHash::const_iterator i = keeper.begin(); i != keeper.end(); ++i )
+			for ( typename CDataHash::const_iterator i = keeper.begin(); i != keeper.end(); ++i )
 			{
-				CDataHash::iterator r = data.find( i->first );
+				typename CDataHash::iterator r = data.find( i->first );
 				if ( r != data.end() && IsValid( i->second ) )
 					*r->second = *i->second;
 			}
@@ -73,7 +73,7 @@ public:
 		else
 		{
 			CDataHash saveData;
-			for ( CDataHash::const_iterator i = data.begin(); i != data.end(); ++i )
+			for ( typename CDataHash::const_iterator i = data.begin(); i != data.end(); ++i )
 			{
 				if ( IsValid( i->second ) )
 					saveData.insert( *i ); 

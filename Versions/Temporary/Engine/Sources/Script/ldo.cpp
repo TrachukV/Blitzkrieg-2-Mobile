@@ -339,7 +339,7 @@ void lua_startCall (lua_State *L, int nargs, int nresults);
 
 int lua_dofile (lua_State *L, const char *filename) 
 {
-	CObj<CLuaThread> pOld = L->pCT;
+	CObj<CLuaThread> pOld = L->pCT.GetPtr();
 	lua_setThread( L, lua_newThread( L, filename ) );
 	int status = parse_file(L, filename);
 	if ( status == 0 )  // parse OK?
@@ -368,7 +368,7 @@ int lua_parsebuffer (lua_State *L, const char *buff, size_t size, const char *na
 
 int lua_dobuffer( lua_State *L, const char *buff, size_t size, const char *name ) 
 {
-	CObj<CLuaThread> pOld = L->pCT;
+	CObj<CLuaThread> pOld = L->pCT.GetPtr();
 	lua_setThread( L, lua_newThread( L, "Buffer thread" ) );
 	int status = parse_buffer( L, buff, size, name );
 	if ( status == 0 )
@@ -396,7 +396,7 @@ static void message( lua_State *L, const char *s )
 	if ( em->GetType() == LUA_TFUNCTION ) 
 	{
 		// выводим сообщение в новом thread-е
-		CObj<CLuaThread> pOld = L->pCT;
+		CObj<CLuaThread> pOld = L->pCT.GetPtr();
 		ASSERT( pOld );
 		lua_setThread( L, lua_newThread( L, "Message thread" ) );
 		*LObj(L, L->pCT->top) = *em;
@@ -445,7 +445,7 @@ static void callErrorHook( lua_State *L )
 		const TObject *pHook = LObj(L, L->pCT->top-1);
 		if ( pHook->GetType() == LUA_TFUNCTION ) 
 		{
-			CObj<CLuaThread> pOld = L->pCT;
+			CObj<CLuaThread> pOld = L->pCT.GetPtr();
 			ASSERT( pOld );
 			lua_setThread( L, lua_newThread( L, "error hook thread" ) );
 			*LObj(L, L->pCT->top) = *pHook;

@@ -1,11 +1,13 @@
-#include "StdAfx.h"
+#include "stdafx.h"
 #include "BinChunkSaver.h"
 #include "Cruncher.h"
 
 int N_SAVELOAD_VERSION = 4;
 
 // remove this for final version
+#if !defined(BK2_ANDROID)
 #define TEST_PACK
+#endif
 // to calculate objects size
 //#define CALC_SIZE
 

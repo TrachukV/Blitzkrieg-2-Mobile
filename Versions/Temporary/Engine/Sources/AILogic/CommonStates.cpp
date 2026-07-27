@@ -1567,7 +1567,7 @@ void CCommonSwarmState::Segment()
 				
 				if ( pUnit->GetNextCommand() == 0 )
 				{
-					const WORD wDir = pUnit->GetFrontDirection() == pUnit->GetDirection() ? wDirToPoint : wDirToPoint + 32768;
+					const WORD wDir = pUnit->GetFrontDirection() == pUnit->GetDirection() ? WORD(wDirToPoint) : WORD(int(wDirToPoint) + 32768);
 					theGroupLogic.UnitCommand( SAIUnitCmd( ACTION_COMMAND_GUARD, pUnit->GetCenterPlain(), wDir ), pUnit, false );
 				}
 			

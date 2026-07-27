@@ -287,7 +287,7 @@ void CBasicGun::ToRestState()
 			pTurret->StopTurning();
 	}
 
-	for ( CParallelGuns::iterator iter = parallelGuns.begin(); iter != parallelGuns.end(); ++iter )
+	for ( list< CPtr<CBasicGun> >::iterator iter = parallelGuns.begin(); iter != parallelGuns.end(); ++iter )
 		(*iter)->StopFire();
 /*
 	if ( IsValidObj( pEnemy ) )
@@ -775,7 +775,7 @@ void CBasicGun::StartPointBurst( const CVec3 &_target, bool bReAim )
 
 		pEnemy = 0;
 		
-		for ( CParallelGuns::iterator iter = parallelGuns.begin(); iter != parallelGuns.end(); ++iter )
+		for ( list< CPtr<CBasicGun> >::iterator iter = parallelGuns.begin(); iter != parallelGuns.end(); ++iter )
 			(*iter)->StartPointBurst( _target, bReAim );
 	}
 }
@@ -808,7 +808,7 @@ void CBasicGun::StartPointBurst( const CVec2 &_target, bool bReAim )
 
 		pEnemy = 0;
 
-		for ( CParallelGuns::iterator iter = parallelGuns.begin(); iter != parallelGuns.end(); ++iter )
+		for ( list< CPtr<CBasicGun> >::iterator iter = parallelGuns.begin(); iter != parallelGuns.end(); ++iter )
 			(*iter)->StartPointBurst( _target, bReAim );
 	}
 }
@@ -846,7 +846,7 @@ void CBasicGun::StartEnemyBurst( CAIUnit *_pEnemy, bool bReAim )
 			shootState = EST_TURNING;
 		}
 
-		for ( CParallelGuns::iterator iter = parallelGuns.begin(); iter != parallelGuns.end(); ++iter )
+		for ( list< CPtr<CBasicGun> >::iterator iter = parallelGuns.begin(); iter != parallelGuns.end(); ++iter )
 			(*iter)->StartEnemyBurst( _pEnemy, bReAim );
 	}
 }
@@ -1493,7 +1493,7 @@ void CTurretGun::TraceAim( CAIUnit *pUnit )
 {
 	GetTurret()->TraceAim( pUnit, this );
 
-	for ( CParallelGuns::iterator iter = parallelGuns.begin(); iter != parallelGuns.end(); ++iter )
+	for ( list< CPtr<CBasicGun> >::iterator iter = parallelGuns.begin(); iter != parallelGuns.end(); ++iter )
 		(*iter)->TraceAim( pUnit );
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1501,7 +1501,7 @@ void CTurretGun::StopTracing()
 {
 	GetTurret()->StopTracing();
 /*
-	for ( CParallelGuns::iterator iter = parallelGuns.begin(); iter != parallelGuns.end(); ++iter )
+	for ( list< CPtr<CBasicGun> >::iterator iter = parallelGuns.begin(); iter != parallelGuns.end(); ++iter )
 		(*iter)->StopTracing();
 */
 }

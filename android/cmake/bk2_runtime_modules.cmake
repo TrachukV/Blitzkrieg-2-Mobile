@@ -1,0 +1,51 @@
+set(BK2_RUNTIME_MODULES
+    Misc
+    System
+    Game
+    GameX
+    Main
+    Input
+    Image
+    AILogic
+    zlib
+    Script
+    3Dmotor
+    MemoryLib
+    3DLib
+    SceneB2
+    UI
+    Sound
+    UISpecificB2
+    Stats_B2_M1
+    Common_RTS_AI
+    B2_M1_World
+    B2_M1_Terrain
+    libdb
+    Parser
+)
+
+set(BK2_EXCLUDED_MODULES
+    MapEditor
+    MapEditorLib
+    ED_B2
+    ED_B2_M1
+    ED_Common
+    ED_RTS
+    ELK_A7
+    Scintilla
+    ShaderCompiler
+    dbcodegen
+    dbindex
+    dbstruct
+    Server
+    Client
+    Net
+    Server_Client_Common
+    TestClient
+    TestDB
+    TestParsing
+    XDBRefsAnswerer
+    XDBWatcher
+    XDBWatcherClient
+    DebugTools
+)

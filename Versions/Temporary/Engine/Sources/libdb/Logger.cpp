@@ -1,4 +1,4 @@
-#include "StdAfx.h"
+#include "stdafx.h"
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #include "Logger.h"
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -21,7 +21,7 @@ void CLogger::WriteLog( const string &szLog, bool bAppendNL )
 	{
 		szResult += "\n";
 	}
-	printf( szResult.c_str() );
+	printf( "%s", szResult.c_str() );
 	OutputDebugString( szResult.c_str() );
 	memoryStream.Write( szResult.c_str(), szResult.length() );
 	if ( pStream != 0 )

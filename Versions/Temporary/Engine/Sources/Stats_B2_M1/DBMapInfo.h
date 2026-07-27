@@ -39,26 +39,38 @@ namespace NDb
 		DWORD CalcCheckSum() const;
 	};
 	struct SDBConstructorProfile;
+#if !defined(BK2_ANDROID)
 	enum ESeason;
+#endif
 	struct SMissionBonus;
 	struct SMaterial;
 	struct SComplexEffect;
+#if !defined(BK2_ANDROID)
 	enum EParcelType;
 	enum EReinforcementType;
+#endif
 	struct SReinforcement;
 	struct SObjectBaseRPGStats;
+#if !defined(BK2_ANDROID)
 	enum EDayNight;
+#endif
 	struct SMapMusic;
 	struct SDeployTemplate;
+#if !defined(BK2_ANDROID)
 	enum EDBUnitRPGType;
+#endif
 	struct SHPObjectRPGStats;
+#if !defined(BK2_ANDROID)
 	enum EScriptAreaTypes;
+#endif
 	struct SMissionObjective;
 	struct SPartyDependentInfo;
 	struct STexture;
 	struct SPlayerRank;
 	struct SVisObj;
+#if !defined(BK2_ANDROID)
 	enum EReinforcementType;
+#endif
 	struct SMapInfo;
 	struct SReinforcement;
 	struct SMissionBonus;

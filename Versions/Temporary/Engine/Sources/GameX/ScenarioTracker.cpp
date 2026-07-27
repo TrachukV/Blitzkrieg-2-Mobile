@@ -9,12 +9,12 @@
 #include "InterfaceState.h"
 #include "../UISpecificB2/DBUISpecificB2.h"
 #include "../Stats_B2_M1/RPGStats.h"
+#include "../Stats_B2_M1/StatusUpdates.h"
 #include "../B2_M1_World/MapObj.h"
 #include "../AILogic/B2AI.h"
 #include "../System/Commands.h"
 #include "../System/Text.h"
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-BASIC_REGISTER_CLASS(IAIScenarioTracker)
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #define GET_ARRAY_SIZE( pre_name, name ) ( pre_name##name##s.empty() ? pre_name##name##FileRefs.size() : pre_name##name##s.size() )
 #define GET_ARRAY_ELEMENT( pre_name, name, index ) ( pre_name##name##s.empty() ? NText::GetText( pre_name##name##FileRefs[index] ) : pre_name##name##s[index]->wszText )
@@ -186,7 +186,8 @@ void CScenarioTracker::MapStart()
 	const int nLocalPlayer = 0;
 	SetStatistics( nLocalPlayer, ESK_TIME, 0 );
 
-	const NDb::SUIConstsB2 *pUIConsts = InterfaceState()->GetUIConsts();
+	IInterfaceState *pInterfaceState = InterfaceState();
+	const NDb::SUIConstsB2 *pUIConsts = pInterfaceState ? pInterfaceState->GetUIConsts() : 0;
 	if ( pUIConsts )
 	{
 		playerColorUser.dwColor = pUIConsts->playersColors.userInfo.nColor | 0xFF000000;
@@ -379,7 +380,8 @@ void CScenarioTracker::MissionWin()
 		if ( nOldPlayerRankIndex != nNewPlayerRankIndex )
 		{
 			missionStats.pNewPlayerRank = GetPlayerRank();
-			InterfaceState()->SetAutoShowCommanderScreen( true );
+			if ( IInterfaceState *pInterfaceState = InterfaceState() )
+				pInterfaceState->SetAutoShowCommanderScreen( true );
 		}
 		for ( int i = nOldPlayerRankIndex + 1; i <= nNewPlayerRankIndex; ++i )
 		{
@@ -508,7 +510,10 @@ void CScenarioTracker::MissionWin()
 	bMissionWon = true;
 	
 	if ( IsTutorialMission() )
-		InterfaceState()->ApplyTutorialRecommendedMission();
+	{
+		if ( IInterfaceState *pInterfaceState = InterfaceState() )
+			pInterfaceState->ApplyTutorialRecommendedMission();
+	}
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 const IScenarioTracker::SMissionStats* CScenarioTracker::GetMissionStats( const NDb::SMapInfo *pMission ) const
@@ -706,8 +711,11 @@ void CScenarioTracker::NextChapter()
 	if ( !pCampaign )
 		return;
 
-	InterfaceState()->SetFirstTimeInChapter( true );
-	InterfaceState()->SetAutoShowCommanderScreen( true );
+	if ( IInterfaceState *pInterfaceState = InterfaceState() )
+	{
+		pInterfaceState->SetFirstTimeInChapter( true );
+		pInterfaceState->SetAutoShowCommanderScreen( true );
+	}
 
 	pMission = 0;
 	wonMissions.clear();
@@ -1684,7 +1692,7 @@ void CScenarioTracker::AutoGenerateLeaderInfo( SGenerateLeaderInfo *pInfo ) cons
 	{
 		pInfo->nID = NWin32Random::Random( 0, freeLeaders.size() - 1 );
 		const NDb::SCampaign::SLeader &dbLeader = pCampaign->leaders[freeLeaders[pInfo->nID]];
-		pInfo->wszName = GET_TEXT_PRE( dbLeader., Name );
+		pInfo->wszName = NText::GetText( dbLeader.szNameFileRef );
 		pInfo->pPicture = dbLeader.pPicture;
 	}
 	else
@@ -1693,7 +1701,7 @@ void CScenarioTracker::AutoGenerateLeaderInfo( SGenerateLeaderInfo *pInfo ) cons
 		if ( !pCampaign->leaders.empty() )
 		{
 			const NDb::SCampaign::SLeader &dbLeader = pCampaign->leaders.front();
-			pInfo->wszName = GET_TEXT_PRE( dbLeader., Name );
+			pInfo->wszName = NText::GetText( dbLeader.szNameFileRef );
 			pInfo->pPicture = dbLeader.pPicture;
 		}
 	}
@@ -1806,8 +1814,8 @@ const wstring& CScenarioTracker::GetLeaderRankName( int nRank ) const
 		if ( 0 <= nRank && nRank < pCampaign->leaderRanks.size() )
 		{
 			const NDb::SLeaderExpLevel &level = pCampaign->leaderRanks[nRank];
-			if ( CHECK_TEXT_NOT_EMPTY_PRE(level.,RankName) )
-				return GET_TEXT_PRE(level.,RankName);
+			if ( !level.szRankNameFileRef.empty() )
+				return NText::GetText( level.szRankNameFileRef );
 		}
 	}
 	
@@ -1921,8 +1929,8 @@ wstring CScenarioTracker::GetReinfName( NDb::EReinforcementType eType ) const
 		const SChapterReinf &reinf = chapterCurrentReinfs[i];
 		if ( reinf.pDBReinf && reinf.pDBReinf->eType == eType )
 		{
-			if ( CHECK_TEXT_NOT_EMPTY_PRE(reinf.pDBReinf->,LocalizedName) )
-				wszReinf = GET_TEXT_PRE(reinf.pDBReinf->,LocalizedName);
+			if ( !reinf.pDBReinf->szLocalizedNameFileRef.empty() )
+				wszReinf = NText::GetText( reinf.pDBReinf->szLocalizedNameFileRef );
 			break;
 		}
 	}

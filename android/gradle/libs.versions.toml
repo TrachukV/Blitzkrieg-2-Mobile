@@ -1,0 +1,15 @@
+[versions]
+agp = "9.2.1"
+appcompat = "1.7.0"
+core = "1.18.0"
+gamesActivity = "4.4.2"
+oboe = "1.10.0"
+
+[libraries]
+androidx-appcompat = { module = "androidx.appcompat:appcompat", version.ref = "appcompat" }
+androidx-core = { module = "androidx.core:core", version.ref = "core" }
+games-activity = { module = "androidx.games:games-activity", version.ref = "gamesActivity" }
+oboe = { module = "com.google.oboe:oboe", version.ref = "oboe" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }

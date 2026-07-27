@@ -151,7 +151,7 @@ private:
 			vector<T1> indices;
 			indices.resize( nSize );
 			int i = 1;
-			for ( hash_map<T1,T2,T3>::iterator pos = data.begin(); pos != data.end(); ++pos, ++i )
+			for ( typename hash_map<T1,T2,T3>::iterator pos = data.begin(); pos != data.end(); ++pos, ++i )
 				indices[ nSize - i ] = pos->first;
 			for ( i = 0; i < nSize; ++i )
 				Add( 1, &indices[i], i + 1 );
@@ -319,7 +319,7 @@ public:
 			Add( 2, &nSize );
 		}
 		int i = 1;
-		for ( list<T1>::iterator k = data.begin(); k != data.end(); ++k, ++i )
+		for ( typename list<T1>::iterator k = data.begin(); k != data.end(); ++k, ++i )
 			Add( 1, &(*k), i );
 		FinishChunk();
 	}

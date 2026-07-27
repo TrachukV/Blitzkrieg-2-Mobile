@@ -17,8 +17,10 @@ class CBuilding;
 class CEntrenchment;
 namespace NDb
 {
+#if !defined(BK2_ANDROID)
 	enum EUnitSpecialAbility;
 	enum ESpecialAbilityParam;
+#endif
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 struct SBehaviour

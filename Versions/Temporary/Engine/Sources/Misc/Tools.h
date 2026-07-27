@@ -193,6 +193,9 @@ inline TYPE Sign( const TYPE x )
 template <>
 inline int Sign<int>( const int nVal )
 {
+#if defined(BK2_ANDROID)
+	return ( nVal > 0 ) - ( nVal < 0 );
+#else
 	int nRes;
 	_asm
 	{
@@ -205,10 +208,14 @@ inline int Sign<int>( const int nVal )
 		mov nRes, eax
 	}
 	return nRes;
+#endif
 }
 template <>
 inline short int Sign<short int>( const short int nVal )
 {
+#if defined(BK2_ANDROID)
+	return static_cast<short int>( ( nVal > 0 ) - ( nVal < 0 ) );
+#else
 	short int nRes;
 	_asm
 	{
@@ -221,6 +228,7 @@ inline short int Sign<short int>( const short int nVal )
 		mov nRes, ax
 	}
 	return nRes;
+#endif
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // ************************************************************************************************************************ //
@@ -264,6 +272,10 @@ inline float SignumNormalizeAngleInRadian( const float angle )
 // ************************************************************************************************************************ //
 inline void MemSetDWord( DWORD* lpData, const DWORD value, const int nCount )
 {
+#if defined(BK2_ANDROID)
+	for ( int i = 0; i < nCount; ++i )
+		lpData[i] = value;
+#else
 	_asm
 	{
 		mov ecx, nCount
@@ -271,6 +283,7 @@ inline void MemSetDWord( DWORD* lpData, const DWORD value, const int nCount )
 		mov eax, value
 		rep stosd
 	}
+#endif
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // ************************************************************************************************************************ //
@@ -279,17 +292,25 @@ inline void MemSetDWord( DWORD* lpData, const DWORD value, const int nCount )
 // very fast float-to-int conversion. WARNING: uses current FPU rounding state (!)
 __forceinline int Float2Int( const float fVal )
 {
+#if defined(BK2_ANDROID)
+	return static_cast<int>( lrintf( fVal ) );
+#else
 	int nRet;
 	__asm  fld dword ptr fVal
 	__asm  fistp nRet
 	return nRet;
+#endif
 }
 __forceinline void Float2Int( int *pInt, float fVal ) 
 {
+#if defined(BK2_ANDROID)
+	*pInt = static_cast<int>( lrintf( fVal ) );
+#else
 	__asm  fld  fVal
   __asm  mov  edx, pInt
   __asm  fistp dword ptr [edx];
 
+#endif
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // min/max functions
@@ -308,6 +329,9 @@ inline const TYPE Max( const TYPE val1, const TYPE val2 )
 template<>
 inline const float Min<float>( const float a, const float b )
 {
+#if defined(BK2_ANDROID)
+	return a < b ? a : b;
+#else
 	float fpRet;
 	_asm
 	{
@@ -326,11 +350,15 @@ inline const float Min<float>( const float a, const float b )
 		mov			[fpRet], eax
 	}
 	return fpRet;
+#endif
 }
 // returns minimum of two float values
 template<>
 inline const float Max<float>( const float a, const float b )
 {
+#if defined(BK2_ANDROID)
+	return a > b ? a : b;
+#else
 	float fpRet;
 	_asm
 	{
@@ -349,6 +377,7 @@ inline const float Max<float>( const float a, const float b )
 		mov			[fpRet], eax
 	}
 	return fpRet;
+#endif
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // clamp - обрезать число с двух сторон (min/max)
@@ -464,6 +493,12 @@ inline bool Normalize( TYPE &x, TYPE &y, TYPE &z, TYPE &w )
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 const DWORD CPUID_MMX_FEATURE_PRESENT = 0x00800000;
 const DWORD CPUID_SSE_FEATURE_PRESENT = 0x02000000;
+#if defined(BK2_ANDROID)
+inline DWORD GetCPUID()
+{
+	return 0;
+}
+#else
 #define GET_CPUID __asm _emit 0x0f __asm _emit 0xa2
 inline DWORD GetCPUID()
 {
@@ -471,16 +506,16 @@ inline DWORD GetCPUID()
 	_asm
 	{
 		pusha                               // keep compiler happy
-		pushfd 															// get extended flags
-		pop eax 														// store extended flags in eax
-		mov ebx, eax 												// save current flags
-		xor eax, 200000h 										// toggle bit 21
-		push eax 														// put new flags on stack
-		popfd 															// flags updated now in flags
-		pushfd 															// get extended flags
-		pop eax 														// store extended flags in eax
-		xor eax, ebx 												// if bit 21 r/w then eax <> 0
-		je q  															// can't toggle id bit (21) no cpuid here
+		pushfd 													// get extended flags
+		pop eax 												// store extended flags in eax
+		mov ebx, eax 											// save current flags
+		xor eax, 200000h 									// toggle bit 21
+		push eax 												// put new flags on stack
+		popfd 													// flags updated now in flags
+		pushfd 												// get extended flags
+		pop eax 												// store extended flags in eax
+		xor eax, ebx 											// if bit 21 r/w then eax <> 0
+		je q  													// can't toggle id bit (21) no cpuid here
 
 		mov	eax, 1                          // configure eax to retrieve CPUID
 		GET_CPUID                           // perform CPUID command
@@ -491,6 +526,7 @@ inline DWORD GetCPUID()
 	return dwRes;
 }
 #undef GET_CPUID
+#endif
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void __stdcall DbgTrc( const char *pszFormat, ... );
 const char * __stdcall StrFmt( const char *pszFormat, ... );

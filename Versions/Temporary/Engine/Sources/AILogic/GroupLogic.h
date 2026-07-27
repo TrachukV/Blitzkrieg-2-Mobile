@@ -1,6 +1,9 @@
 #pragma once
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #include "../Stats_B2_M1/AIUnitCmd.h"
+#if defined(BK2_ANDROID)
+#include "../Stats_B2_M1/ActionNotify.h"
+#endif
 #include "SegmentedObjects.h"
 
 #include "..\System\FreeIDs.h"
@@ -8,7 +11,9 @@
 class CCommonUnit;
 class CAIUnit;
 interface ICollisionsCollector;
+#if !defined(BK2_ANDROID)
 enum EActionNotify;
+#endif
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 class CFreeGroupIDs
 {

@@ -9,7 +9,9 @@ interface IXmlSaver;
 namespace NDb
 {
 	struct SReinforcement;
+#if !defined( BK2_ANDROID )
 	enum EHistoricalSide;
+#endif
 	struct SPartyDependentInfo;
 	struct STexture;
 	struct SAIExpLevel;

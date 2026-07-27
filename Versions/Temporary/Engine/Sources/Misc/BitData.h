@@ -293,7 +293,7 @@ public:
 	void Set1() 
 	{ 
 		//array.FillEvery( unsigned int(-1) );
-		memset( &(array[0][0]), unsigned int(-1), array.GetSizeX() * array.GetSizeY());
+		memset( &(array[0][0]), 0xff, array.GetSizeX() * array.GetSizeY());
 	};
 
 	int GetSizeX() const { return xSize; }
@@ -319,4 +319,3 @@ public:
 	friend class CBitArray2DRLEWrapper<CArray2D1Bit>;
 };
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-

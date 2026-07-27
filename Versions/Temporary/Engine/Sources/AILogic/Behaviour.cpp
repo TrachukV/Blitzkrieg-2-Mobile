@@ -1,6 +1,7 @@
 #include "stdafx.h"
 
 #include "Behaviour.h"
+#include "GroupLogic.h"
 #include "UnitsIterators2.h"
 #include "Guns.h"
 #include "Aviation.h"

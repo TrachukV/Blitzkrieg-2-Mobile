@@ -8,7 +8,9 @@ interface IXmlSaver;
 namespace NDb
 {
 	struct SSoundDesc;
+#if !defined(BK2_ANDROID)
 	enum ESoundType;
+#endif
 
 	enum ESoundType
 	{

@@ -8,12 +8,16 @@ interface IXmlSaver;
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 namespace NDb
 {
+#if !defined( BK2_ANDROID )
 	enum ENotificationType;
+#endif
 	struct SComplexSoundDesc;
 	struct STexture;
 	struct SNotification;
+#if !defined( BK2_ANDROID )
 	enum ENotificationEventType;
 	enum EMinimapFigureType;
+#endif
 
 	enum ENotificationType
 	{

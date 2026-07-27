@@ -134,7 +134,7 @@ void STypeEnum::FromString( CVariant *pRes, const string &szValue ) const
 			return;
 		}
 	}
-	*pRes = entries.empty() ? CVariant() : entries[0].nVal;
+	*pRes = entries.empty() ? CVariant() : CVariant( entries[0].nVal );
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void STypeArray::ToString( string *pRes, const CVariant &value ) const

@@ -1302,13 +1302,17 @@ const float CAIUnit::GetTargetScanRadius()
 	if ( theDipl.IsAIPlayer( GetPlayer() ) && GetFirstArtilleryGun() != 0 && !DoesReservePosExist() )
 		return GetFirstArtilleryGun()->GetFireRange( 0 );
 	else if ( GetStats()->etype == RPG_TYPE_OFFICER )
-		return Min( GetGun(0)->GetFireRange( 0 ) * SConsts::OFFICER_COEFFICIENT_FOR_SCAN, GetSightRadius() );
+	{
+		CBasicGun *pGun = GetGun( 0 );
+		return pGun ? Min( pGun->GetFireRange( 0 ) * SConsts::OFFICER_COEFFICIENT_FOR_SCAN, GetSightRadius() ) : GetSightRadius();
+	}
 	else if ( GetStats()->IsArtillery() )
 		return Min( GetMaxFireRange(), SConsts::MAX_FIRE_RANGE_TO_SHOOT_BY_LINE );
 	else
 	{
 		const float fCallForHelpRadius = theDipl.IsAIPlayer( GetPlayer() ) ? SConsts::AI_CALL_FOR_HELP_RADIUS : SConsts::CALL_FOR_HELP_RADIUS;
-		const float fFireRange = GetNGuns() > 0 ? GetGun( 0 )->GetFireRange( 0 ) : GetSightRadius();
+		CBasicGun *pGun = GetGun( 0 );
+		const float fFireRange = pGun ? pGun->GetFireRange( 0 ) : GetSightRadius();
 
 		return Min( fCallForHelpRadius, fFireRange );
 	}

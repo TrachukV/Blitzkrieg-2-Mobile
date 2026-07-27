@@ -1,6 +1,6 @@
-#include "StdAfx.h"
+#include "stdafx.h"
 #include "ConsoleBufferInternal.h"
-#include "..\Misc\HashFuncs.h"
+#include "../Misc/HashFuncs.h"
 
 namespace NSingleton
 {

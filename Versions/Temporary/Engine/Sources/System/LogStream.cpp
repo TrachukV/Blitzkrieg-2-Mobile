@@ -1,4 +1,4 @@
-#include "StdAfx.h"
+#include "stdafx.h"
 //#include "Commands.h"
 #include "LogStream.h"
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -25,7 +25,7 @@ CLogStream& CLogStream::operator<< ( const int &nVal )
 	wchar_t wszBuffer[1024];
 
 	bConsoleUpdated = true;
-	swprintf( wszBuffer, L"%d", nVal );
+	swprintf( wszBuffer, 1024, L"%d", nVal );
 	wsStreamBuffer = wsStreamBuffer + wszBuffer;
 	return *this;
 }
@@ -35,7 +35,7 @@ CLogStream& CLogStream::operator<< ( const long &lVal )
 	wchar_t wszBuffer[1024];
 	
 	bConsoleUpdated = true;
-	swprintf( wszBuffer, L"%d", lVal );
+	swprintf( wszBuffer, 1024, L"%ld", lVal );
 	wsStreamBuffer = wsStreamBuffer + wszBuffer;
 	return *this;
 }
@@ -45,7 +45,7 @@ CLogStream& CLogStream::operator<< ( const double &dVal )
 	wchar_t wszBuffer[1024];
 	
 	bConsoleUpdated = true;
-	swprintf( wszBuffer, L"%g", dVal );
+	swprintf( wszBuffer, 1024, L"%g", dVal );
 	wsStreamBuffer = wsStreamBuffer + wszBuffer;
 	return *this;
 }

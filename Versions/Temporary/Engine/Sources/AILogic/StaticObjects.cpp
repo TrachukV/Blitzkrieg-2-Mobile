@@ -516,7 +516,7 @@ void CStaticObjects::Segment()
 
 	// דמנÿשטו מבתוךעû
 	list<int> burningList;
-	for ( hash_set<int>::const_iterator iter = burningObjects.begin(); iter != burningObjects.end(); ++iter )
+	for ( hash_set<int>::iterator iter = burningObjects.begin(); iter != burningObjects.end(); ++iter )
 		burningList.push_back( *iter );
 
 	for ( list<int>::iterator iter = burningList.begin(); iter != burningList.end(); ++iter )

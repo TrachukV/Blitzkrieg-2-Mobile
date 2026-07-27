@@ -18,7 +18,6 @@ CRiverSounds CTerraAIObserverInGame::riverSounds;
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 CTerraAIObserverInGame::CTerraAIObserverInGame( const int nSizeX, const int nSizeY  )
 {
-	CTerraAIObserver::CTerraAIObserver();
 
 	pAIMap = GetAIMap();
 	pTerrain = pAIMap->GetTerrain();

@@ -188,8 +188,9 @@ operator==(const hash_map<_Key,_Tp,_HashFcn>& __hm1,
 }
 
 template <class _Key, class _Tp, class _HashFcn>
+inline bool
 operator!=(const hash_map<_Key,_Tp,_HashFcn>& __hm1,
-					 const hash_map<_Key,_Tp,_HashFcn>& __hm2)
+						 const hash_map<_Key,_Tp,_HashFcn>& __hm2)
 {
 	return !(__hm1==__hm2);
 }

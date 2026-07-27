@@ -1,7 +1,7 @@
 #pragma once
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #include <math.h>
-#include "tools.h"
+#include "Tools.h"
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #pragma pack( push, 4 )
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -157,7 +157,7 @@ public:
   {
     struct { float x, y, z, w; };
     struct { float r, g, b, a; };				// for color components
-    struct { float u, v, q, w; };				// for texture coord
+    struct { float u, v, q, texw; };				// for texture coord
 		float m[4];
   };
 public:
@@ -688,8 +688,8 @@ public :
 	bool HomogeneousInverse( const SHMatrix &m );
 	const CVec3 GetTranslation() const { return CVec3( _14, _24, _34 ); }
 };
-inline operator==( const SHMatrix &a, const SHMatrix &b ) { return memcmp( &a, &b, sizeof(a) ) == 0; }
-inline operator!=( const SHMatrix &a, const SHMatrix &b ) { return !(a == b); }
+inline bool operator==( const SHMatrix &a, const SHMatrix &b ) { return memcmp( &a, &b, sizeof(a) ) == 0; }
+inline bool operator!=( const SHMatrix &a, const SHMatrix &b ) { return !(a == b); }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // прямое и обратное преобразование вместе
 struct SFBTransform
@@ -1995,6 +1995,10 @@ struct SRect
 	};
 	CVec2 dir, dirPerp, center;
 	float lengthAhead, lengthBack, width;
+
+#if defined(BK2_ANDROID)
+	SRect() : v{} {}
+#endif
 
 	bool IsIntersectProject( const CVec2 &v1, const CVec2 &v2, const CVec2 &v3, const CVec2 &v4, const CVec2 &dir, const float min, const float max ) const;
 

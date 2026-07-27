@@ -15,9 +15,11 @@ interface IXmlSaver;
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 namespace NDb
 {
+#if !defined( BK2_ANDROID )
 	enum ESpecialAbilityParam;
 	enum EUserAction;
 	enum EM1Action;
+#endif
 
 	struct SARSetSpecialAbility : public SUIDesc
 	{
@@ -66,14 +68,20 @@ namespace NDb
 		int operator&( IXmlSaver &saver );
 		DWORD CalcCheckSum() const { return 0; }
 	};
+#if !defined( BK2_ANDROID )
 	enum EReinforcementType;
 	enum ESeason;
 	enum EActionButtonPanel;
 	enum EUserAction;
+#endif
 	struct STexture;
+#if !defined( BK2_ANDROID )
 	enum EM1Action;
+#endif
 	struct SWindowMSButton;
+#if !defined( BK2_ANDROID )
 	enum EMPGameType;
+#endif
 	struct SActionButtonInfo;
 
 	enum EActionButtonPanel

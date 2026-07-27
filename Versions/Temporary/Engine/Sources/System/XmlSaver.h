@@ -401,7 +401,7 @@ private:
 			else
 			{
 				int i = 1;
-				for ( hash_map<T1, T2, T3>::iterator pos = data.begin(); pos != data.end(); ++pos, ++i )
+				for ( typename hash_map<T1, T2, T3>::iterator pos = data.begin(); pos != data.end(); ++pos, ++i )
 				{
 					if ( StartChunk("Item", i) ) 
 					{

@@ -5,7 +5,7 @@
 
 /* @(#) $Id$ */
 
-#include "..\zlib\zlib.h"
+#include "zlib.h"
 
 #define local static
 

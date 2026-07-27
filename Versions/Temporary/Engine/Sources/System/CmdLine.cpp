@@ -15,7 +15,7 @@ static void Report( const char *pszFormat, ... )
 	_vsnprintf( charBuff, BUF_SIZE - 1, pszFormat, va );
 	va_end( va );
 	//
-	printf( charBuff );
+	printf( "%s", charBuff );
 	OutputDebugString( charBuff );
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

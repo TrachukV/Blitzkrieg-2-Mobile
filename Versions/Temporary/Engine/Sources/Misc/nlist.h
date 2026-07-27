@@ -196,8 +196,8 @@ public:
 public:
   //typedef _List_it<_Tp, _Nonconst_traits<_Tp> > iterator;
   //typedef _List_it<_Tp, _Const_traits<_Tp> >    const_iterator;
-	typename typedef _List_it<_Node, _Tp > iterator;
-	typename typedef _List_it<const _Node, const _Tp > const_iterator;
+	typedef _List_it<_Node, _Tp > iterator;
+	typedef _List_it<const _Node, const _Tp > const_iterator;
 //  _STLP_DECLARE_BIDIRECTIONAL_REVERSE_ITERATORS;
 
 protected:

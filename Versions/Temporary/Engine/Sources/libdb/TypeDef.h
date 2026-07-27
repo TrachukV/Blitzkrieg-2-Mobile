@@ -502,7 +502,12 @@ public:
 template <class TYPE>
 struct SConstraintsMinMax : public SConstraints
 {
-	OBJECT_NOCOPY_METHODS( SConstraintsMinMax );
+public:
+	static CObjectBase* NewSConstraintsMinMax() { return new SConstraintsMinMax<TYPE>(); }
+	virtual int GetSizeOf() const { return sizeof(SConstraintsMinMax<TYPE>); }
+protected:
+	virtual void DestroyContents() { this->~SConstraintsMinMax(); int nHoldRefs = nRefData, nHoldObjs = nObjData; new(this) SConstraintsMinMax<TYPE>(); nRefData += nHoldRefs; nObjData += nHoldObjs; }
+private:
 public:
 	TYPE tMin, tMax;
 	//
@@ -531,7 +536,12 @@ typedef SConstraintsMinMax<float> SConstraintsMinMaxFloat;
 template <class TYPE>
 struct SConstraintsValuesList : public SConstraints
 {
-	OBJECT_NOCOPY_METHODS( SConstraintsValuesList );
+public:
+	static CObjectBase* NewSConstraintsValuesList() { return new SConstraintsValuesList<TYPE>(); }
+	virtual int GetSizeOf() const { return sizeof(SConstraintsValuesList<TYPE>); }
+protected:
+	virtual void DestroyContents() { this->~SConstraintsValuesList(); int nHoldRefs = nRefData, nHoldObjs = nObjData; new(this) SConstraintsValuesList<TYPE>(); nRefData += nHoldRefs; nObjData += nHoldObjs; }
+private:
 public:
 	vector<TYPE> values;
 	//
