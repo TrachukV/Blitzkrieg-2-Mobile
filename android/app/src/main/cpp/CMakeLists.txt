@@ -70,6 +70,7 @@ add_library(blitzkrieg2 SHARED
     bk2_legacy_system_probe.cpp
     bk2_legacy_random_android.cpp
     bk2_legacy_streams_android.cpp
+    bk2_presentation_api.cpp
     bk2_port_paths.cpp
 )
 

@@ -4,6 +4,7 @@
 #include "bk2_android_legacy_game_runtime.h"
 #include "bk2_android_mission_runtime.h"
 #include "bk2_legacy_texture_probe.h"
+#include "bk2_presentation_internal.h"
 #include "bk2_port_paths.h"
 #include "bk2_render_backend.h"
 
@@ -44,6 +45,7 @@ size_t g_triangle_count = 0;
 size_t g_map_object_count = 0;
 size_t g_scenario_object_count = 0;
 size_t g_rendered_object_count = 0;
+bool g_presentation_snapshot_written = false;
 TerrainCamera g_camera;
 TerrainMesh g_terrain_mesh;
 WorldObjectMesh g_world_object_mesh;
@@ -468,6 +470,8 @@ void AppendMapObjects(
         const vector<NDb::SMapObjectInfo>& objects,
         const STerrainInfo& terrain_info,
         bool scenario_objects,
+        bool include_dynamic_units,
+        bool count_rendered,
         WorldObjectMesh* mesh) {
     for (size_t i = 0; i < objects.size(); ++i) {
         const NDb::SMapObjectInfo& object = objects[i];
@@ -477,9 +481,15 @@ void AppendMapObjects(
             continue;
         }
         const int type_id = stats->GetTypeID();
-        const bool visible_gameplay_object =
+        const bool dynamic_unit =
                 type_id == NDb::SMechUnitRPGStats::typeID ||
                 type_id == NDb::SSquadRPGStats::typeID ||
+                type_id == NDb::SInfantryRPGStats::typeID;
+        if (dynamic_unit && !include_dynamic_units) {
+            continue;
+        }
+        const bool visible_gameplay_object =
+                dynamic_unit ||
                 type_id == NDb::SBuildingRPGStats::typeID ||
                 type_id == NDb::SBridgeRPGStats::typeID ||
                 type_id == NDb::SEntrenchmentRPGStats::typeID ||
@@ -500,7 +510,9 @@ void AppendMapObjects(
                 scenario_objects ? 1.25f : 0.85f,
                 scenario_objects ? 5.0f : 3.5f,
                 ObjectColor(object.nPlayer, scenario_objects));
-        ++g_rendered_object_count;
+        if (count_rendered) {
+            ++g_rendered_object_count;
+        }
     }
 }
 
@@ -517,8 +529,56 @@ void BuildWorldObjectMesh(
     const size_t total = g_map_object_count + g_scenario_object_count;
     mesh->vertices.reserve(total * 5);
     mesh->triangle_indices.reserve(total * 18);
-    AppendMapObjects(map->objects, terrain_info, false, mesh);
-    AppendMapObjects(map->scenarioObjects, terrain_info, true, mesh);
+    AppendMapObjects(map->objects, terrain_info, false, true, true, mesh);
+    AppendMapObjects(map->scenarioObjects, terrain_info, true, true, true, mesh);
+}
+
+void BuildPresentationStaticWorldMesh(
+        const NDb::SMapInfo* map,
+        const STerrainInfo& terrain_info,
+        WorldObjectMesh* mesh) {
+    if (map == nullptr || mesh == nullptr) {
+        return;
+    }
+    const size_t total = map->objects.size() + map->scenarioObjects.size();
+    mesh->vertices.reserve(total * 5);
+    mesh->triangle_indices.reserve(total * 18);
+    AppendMapObjects(map->objects, terrain_info, false, false, false, mesh);
+    AppendMapObjects(map->scenarioObjects, terrain_info, true, false, false, mesh);
+}
+
+std::vector<Bk2PresentationVertex> PresentationVertices(
+        const std::vector<TerrainVertex>& vertices) {
+    std::vector<Bk2PresentationVertex> result;
+    result.reserve(vertices.size());
+    for (const TerrainVertex& vertex : vertices) {
+        result.push_back(Bk2PresentationVertex{
+                vertex.x,
+                vertex.y,
+                vertex.z,
+                vertex.u,
+                vertex.v,
+                vertex.abgr});
+    }
+    return result;
+}
+
+void PublishPresentationMeshes(
+        const std::string& mission_id,
+        const TerrainMesh& terrain,
+        const WorldObjectMesh& world) {
+    bk2::presentation::Reset();
+    bk2::presentation::PublishMission(mission_id);
+    bk2::presentation::PublishTerrain(
+            PresentationVertices(terrain.vertices),
+            terrain.triangle_indices,
+            terrain.center_x,
+            terrain.center_y,
+            terrain.center_z,
+            terrain.world_size);
+    bk2::presentation::PublishWorld(
+            PresentationVertices(world.vertices),
+            world.triangle_indices);
 }
 
 bool LoadTerrainTexture(const NDb::SMapInfo* map) {
@@ -605,6 +665,8 @@ bool InitializeSinglePlayerRuntime() {
     }
     WorldObjectMesh world_object_mesh;
     BuildWorldObjectMesh(map, terrain_info, &world_object_mesh);
+    WorldObjectMesh presentation_world_mesh;
+    BuildPresentationStaticWorldMesh(map, terrain_info, &presentation_world_mesh);
     LoadTerrainTexture(map);
 
     g_camera.target_x = mesh.center_x;
@@ -616,6 +678,10 @@ bool InitializeSinglePlayerRuntime() {
 
     g_terrain_mesh = std::move(mesh);
     g_world_object_mesh = std::move(world_object_mesh);
+    PublishPresentationMeshes(
+            mission.state.mission_id,
+            g_terrain_mesh,
+            presentation_world_mesh);
     if (!InitializeLegacyGameRuntime(
                 map,
                 terrain_info,
@@ -635,6 +701,11 @@ bool InitializeSinglePlayerRuntime() {
     ApplyCameraLocked();
 
     g_mission_id = mission.state.mission_id;
+    const PortPaths paths = GetPortPaths();
+    const std::string snapshot_path =
+            JoinHostPath(paths.log_root(), "presentation_snapshot.json");
+    g_presentation_snapshot_written =
+            bk2_presentation_write_json(snapshot_path.c_str()) != 0;
     g_last_error.clear();
     g_ready = true;
     return true;
@@ -670,6 +741,7 @@ void ShutdownSinglePlayerRuntime() {
     g_terrain_texture = 0;
     g_terrain_mesh = TerrainMesh();
     g_world_object_mesh = WorldObjectMesh();
+    bk2::presentation::Reset();
     g_ready = false;
     g_mission_id.clear();
     g_map_path.clear();
@@ -680,6 +752,7 @@ void ShutdownSinglePlayerRuntime() {
     g_map_object_count = 0;
     g_scenario_object_count = 0;
     g_rendered_object_count = 0;
+    g_presentation_snapshot_written = false;
 }
 
 void PanSinglePlayerCamera(float delta_x_pixels, float delta_y_pixels) {
@@ -744,6 +817,8 @@ std::string SinglePlayerRuntimeReport() {
            << "; map_objects=" << g_map_object_count
            << "; scenario_objects=" << g_scenario_object_count
            << "; rendered_objects=" << g_rendered_object_count
+           << "; presentation_snapshot="
+           << (g_presentation_snapshot_written ? "written" : "not_written")
            << "; " << LegacyGameRuntimeReport();
     if (!g_last_error.empty()) {
         report << "; error=" << g_last_error;

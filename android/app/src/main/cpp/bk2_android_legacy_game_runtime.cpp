@@ -1,6 +1,7 @@
 #include "bk2_android_legacy_game_runtime.h"
 
 #include "bk2_android_platform.h"
+#include "bk2_presentation_internal.h"
 
 #include "GameX/stdafx.h"
 #include "AILogic/Specific.h"
@@ -346,6 +347,38 @@ void CountAIUnits() {
     }
 }
 
+void PublishPresentationEntities() {
+    std::vector<Bk2PresentationEntity> entities;
+    entities.reserve(static_cast<size_t>(std::max(g_ai_unit_total_count, 0)));
+    for (CGlobalIter iter(0, ANY_PARTY); !iter.IsFinished(); iter.Iterate()) {
+        CAIUnit* unit = *iter;
+        if (unit == nullptr) {
+            continue;
+        }
+        uint32_t flags = 0;
+        if (unit->IsAlive()) {
+            flags |= BK2_PRESENTATION_ENTITY_ALIVE;
+        }
+        if (unit->IsSelectable()) {
+            flags |= BK2_PRESENTATION_ENTITY_SELECTABLE;
+        }
+        if (unit->CanMove()) {
+            flags |= BK2_PRESENTATION_ENTITY_MOVABLE;
+        }
+        const CVec3& center = unit->GetCenter();
+        entities.push_back(Bk2PresentationEntity{
+                unit->GetUniqueIdQU(),
+                static_cast<int32_t>(unit->GetPlayer()),
+                flags,
+                AI2Vis(center.x),
+                AI2Vis(center.y),
+                unit->GetVisZ(),
+                unit->GetDir(),
+                unit->GetHitPoints()});
+    }
+    bk2::presentation::PublishEntities(std::move(entities));
+}
+
 bool InitializeScenarioTracker(
         const NDb::SMapInfo* map,
         int campaign_index,
@@ -630,6 +663,7 @@ bool InitializeLegacyGameRuntime(
         g_unit_count += g_ai_logic->GetUnitCount(player);
     }
     CountAIUnits();
+    PublishPresentationEntities();
     g_ready = g_ai_logic->IsMissionLoaded();
     SetStage(g_ready ? "ready" : "mission_not_loaded");
     if (!g_ready) {
@@ -646,9 +680,15 @@ void TickLegacyGameRuntime(uint32_t elapsed_millis) {
     }
     g_timer_millis += elapsed_millis;
     g_game_timer->Update(g_timer_millis);
+    bool advanced = false;
     while (g_game_timer->NextSegment()) {
         g_ai_logic->Segment();
         ++g_segment_count;
+        advanced = true;
+    }
+    if (advanced) {
+        CountAIUnits();
+        PublishPresentationEntities();
     }
 }
 

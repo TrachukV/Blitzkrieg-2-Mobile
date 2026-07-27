@@ -62,6 +62,8 @@ android/local.properties
 android/.cxx/
 android/**/.cxx/
 android/captures/
+.godot/
+godot/artifacts/
 
 # OS generated files
 Icon?
