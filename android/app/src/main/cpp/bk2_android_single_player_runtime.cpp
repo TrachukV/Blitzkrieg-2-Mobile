@@ -470,6 +470,120 @@ void AppendObjectMarker(
     }
 }
 
+void AppendOrientedBox(
+        WorldObjectMesh* mesh,
+        float x,
+        float y,
+        float z,
+        float half_length,
+        float half_width,
+        float height,
+        float heading,
+        uint32_t abgr) {
+    const uint32_t base = static_cast<uint32_t>(mesh->vertices.size());
+    const float forward_x = std::cos(heading);
+    const float forward_y = std::sin(heading);
+    const float right_x = -forward_y;
+    const float right_y = forward_x;
+    const float base_z = z + 0.15f;
+    const float top_z = base_z + height;
+    const float local[][2] = {
+            {-half_length, -half_width},
+            {half_length, -half_width},
+            {half_length, half_width},
+            {-half_length, half_width},
+    };
+    for (int layer = 0; layer < 2; ++layer) {
+        for (const auto& point : local) {
+            mesh->vertices.push_back(TerrainVertex{
+                    x + forward_x * point[0] + right_x * point[1],
+                    y + forward_y * point[0] + right_y * point[1],
+                    layer == 0 ? base_z : top_z,
+                    point[0] / (half_length * 2.0f) + 0.5f,
+                    point[1] / (half_width * 2.0f) + 0.5f,
+                    abgr});
+        }
+    }
+    const uint32_t indices[] = {
+            0, 2, 1, 0, 3, 2,
+            4, 5, 6, 4, 6, 7,
+            0, 1, 5, 0, 5, 4,
+            1, 2, 6, 1, 6, 5,
+            2, 3, 7, 2, 7, 6,
+            3, 0, 4, 3, 4, 7,
+    };
+    for (uint32_t index : indices) {
+        mesh->triangle_indices.push_back(base + index);
+    }
+}
+
+void AppendEntityModel(
+        WorldObjectMesh* mesh,
+        const Bk2PresentationEntity& entity,
+        uint32_t abgr,
+        bool selected) {
+    const float scale = selected ? 1.25f : 1.0f;
+    if ((entity.flags & BK2_PRESENTATION_ENTITY_MECHANIZED) != 0) {
+        AppendOrientedBox(
+                mesh,
+                entity.x,
+                entity.y,
+                entity.z,
+                2.15f * scale,
+                1.25f * scale,
+                1.15f * scale,
+                entity.heading_radians,
+                abgr);
+        const float forward_x = std::cos(entity.heading_radians);
+        const float forward_y = std::sin(entity.heading_radians);
+        AppendOrientedBox(
+                mesh,
+                entity.x + forward_x * 0.2f,
+                entity.y + forward_y * 0.2f,
+                entity.z + 1.2f * scale,
+                0.9f * scale,
+                0.72f * scale,
+                0.7f * scale,
+                entity.heading_radians,
+                abgr);
+        AppendOrientedBox(
+                mesh,
+                entity.x + forward_x * 1.45f * scale,
+                entity.y + forward_y * 1.45f * scale,
+                entity.z + 1.48f * scale,
+                0.85f * scale,
+                0.12f * scale,
+                0.18f * scale,
+                entity.heading_radians,
+                abgr);
+        return;
+    }
+
+    const bool formation =
+            (entity.flags & BK2_PRESENTATION_ENTITY_FORMATION) != 0;
+    const int figure_count = formation ? 4 : 1;
+    const float offsets[][2] = {
+            {-0.8f, -0.65f},
+            {0.8f, -0.65f},
+            {-0.8f, 0.65f},
+            {0.8f, 0.65f},
+    };
+    for (int index = 0; index < figure_count; ++index) {
+        const float offset_x = formation ? offsets[index][0] * scale : 0.0f;
+        const float offset_y = formation ? offsets[index][1] * scale : 0.0f;
+        AppendOrientedBox(
+                mesh,
+                entity.x + offset_x,
+                entity.y + offset_y,
+                entity.z,
+                0.28f * scale,
+                0.28f * scale,
+                1.7f * scale,
+                entity.heading_radians,
+                abgr);
+    }
+}
+
 void AppendMapObjects(
         const vector<NDb::SMapObjectInfo>& objects,
         const STerrainInfo& terrain_info,
@@ -634,9 +748,9 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
 
     WorldObjectMesh combined = g_static_world_object_mesh;
     combined.vertices.reserve(
-            combined.vertices.size() + entities.size() * 5);
+            combined.vertices.size() + entities.size() * 24);
     combined.triangle_indices.reserve(
-            combined.triangle_indices.size() + entities.size() * 18);
+            combined.triangle_indices.size() + entities.size() * 108);
     g_dynamic_rendered_object_count = 0;
     for (const Bk2PresentationEntity& entity : entities) {
         if ((entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) == 0) {
@@ -644,15 +758,12 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         }
         const bool selected =
                 (entity.flags & BK2_PRESENTATION_ENTITY_SELECTED) != 0;
-        AppendObjectMarker(
+        AppendEntityModel(
                 &combined,
-                entity.x,
-                entity.y,
-                entity.z,
-                selected ? 3.6f : 1.65f,
-                selected ? 11.0f : 5.5f,
+                entity,
                 selected ? ArgbToAbgr(0xffffe066u)
-                         : ObjectColor(entity.player, false));
+                         : ObjectColor(entity.player, false),
+                selected);
         ++g_dynamic_rendered_object_count;
     }
     g_world_object_mesh = std::move(combined);

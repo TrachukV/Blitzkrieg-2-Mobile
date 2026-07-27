@@ -426,7 +426,7 @@ terrain triangles, Lua mission scripts, and 134 live legacy AI units.
 
 Touch controls currently implemented:
 
-- tap a green player-unit marker to select it;
+- tap a green player unit or formation to select it;
 - tap terrain to issue the original legacy move command and move the selected
   unit through the Android presentation bridge;
 - drag with one finger to pan;
@@ -434,13 +434,15 @@ Touch controls currently implemented:
 - rotate with a two-finger twist.
 
 The selected unit is yellow and follows the real terrain height while moving.
-Green markers are player units and red markers are hostile units. The camera
-starts focused on the player's formation.
+Green proxies are player units and red proxies are hostile units. Formations
+are shown as small groups and mechanized units use oriented low-poly hull,
+turret, and barrel geometry. The camera starts focused on the player's
+formation.
 
 This is a playable runtime milestone, not a complete visual port. Units and
-buildings are temporary generated markers. Original Granny models, skeletons,
-animations, combat presentation, briefing/game HUD, and the complete
-win/lose-to-campaign flow remain unfinished.
+buildings still use temporary generated geometry. Original Granny models,
+skeletons, animations, combat presentation, briefing/game HUD, and the
+complete win/lose-to-campaign flow remain unfinished.
 
 The video transcode manifest now writes Android-canonical runtime paths. A Bink
 ref such as `Movies\Nival.bik` maps to `DataAndroid/Movies/Nival.mp4`, not to a

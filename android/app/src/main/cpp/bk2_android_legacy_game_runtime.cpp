@@ -379,6 +379,15 @@ void PublishPresentationEntities() {
         if (unit->GetUniqueIdQU() == g_selected_unit_id) {
             flags |= BK2_PRESENTATION_ENTITY_SELECTED;
         }
+        if (unit->IsMech()) {
+            flags |= BK2_PRESENTATION_ENTITY_MECHANIZED;
+        }
+        if (unit->IsInfantry()) {
+            flags |= BK2_PRESENTATION_ENTITY_INFANTRY;
+        }
+        if (unit->IsFormation()) {
+            flags |= BK2_PRESENTATION_ENTITY_FORMATION;
+        }
         const CVec3& center = unit->GetCenter();
         entities.push_back(Bk2PresentationEntity{
                 unit->GetUniqueIdQU(),
@@ -422,6 +431,9 @@ bool AdvanceAndroidSelectedUnit(uint32_t elapsed_millis) {
     CStaticMapHeights* heights = GetHeights();
     const float next_z =
             heights != nullptr ? heights->GetZ(next) : current.z;
+    unit->CBasePathUnit::SetDirection(
+            GetDirectionByVector(delta),
+            false);
     unit->SetCenter(CVec3(next, next_z), false);
     g_android_move_log_millis += elapsed_millis;
 
