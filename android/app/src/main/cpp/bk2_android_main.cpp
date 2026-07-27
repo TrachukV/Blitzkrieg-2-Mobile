@@ -92,7 +92,10 @@ struct TouchCameraState {
     int pointer_count = 0;
     float center_x = 0.0f;
     float center_y = 0.0f;
+    float start_x = 0.0f;
+    float start_y = 0.0f;
     float distance = 0.0f;
+    bool moved = false;
 };
 
 TouchCameraState g_touch_camera;
@@ -106,11 +109,31 @@ void PollInput(android_app* app) {
     for (uint64_t i = 0; i < input_buffer->motionEventsCount; ++i) {
         const GameActivityMotionEvent& event = input_buffer->motionEvents[i];
         const int action = event.action & AMOTION_EVENT_ACTION_MASK;
-        if (action == AMOTION_EVENT_ACTION_CANCEL ||
-            action == AMOTION_EVENT_ACTION_UP ||
-            action == AMOTION_EVENT_ACTION_POINTER_UP) {
+        if (action == AMOTION_EVENT_ACTION_CANCEL) {
             g_touch_camera.tracking = false;
             g_touch_camera.pointer_count = 0;
+            continue;
+        }
+        if (action == AMOTION_EVENT_ACTION_UP ||
+            action == AMOTION_EVENT_ACTION_POINTER_UP) {
+            if (action == AMOTION_EVENT_ACTION_UP &&
+                g_touch_camera.tracking &&
+                g_touch_camera.pointer_count == 1 &&
+                !g_touch_camera.moved &&
+                event.pointerCount > 0) {
+                const float x =
+                        GameActivityPointerAxes_getX(&event.pointers[0]);
+                const float y =
+                        GameActivityPointerAxes_getY(&event.pointers[0]);
+                bk2::android::HandleSinglePlayerTap(
+                        x,
+                        y,
+                        bk2::android::RenderBackend().width(),
+                        bk2::android::RenderBackend().height());
+            }
+            g_touch_camera.tracking = false;
+            g_touch_camera.pointer_count = 0;
+            g_touch_camera.moved = false;
             continue;
         }
 
@@ -126,11 +149,21 @@ void PollInput(android_app* app) {
                 g_touch_camera.pointer_count = 1;
                 g_touch_camera.center_x = x;
                 g_touch_camera.center_y = y;
+                g_touch_camera.start_x = x;
+                g_touch_camera.start_y = y;
                 g_touch_camera.distance = 0.0f;
+                g_touch_camera.moved = false;
                 continue;
             }
 
             if (action == AMOTION_EVENT_ACTION_MOVE) {
+                const float total_delta_x = x - g_touch_camera.start_x;
+                const float total_delta_y = y - g_touch_camera.start_y;
+                if (total_delta_x * total_delta_x +
+                            total_delta_y * total_delta_y >
+                        16.0f * 16.0f) {
+                    g_touch_camera.moved = true;
+                }
                 bk2::android::PanSinglePlayerCamera(
                         x - g_touch_camera.center_x,
                         y - g_touch_camera.center_y);
@@ -169,6 +202,7 @@ void PollInput(android_app* app) {
             g_touch_camera.center_x = center_x;
             g_touch_camera.center_y = center_y;
             g_touch_camera.distance = distance;
+            g_touch_camera.moved = true;
             continue;
         }
 

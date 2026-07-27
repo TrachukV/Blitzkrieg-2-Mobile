@@ -13,6 +13,11 @@ void ShutdownSinglePlayerRuntime();
 void PanSinglePlayerCamera(float delta_x_pixels, float delta_y_pixels);
 void ZoomSinglePlayerCamera(float scale);
 void RotateSinglePlayerCamera(float delta_radians);
+bool HandleSinglePlayerTap(
+        float screen_x,
+        float screen_y,
+        uint32_t viewport_width,
+        uint32_t viewport_height);
 
 bool IsSinglePlayerRuntimeReady();
 std::string SinglePlayerRuntimeReport();

@@ -3,6 +3,7 @@
 #include "bk2_android_database.h"
 #include "bk2_android_legacy_game_runtime.h"
 #include "bk2_android_mission_runtime.h"
+#include "bk2_android_platform.h"
 #include "bk2_legacy_texture_probe.h"
 #include "bk2_presentation_internal.h"
 #include "bk2_port_paths.h"
@@ -45,9 +46,12 @@ size_t g_triangle_count = 0;
 size_t g_map_object_count = 0;
 size_t g_scenario_object_count = 0;
 size_t g_rendered_object_count = 0;
+size_t g_dynamic_rendered_object_count = 0;
 bool g_presentation_snapshot_written = false;
+uint64_t g_rendered_presentation_generation = 0;
 TerrainCamera g_camera;
 TerrainMesh g_terrain_mesh;
+WorldObjectMesh g_static_world_object_mesh;
 WorldObjectMesh g_world_object_mesh;
 CObj<NGfx::CTexture> g_terrain_texture;
 std::string g_terrain_texture_path;
@@ -417,9 +421,9 @@ uint32_t ObjectColor(int player, bool scenario_object) {
         return ArgbToAbgr(0xffffc857u);
     }
     static const uint32_t kPlayerColors[] = {
-            0xffd5d1c7u,
+            0xff65e572u,
             0xffdf5b4fu,
-            0xff4aa3dfu,
+            0xffff665au,
             0xff67b85au,
             0xffd98b3au,
             0xffb56ad9u,
@@ -471,6 +475,7 @@ void AppendMapObjects(
         const STerrainInfo& terrain_info,
         bool scenario_objects,
         bool include_dynamic_units,
+        bool include_minor_objects,
         bool count_rendered,
         WorldObjectMesh* mesh) {
     for (size_t i = 0; i < objects.size(); ++i) {
@@ -493,8 +498,9 @@ void AppendMapObjects(
                 type_id == NDb::SBuildingRPGStats::typeID ||
                 type_id == NDb::SBridgeRPGStats::typeID ||
                 type_id == NDb::SEntrenchmentRPGStats::typeID ||
-                type_id == NDb::SFenceRPGStats::typeID ||
-                type_id == NDb::SMineRPGStats::typeID;
+                (include_minor_objects &&
+                 (type_id == NDb::SFenceRPGStats::typeID ||
+                  type_id == NDb::SMineRPGStats::typeID));
         if (!visible_gameplay_object) {
             continue;
         }
@@ -529,8 +535,22 @@ void BuildWorldObjectMesh(
     const size_t total = g_map_object_count + g_scenario_object_count;
     mesh->vertices.reserve(total * 5);
     mesh->triangle_indices.reserve(total * 18);
-    AppendMapObjects(map->objects, terrain_info, false, true, true, mesh);
-    AppendMapObjects(map->scenarioObjects, terrain_info, true, true, true, mesh);
+    AppendMapObjects(
+            map->objects,
+            terrain_info,
+            false,
+            true,
+            true,
+            true,
+            mesh);
+    AppendMapObjects(
+            map->scenarioObjects,
+            terrain_info,
+            true,
+            true,
+            true,
+            true,
+            mesh);
 }
 
 void BuildPresentationStaticWorldMesh(
@@ -543,8 +563,22 @@ void BuildPresentationStaticWorldMesh(
     const size_t total = map->objects.size() + map->scenarioObjects.size();
     mesh->vertices.reserve(total * 5);
     mesh->triangle_indices.reserve(total * 18);
-    AppendMapObjects(map->objects, terrain_info, false, false, false, mesh);
-    AppendMapObjects(map->scenarioObjects, terrain_info, true, false, false, mesh);
+    AppendMapObjects(
+            map->objects,
+            terrain_info,
+            false,
+            false,
+            false,
+            false,
+            mesh);
+    AppendMapObjects(
+            map->scenarioObjects,
+            terrain_info,
+            true,
+            false,
+            false,
+            false,
+            mesh);
 }
 
 std::vector<Bk2PresentationVertex> PresentationVertices(
@@ -579,6 +613,240 @@ void PublishPresentationMeshes(
     bk2::presentation::PublishWorld(
             PresentationVertices(world.vertices),
             world.triangle_indices);
+}
+
+bool RefreshDynamicWorldMeshLocked(bool force) {
+    const Bk2PresentationSnapshotInfo info =
+            bk2_presentation_snapshot_info();
+    if (!force &&
+        info.generation == g_rendered_presentation_generation) {
+        return true;
+    }
+    std::vector<Bk2PresentationEntity> entities(info.entity_count);
+    if (!entities.empty()) {
+        const size_t copied = bk2_presentation_copy_entities(
+                entities.data(),
+                entities.size());
+        if (copied != entities.size()) {
+            return false;
+        }
+    }
+
+    WorldObjectMesh combined = g_static_world_object_mesh;
+    combined.vertices.reserve(
+            combined.vertices.size() + entities.size() * 5);
+    combined.triangle_indices.reserve(
+            combined.triangle_indices.size() + entities.size() * 18);
+    g_dynamic_rendered_object_count = 0;
+    for (const Bk2PresentationEntity& entity : entities) {
+        if ((entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) == 0) {
+            continue;
+        }
+        const bool selected =
+                (entity.flags & BK2_PRESENTATION_ENTITY_SELECTED) != 0;
+        AppendObjectMarker(
+                &combined,
+                entity.x,
+                entity.y,
+                entity.z,
+                selected ? 3.6f : 1.65f,
+                selected ? 11.0f : 5.5f,
+                selected ? ArgbToAbgr(0xffffe066u)
+                         : ObjectColor(entity.player, false));
+        ++g_dynamic_rendered_object_count;
+    }
+    g_world_object_mesh = std::move(combined);
+    g_rendered_presentation_generation = info.generation;
+    return RenderBackend().set_world_object_mesh(g_world_object_mesh);
+}
+
+bool FocusCameraOnPlayerLocked(int player) {
+    const Bk2PresentationSnapshotInfo info =
+            bk2_presentation_snapshot_info();
+    std::vector<Bk2PresentationEntity> entities(info.entity_count);
+    if (!entities.empty() &&
+        bk2_presentation_copy_entities(
+                entities.data(),
+                entities.size()) != entities.size()) {
+        return false;
+    }
+
+    float min_x = std::numeric_limits<float>::max();
+    float min_y = std::numeric_limits<float>::max();
+    float max_x = std::numeric_limits<float>::lowest();
+    float max_y = std::numeric_limits<float>::lowest();
+    float height_sum = 0.0f;
+    size_t count = 0;
+    for (const Bk2PresentationEntity& entity : entities) {
+        if (entity.player != player ||
+            (entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) == 0) {
+            continue;
+        }
+        min_x = std::min(min_x, entity.x);
+        min_y = std::min(min_y, entity.y);
+        max_x = std::max(max_x, entity.x);
+        max_y = std::max(max_y, entity.y);
+        height_sum += entity.z;
+        ++count;
+    }
+    if (count == 0) {
+        return false;
+    }
+
+    g_camera.target_x = (min_x + max_x) * 0.5f;
+    g_camera.target_y = (min_y + max_y) * 0.5f;
+    g_camera.target_z = height_sum / static_cast<float>(count);
+    const float formation_span = std::max(max_x - min_x, max_y - min_y);
+    g_camera.distance = std::clamp(
+            formation_span * 2.8f + 55.0f,
+            110.0f,
+            std::max(g_terrain_mesh.world_size * 0.6f, 110.0f));
+
+    std::ostringstream report;
+    report << "camera_focus=player"
+           << "; player=" << player
+           << "; units=" << count
+           << "; target=" << g_camera.target_x << "," << g_camera.target_y
+           << "; distance=" << g_camera.distance;
+    PlatformRuntime::instance().log_info(report.str());
+    return true;
+}
+
+float TerrainMeshHeightAtLocked(float world_x, float world_y) {
+    if (g_height_width < 2 ||
+        g_height_height < 2 ||
+        g_terrain_mesh.vertices.size() !=
+                static_cast<size_t>(g_height_width * g_height_height)) {
+        return g_camera.target_z;
+    }
+    const float grid_x = std::clamp(
+            world_x / VIS_TILE_SIZE,
+            0.0f,
+            static_cast<float>(g_height_width - 1));
+    const float grid_y = std::clamp(
+            world_y / VIS_TILE_SIZE,
+            0.0f,
+            static_cast<float>(g_height_height - 1));
+    const int x0 = std::min(static_cast<int>(grid_x), g_height_width - 2);
+    const int y0 = std::min(static_cast<int>(grid_y), g_height_height - 2);
+    const int x1 = x0 + 1;
+    const int y1 = y0 + 1;
+    const float tx = grid_x - static_cast<float>(x0);
+    const float ty = grid_y - static_cast<float>(y0);
+    const auto height_at = [](int x, int y) {
+        return g_terrain_mesh.vertices[
+                static_cast<size_t>(y * g_height_width + x)].z;
+    };
+    const float top =
+            height_at(x0, y0) +
+            (height_at(x1, y0) - height_at(x0, y0)) * tx;
+    const float bottom =
+            height_at(x0, y1) +
+            (height_at(x1, y1) - height_at(x0, y1)) * tx;
+    return top + (bottom - top) * ty;
+}
+
+bool ScreenToTerrainLocked(
+        float screen_x,
+        float screen_y,
+        uint32_t viewport_width,
+        uint32_t viewport_height,
+        float* world_x,
+        float* world_y) {
+    if (world_x == nullptr ||
+        world_y == nullptr ||
+        viewport_width == 0 ||
+        viewport_height == 0 ||
+        g_height_width < 2 ||
+        g_height_height < 2) {
+        return false;
+    }
+
+    struct Vec3 {
+        float x;
+        float y;
+        float z;
+    };
+    const auto normalize = [](Vec3 value) {
+        const float length = std::sqrt(
+                value.x * value.x +
+                value.y * value.y +
+                value.z * value.z);
+        if (length > 0.0001f) {
+            value.x /= length;
+            value.y /= length;
+            value.z /= length;
+        }
+        return value;
+    };
+    const auto cross = [](const Vec3& left, const Vec3& right) {
+        return Vec3{
+                left.y * right.z - left.z * right.y,
+                left.z * right.x - left.x * right.z,
+                left.x * right.y - left.y * right.x};
+    };
+
+    const float horizontal_distance =
+            g_camera.distance * std::cos(g_camera.pitch_radians);
+    const Vec3 eye = {
+            g_camera.target_x +
+                    std::sin(g_camera.yaw_radians) * horizontal_distance,
+            g_camera.target_y -
+                    std::cos(g_camera.yaw_radians) * horizontal_distance,
+            g_camera.target_z +
+                    std::sin(g_camera.pitch_radians) * g_camera.distance};
+    const Vec3 forward = normalize(Vec3{
+            g_camera.target_x - eye.x,
+            g_camera.target_y - eye.y,
+            g_camera.target_z - eye.z});
+    const Vec3 world_up = {0.0f, 0.0f, 1.0f};
+    const Vec3 right = normalize(cross(forward, world_up));
+    const Vec3 camera_up = normalize(cross(right, forward));
+    const float ndc_x =
+            screen_x / static_cast<float>(viewport_width) * 2.0f - 1.0f;
+    const float ndc_y =
+            1.0f - screen_y / static_cast<float>(viewport_height) * 2.0f;
+    const float tangent = std::tan(48.0f * 0.5f * 3.14159265358979323846f / 180.0f);
+    const float aspect =
+            static_cast<float>(viewport_width) /
+            static_cast<float>(viewport_height);
+    const Vec3 ray = normalize(Vec3{
+            forward.x + right.x * ndc_x * tangent * aspect +
+                    camera_up.x * ndc_y * tangent,
+            forward.y + right.y * ndc_x * tangent * aspect +
+                    camera_up.y * ndc_y * tangent,
+            forward.z + right.z * ndc_x * tangent * aspect +
+                    camera_up.z * ndc_y * tangent});
+    if (ray.z >= -0.0001f) {
+        return false;
+    }
+
+    float height = g_camera.target_z;
+    float intersection_x = 0.0f;
+    float intersection_y = 0.0f;
+    for (int iteration = 0; iteration < 5; ++iteration) {
+        const float distance = (height - eye.z) / ray.z;
+        if (distance <= 0.0f) {
+            return false;
+        }
+        intersection_x = eye.x + ray.x * distance;
+        intersection_y = eye.y + ray.y * distance;
+        height = TerrainMeshHeightAtLocked(intersection_x, intersection_y);
+    }
+
+    const float max_x =
+            static_cast<float>(g_height_width - 1) * VIS_TILE_SIZE;
+    const float max_y =
+            static_cast<float>(g_height_height - 1) * VIS_TILE_SIZE;
+    if (intersection_x < 0.0f ||
+        intersection_y < 0.0f ||
+        intersection_x > max_x ||
+        intersection_y > max_y) {
+        return false;
+    }
+    *world_x = intersection_x;
+    *world_y = intersection_y;
+    return true;
 }
 
 bool LoadTerrainTexture(const NDb::SMapInfo* map) {
@@ -677,11 +945,12 @@ bool InitializeSinglePlayerRuntime() {
     g_camera.distance = std::max(mesh.world_size * 1.05f, kMinCameraDistance);
 
     g_terrain_mesh = std::move(mesh);
-    g_world_object_mesh = std::move(world_object_mesh);
+    g_static_world_object_mesh = std::move(presentation_world_mesh);
+    g_world_object_mesh = g_static_world_object_mesh;
     PublishPresentationMeshes(
             mission.state.mission_id,
             g_terrain_mesh,
-            presentation_world_mesh);
+            g_static_world_object_mesh);
     if (!InitializeLegacyGameRuntime(
                 map,
                 terrain_info,
@@ -691,6 +960,12 @@ bool InitializeSinglePlayerRuntime() {
                 &g_last_error)) {
         return false;
     }
+    if (!RefreshDynamicWorldMeshLocked(true)) {
+        ShutdownLegacyGameRuntime();
+        g_last_error = "dynamic_world_snapshot_failed";
+        return false;
+    }
+    FocusCameraOnPlayerLocked(0);
     if (!RefreshRenderResourcesLocked()) {
         ShutdownLegacyGameRuntime();
         g_last_error = RenderBackend().last_error().empty()
@@ -731,6 +1006,9 @@ void TickSinglePlayerRuntime(uint32_t elapsed_millis) {
         return;
     }
     TickLegacyGameRuntime(elapsed_millis);
+    if (!RefreshDynamicWorldMeshLocked(false)) {
+        g_last_error = "dynamic_world_render_refresh_failed";
+    }
 }
 
 void ShutdownSinglePlayerRuntime() {
@@ -740,6 +1018,7 @@ void ShutdownSinglePlayerRuntime() {
     RenderBackend().clear_world_object_mesh();
     g_terrain_texture = 0;
     g_terrain_mesh = TerrainMesh();
+    g_static_world_object_mesh = WorldObjectMesh();
     g_world_object_mesh = WorldObjectMesh();
     bk2::presentation::Reset();
     g_ready = false;
@@ -752,7 +1031,9 @@ void ShutdownSinglePlayerRuntime() {
     g_map_object_count = 0;
     g_scenario_object_count = 0;
     g_rendered_object_count = 0;
+    g_dynamic_rendered_object_count = 0;
     g_presentation_snapshot_written = false;
+    g_rendered_presentation_generation = 0;
 }
 
 void PanSinglePlayerCamera(float delta_x_pixels, float delta_y_pixels) {
@@ -793,6 +1074,66 @@ void RotateSinglePlayerCamera(float delta_radians) {
     ApplyCameraLocked();
 }
 
+bool HandleSinglePlayerTap(
+        float screen_x,
+        float screen_y,
+        uint32_t viewport_width,
+        uint32_t viewport_height) {
+    std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    if (!g_ready) {
+        return false;
+    }
+    float world_x = 0.0f;
+    float world_y = 0.0f;
+    if (!ScreenToTerrainLocked(
+                screen_x,
+                screen_y,
+                viewport_width,
+                viewport_height,
+                &world_x,
+                &world_y)) {
+        std::ostringstream report;
+        report << "player_tap=outside_terrain"
+               << "; screen=" << screen_x << "," << screen_y
+               << "; viewport=" << viewport_width << "x" << viewport_height;
+        PlatformRuntime::instance().log_info(report.str());
+        return false;
+    }
+    {
+        std::ostringstream report;
+        report << "player_tap=terrain"
+               << "; screen=" << screen_x << "," << screen_y
+               << "; world=" << world_x << "," << world_y;
+        PlatformRuntime::instance().log_info(report.str());
+    }
+    const float world_units_per_pixel =
+            2.0f *
+            g_camera.distance *
+            std::tan(48.0f * 0.5f * 3.14159265358979323846f / 180.0f) /
+            static_cast<float>(std::max(viewport_height, 1u));
+    const float selection_radius =
+            std::max(world_units_per_pixel * 42.0f, VIS_TILE_SIZE * 1.5f);
+    const int selected_unit = SelectLegacyUnitNear(
+                world_x,
+                world_y,
+                selection_radius,
+                0);
+    if (selected_unit >= 0) {
+        std::ostringstream report;
+        report << "player_tap=select"
+               << "; unit=" << selected_unit
+               << "; radius=" << selection_radius;
+        PlatformRuntime::instance().log_info(report.str());
+        return RefreshDynamicWorldMeshLocked(true);
+    }
+    if (!MoveSelectedLegacyUnit(world_x, world_y)) {
+        PlatformRuntime::instance().log_info("player_tap=no_action");
+        return false;
+    }
+    PlatformRuntime::instance().log_info("player_tap=move");
+    return RefreshDynamicWorldMeshLocked(true);
+}
+
 bool IsSinglePlayerRuntimeReady() {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
     return g_ready;
@@ -817,6 +1158,8 @@ std::string SinglePlayerRuntimeReport() {
            << "; map_objects=" << g_map_object_count
            << "; scenario_objects=" << g_scenario_object_count
            << "; rendered_objects=" << g_rendered_object_count
+           << "; dynamic_rendered_objects="
+           << g_dynamic_rendered_object_count
            << "; presentation_snapshot="
            << (g_presentation_snapshot_written ? "written" : "not_written")
            << "; " << LegacyGameRuntimeReport();

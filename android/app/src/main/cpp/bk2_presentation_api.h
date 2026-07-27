@@ -14,6 +14,7 @@ enum Bk2PresentationEntityFlags {
     BK2_PRESENTATION_ENTITY_ALIVE = 1u << 0,
     BK2_PRESENTATION_ENTITY_SELECTABLE = 1u << 1,
     BK2_PRESENTATION_ENTITY_MOVABLE = 1u << 2,
+    BK2_PRESENTATION_ENTITY_SELECTED = 1u << 3,
 };
 
 typedef struct Bk2PresentationVertex {

@@ -19,6 +19,13 @@ bool InitializeLegacyGameRuntime(
         int difficulty,
         std::string* error);
 void TickLegacyGameRuntime(uint32_t elapsed_millis);
+int SelectLegacyUnitNear(
+        float world_x,
+        float world_y,
+        float max_radius,
+        int player);
+bool MoveSelectedLegacyUnit(float world_x, float world_y);
+int SelectedLegacyUnitId();
 void ShutdownLegacyGameRuntime();
 bool IsLegacyGameRuntimeReady();
 std::string LegacyGameRuntimeReport();

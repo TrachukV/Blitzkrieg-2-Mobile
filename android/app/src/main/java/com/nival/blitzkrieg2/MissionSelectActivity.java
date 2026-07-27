@@ -2,6 +2,7 @@ package com.nival.blitzkrieg2;
 
 import android.content.Intent;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
@@ -20,6 +21,7 @@ import java.util.Collections;
 import java.util.List;
 
 public final class MissionSelectActivity extends AppCompatActivity {
+    private static final String TAG = "Blitzkrieg2";
     private static final String[] EXCLUDED_MISSION_SEGMENTS = {
             "arttests",
             "crap",
@@ -111,8 +113,10 @@ public final class MissionSelectActivity extends AppCompatActivity {
     private void loadMissions() {
         new Thread(() -> {
             ArrayList<MissionEntry> found = new ArrayList<>();
-            File dataRoot = new File(getExternalFilesDir(null), "DataAndroid/Data");
+            File dataRoot = selectReadableDataRoot();
+            Log.i(TAG, "Mission selector scanning: " + dataRoot.getAbsolutePath());
             scanForMapInfos(dataRoot, dataRoot, found);
+            Log.i(TAG, "Mission selector found " + found.size() + " maps.");
             Collections.sort(found);
             runOnUiThread(() -> {
                 missions.clear();
@@ -127,6 +131,19 @@ public final class MissionSelectActivity extends AppCompatActivity {
                 status.setText("Single-player missions: " + found.size());
             });
         }, "BK2MissionScan").start();
+    }
+
+    private File selectReadableDataRoot() {
+        File internalRoot = new File(getFilesDir(), "DataAndroid/Data");
+        if (new File(internalRoot, "types.xml").canRead() &&
+                new File(internalRoot, "index.bin").canRead()) {
+            return internalRoot;
+        }
+        File external = getExternalFilesDir(null);
+        if (external != null) {
+            return new File(external, "DataAndroid/Data");
+        }
+        return internalRoot;
     }
 
     private void scanForMapInfos(File dataRoot, File file, List<MissionEntry> out) {

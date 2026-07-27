@@ -3,6 +3,7 @@
 #include <jni.h>
 
 #include <mutex>
+#include <unistd.h>
 #include <utility>
 
 namespace bk2::android {
@@ -11,13 +12,33 @@ namespace {
 std::mutex g_paths_mutex;
 PortPaths g_paths;
 
+bool IsReadableDataRoot(const std::string& root) {
+    if (root.empty()) {
+        return false;
+    }
+    return access((root + "/Data/types.xml").c_str(), R_OK) == 0 &&
+           access((root + "/Data/index.bin").c_str(), R_OK) == 0;
+}
+
 }  // namespace
 
 std::string PortPaths::data_root() const {
-    if (!external_files_dir.empty()) {
-        return external_files_dir + "/DataAndroid";
+    const std::string internal_root =
+            files_dir.empty() ? std::string() : files_dir + "/DataAndroid";
+    const std::string external_root =
+            external_files_dir.empty()
+                    ? std::string()
+                    : external_files_dir + "/DataAndroid";
+    if (IsReadableDataRoot(internal_root)) {
+        return internal_root;
     }
-    return files_dir + "/DataAndroid";
+    if (IsReadableDataRoot(external_root)) {
+        return external_root;
+    }
+    if (!internal_root.empty()) {
+        return internal_root;
+    }
+    return external_root;
 }
 
 std::string PortPaths::save_root() const {

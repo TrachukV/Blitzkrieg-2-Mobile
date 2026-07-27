@@ -18,9 +18,10 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
 - `BK2_ENABLE_BGFX_RENDERER=ON` fetches the pinned `bgfx.cmake` integration and
   links the first Android `NGfx` backend boundary. Real devices prefer Vulkan
   with bgfx fallback enabled; Android emulators use the GLES3 backend because the
-  `ranchu` Vulkan driver crashes inside debug-utils object naming. The current
-  backend proves window attach, resize, clear, present, and solid-rectangle
-  primitive submission; terrain, full UI, and mesh draw paths are still pending.
+  `ranchu` Vulkan driver crashes inside debug-utils object naming. The backend
+  now renders the real mission heightfield and minimap texture, static gameplay
+  placeholders, and live AI-unit markers in addition to the original bootstrap
+  primitives. Full legacy UI and model/animation rendering are still pending.
 - `BK2_ENABLE_LEGACY_TEXTURE_RUNTIME=ON` links the Android
   `NGfx::CTexture`/`I2DBuffer` contract. Legacy callers can allocate textures,
   lock mip levels with `CTextureLock`, write the original pixel formats into CPU
@@ -254,6 +255,8 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
 From the repository root:
 
 ```sh
+tools/android/install_playable_debug.sh
+
 python3 tools/android/module_inventory.py \
   --json build/android/module_inventory.json \
   --cmake build/android/generated_legacy_sources.cmake
@@ -386,7 +389,7 @@ Runtime data is expected outside the base APK, while user-writable state stays
 in app-private storage:
 
 ```text
-<external-files>/DataAndroid/
+<files>/DataAndroid/
   Data/
     Scenario/
     Consts/
@@ -403,10 +406,41 @@ in app-private storage:
     Saves/
 ```
 
-The first playable port should generate this tree from `Versions/Current/Data`,
+Android 11+ scoped storage prevents the native runtime from reliably reading
+files pushed by `adb` into `<external-files>`. The install helper therefore
+streams `DataAndroid` through `run-as` into app-private `<files>/DataAndroid`.
+The runtime prefers that complete private tree and retains external-files only
+as a compatibility fallback.
+
+The port generates this tree from `Versions/Current/Data`,
 the required `Complete` and `Sound` roots, Disk_J movie sources, and converted
 `.bik` videos. If Git LFS returns pointer files instead of media blobs, the
 video/content validators report that as a blocker.
+
+## Current Interactive Runtime
+
+The debug APK now opens a native mission selector and discovers 117 staged map
+descriptors. The first USA campaign mission has been verified on the ARM64
+Android emulator with the real `map.b2m`, a `193x193` heightfield, 73,728
+terrain triangles, Lua mission scripts, and 134 live legacy AI units.
+
+Touch controls currently implemented:
+
+- tap a green player-unit marker to select it;
+- tap terrain to issue the original legacy move command and move the selected
+  unit through the Android presentation bridge;
+- drag with one finger to pan;
+- pinch to zoom;
+- rotate with a two-finger twist.
+
+The selected unit is yellow and follows the real terrain height while moving.
+Green markers are player units and red markers are hostile units. The camera
+starts focused on the player's formation.
+
+This is a playable runtime milestone, not a complete visual port. Units and
+buildings are temporary generated markers. Original Granny models, skeletons,
+animations, combat presentation, briefing/game HUD, and the complete
+win/lose-to-campaign flow remain unfinished.
 
 The video transcode manifest now writes Android-canonical runtime paths. A Bink
 ref such as `Movies\Nival.bik` maps to `DataAndroid/Movies/Nival.mp4`, not to a
