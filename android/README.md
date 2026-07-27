@@ -435,6 +435,10 @@ Touch controls currently implemented:
 - pinch to zoom;
 - rotate with a two-finger twist.
 
+The in-game Android HUD shows the active mission and these controls. Its
+`Missions` button returns to the native single-player mission list without
+terminating the app process.
+
 The selected unit is yellow, the current attack target is orange, and moving
 units follow the real terrain height.
 Green proxies are player units and red proxies are hostile units. Formations
