@@ -254,6 +254,7 @@ MissionRuntimeResult SaveMissionRuntimeCheckpoint(const std::string& slot_name);
 MissionRuntimeResult LoadMissionRuntimeCheckpoint(const std::string& slot_name);
 MissionRuntimeState GetMissionRuntimeState();
 void ResetMissionRuntimeState();
+std::string GetMissionHudStatusText();
 std::string DescribeMissionRuntimeState(const MissionRuntimeState& state);
 std::string RunFirstCampaignMissionProgressionProbe();
 std::string RunMissionCheckpointProbe();

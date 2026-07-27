@@ -12,6 +12,8 @@
 #include "GameX/GetConsts.h"
 #include "Main/Profiles.h"
 #include "Stats_B2_M1/DBMapInfo.h"
+#include "System/Streams.h"
+#include "System/VFSOperations.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -30,6 +32,8 @@ namespace {
 
 std::mutex g_mission_mutex;
 MissionRuntimeState g_state;
+std::mutex g_text_cache_mutex;
+std::map<std::string, std::string> g_text_cache;
 
 struct MissionLocation {
     int campaign_index = -1;
@@ -50,6 +54,99 @@ constexpr int kMissionCheckpointVersion = 1;
 
 std::string ToStdString(const string& value) {
     return value.c_str();
+}
+
+void AppendUtf8(std::uint32_t code_point, std::string* out) {
+    if (code_point <= 0x7f) {
+        out->push_back(static_cast<char>(code_point));
+    } else if (code_point <= 0x7ff) {
+        out->push_back(static_cast<char>(0xc0 | (code_point >> 6)));
+        out->push_back(static_cast<char>(0x80 | (code_point & 0x3f)));
+    } else if (code_point <= 0xffff) {
+        out->push_back(static_cast<char>(0xe0 | (code_point >> 12)));
+        out->push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3f)));
+        out->push_back(static_cast<char>(0x80 | (code_point & 0x3f)));
+    } else if (code_point <= 0x10ffff) {
+        out->push_back(static_cast<char>(0xf0 | (code_point >> 18)));
+        out->push_back(static_cast<char>(0x80 | ((code_point >> 12) & 0x3f)));
+        out->push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3f)));
+        out->push_back(static_cast<char>(0x80 | (code_point & 0x3f)));
+    }
+}
+
+std::string LoadUtf16Text(const std::string& file_ref) {
+    if (file_ref.empty() || NVFS::GetMainVFS() == nullptr) {
+        return std::string();
+    }
+
+    std::lock_guard<std::mutex> cache_guard(g_text_cache_mutex);
+    const std::map<std::string, std::string>::const_iterator cached =
+            g_text_cache.find(file_ref);
+    if (cached != g_text_cache.end()) {
+        return cached->second;
+    }
+
+    CFileStream stream(NVFS::GetMainVFS(), string(file_ref.c_str()));
+    const int byte_count = stream.GetSize();
+    std::string text;
+    if (!stream.IsOk() || byte_count < 2) {
+        g_text_cache[file_ref] = text;
+        return text;
+    }
+    const unsigned char* bytes = stream.GetBuffer();
+    if (bytes == nullptr) {
+        g_text_cache[file_ref] = text;
+        return text;
+    }
+
+    bool little_endian = true;
+    int offset = 0;
+    if (bytes[0] == 0xff && bytes[1] == 0xfe) {
+        offset = 2;
+    } else if (bytes[0] == 0xfe && bytes[1] == 0xff) {
+        little_endian = false;
+        offset = 2;
+    }
+
+    bool pending_space = false;
+    int character_count = 0;
+    while (offset + 1 < byte_count && character_count < 120) {
+        const std::uint16_t first = little_endian
+                ? static_cast<std::uint16_t>(bytes[offset] | (bytes[offset + 1] << 8))
+                : static_cast<std::uint16_t>((bytes[offset] << 8) | bytes[offset + 1]);
+        offset += 2;
+
+        std::uint32_t code_point = first;
+        if (first >= 0xd800 && first <= 0xdbff && offset + 1 < byte_count) {
+            const std::uint16_t second = little_endian
+                    ? static_cast<std::uint16_t>(bytes[offset] | (bytes[offset + 1] << 8))
+                    : static_cast<std::uint16_t>((bytes[offset] << 8) | bytes[offset + 1]);
+            if (second >= 0xdc00 && second <= 0xdfff) {
+                code_point = 0x10000 +
+                        ((static_cast<std::uint32_t>(first) - 0xd800) << 10) +
+                        (static_cast<std::uint32_t>(second) - 0xdc00);
+                offset += 2;
+            }
+        }
+
+        if (code_point == 0 || code_point == 0xfeff) {
+            continue;
+        }
+        if (code_point == '\r' || code_point == '\n' || code_point == '\t' ||
+            code_point == ' ') {
+            pending_space = !text.empty();
+            continue;
+        }
+        if (pending_space) {
+            text.push_back(' ');
+            pending_space = false;
+        }
+        AppendUtf8(code_point, &text);
+        ++character_count;
+    }
+
+    g_text_cache[file_ref] = text;
+    return text;
 }
 
 std::string JoinPath(const std::string& left, const std::string& right) {
@@ -3051,6 +3148,46 @@ MissionRuntimeState GetMissionRuntimeState() {
     return g_state;
 }
 
+std::string GetMissionHudStatusText() {
+    const MissionRuntimeState state = GetMissionRuntimeState();
+    std::ostringstream text;
+    if (!state.active) {
+        text << "Objectives: loading";
+        return text.str();
+    }
+
+    text << "Objectives: " << state.completed_objective_count
+         << "/" << state.objective_count;
+    if (state.received_objective_count > 0) {
+        text << "   Active: " << state.received_objective_count;
+    }
+    if (state.failed_objective_count > 0) {
+        text << "   Failed: " << state.failed_objective_count;
+    }
+
+    const MissionObjectiveState* active = nullptr;
+    for (std::vector<MissionObjectiveState>::const_iterator it = state.objectives.begin();
+         it != state.objectives.end();
+         ++it) {
+        if (it->state != EMOS_RECEIVED) {
+            continue;
+        }
+        if (active == nullptr || (!active->primary && it->primary)) {
+            active = &*it;
+        }
+    }
+    if (active != nullptr) {
+        std::string objective_text = LoadUtf16Text(active->header_ref);
+        if (objective_text.empty()) {
+            objective_text = LoadUtf16Text(active->description_ref);
+        }
+        if (!objective_text.empty()) {
+            text << "\nCurrent: " << objective_text;
+        }
+    }
+    return text.str();
+}
+
 void ResetMissionRuntimeState() {
     std::lock_guard<std::mutex> lock(g_mission_mutex);
     g_state = MissionRuntimeState();
@@ -3468,22 +3605,8 @@ Java_com_nival_blitzkrieg2_NativeBridge_getMissionOutcome(JNIEnv* env, jclass) {
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_nival_blitzkrieg2_NativeBridge_getMissionHudStatus(JNIEnv* env, jclass) {
-    const bk2::android::MissionRuntimeState state =
-            bk2::android::GetMissionRuntimeState();
-    std::ostringstream text;
-    if (!state.active) {
-        text << "Objectives: loading";
-    } else {
-        text << "Objectives: " << state.completed_objective_count
-             << "/" << state.objective_count;
-        if (state.received_objective_count > 0) {
-            text << "   Active: " << state.received_objective_count;
-        }
-        if (state.failed_objective_count > 0) {
-            text << "   Failed: " << state.failed_objective_count;
-        }
-    }
-    return env->NewStringUTF(text.str().c_str());
+    const std::string text = bk2::android::GetMissionHudStatusText();
+    return env->NewStringUTF(text.c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL

@@ -446,10 +446,13 @@ Touch controls currently implemented:
 The in-game Android HUD shows the active mission and these controls. Its
 `Missions` button returns to the native single-player mission list without
 terminating the app process. It also shows completed, active, and failed
-objective counts. The Android client now drains the original AI update stream
-every simulation tick instead of allowing visual/client updates to accumulate.
-`EFB_OBJECTIVE_CHANGED` updates are applied to both the original scenario
-tracker and the Android campaign checkpoint state.
+objective counts and the localized header of the current primary objective.
+The header is decoded directly from the shipped UTF-16 text resource through
+the case-insensitive Android VFS instead of relying on the legacy
+16-bit-`wchar_t` assumption. The Android client now drains the original AI
+update stream every simulation tick instead of allowing visual/client updates
+to accumulate. `EFB_OBJECTIVE_CHANGED` updates are applied to both the original
+scenario tracker and the Android campaign checkpoint state.
 
 Original Lua `Win()`/`Loose()` calls now cross the Android input bridge.
 They freeze the finished simulation, commit the corresponding campaign
