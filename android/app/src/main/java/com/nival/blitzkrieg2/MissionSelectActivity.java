@@ -113,10 +113,16 @@ public final class MissionSelectActivity extends AppCompatActivity {
     private void loadMissions() {
         new Thread(() -> {
             ArrayList<MissionEntry> found = new ArrayList<>();
+            int[] missingMapData = {0};
             File dataRoot = selectReadableDataRoot();
             Log.i(TAG, "Mission selector scanning: " + dataRoot.getAbsolutePath());
-            scanForMapInfos(dataRoot, dataRoot, found);
-            Log.i(TAG, "Mission selector found " + found.size() + " maps.");
+            scanForMapInfos(dataRoot, dataRoot, found, missingMapData);
+            Log.i(
+                    TAG,
+                    "Mission selector found " + found.size()
+                            + " maps with local binary data; skipped "
+                            + missingMapData[0]
+                            + " descriptors without map data.");
             Collections.sort(found);
             runOnUiThread(() -> {
                 missions.clear();
@@ -128,7 +134,10 @@ public final class MissionSelectActivity extends AppCompatActivity {
                 adapter.clear();
                 adapter.addAll(labels);
                 adapter.notifyDataSetChanged();
-                status.setText("Single-player missions: " + found.size());
+                status.setText(
+                        "Maps with local binary data: " + found.size()
+                                + "   Incomplete descriptors skipped: "
+                                + missingMapData[0]);
             });
         }, "BK2MissionScan").start();
     }
@@ -146,7 +155,11 @@ public final class MissionSelectActivity extends AppCompatActivity {
         return internalRoot;
     }
 
-    private void scanForMapInfos(File dataRoot, File file, List<MissionEntry> out) {
+    private void scanForMapInfos(
+            File dataRoot,
+            File file,
+            List<MissionEntry> out,
+            int[] missingMapData) {
         if (file == null || !file.exists()) {
             return;
         }
@@ -156,7 +169,7 @@ public final class MissionSelectActivity extends AppCompatActivity {
                 return;
             }
             for (File child : children) {
-                scanForMapInfos(dataRoot, child, out);
+                scanForMapInfos(dataRoot, child, out, missingMapData);
             }
             return;
         }
@@ -165,6 +178,11 @@ public final class MissionSelectActivity extends AppCompatActivity {
         }
         String missionId = relativePath(dataRoot, file);
         if (hasExcludedSegment(missionId)) {
+            return;
+        }
+        File mapBinary = new File(file.getParentFile(), "map.b2m");
+        if (!mapBinary.canRead()) {
+            ++missingMapData[0];
             return;
         }
         out.add(new MissionEntry(missionId, labelForMission(missionId)));

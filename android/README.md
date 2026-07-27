@@ -419,10 +419,18 @@ video/content validators report that as a blocker.
 
 ## Current Interactive Runtime
 
-The debug APK now opens a native mission selector and discovers 117 staged map
-descriptors. The first USA campaign mission has been verified on the ARM64
-Android emulator with the real `map.b2m`, a `193x193` heightfield, 73,728
-terrain triangles, Lua mission scripts, and 134 live legacy AI units.
+The debug APK now opens a native mission selector. In the current staged data it
+lists 75 map descriptors that have an adjacent readable `map.b2m` and hides 42
+incomplete descriptors. The first USA campaign mission has been verified on the
+ARM64 Android emulator with the real `map.b2m`, a `193x193` heightfield, 73,728
+terrain triangles, Lua mission scripts, and 198 live legacy AI units.
+
+The Android VFS resolves legacy asset paths case-insensitively while preserving
+the actual on-disk spelling. This is required for content such as GB3.1 whose
+XML uses `units/.../mechunitrpgstats.xdb` while the staged files use
+`Units/.../MechUnitRPGStats.xdb`. On the ARM64 emulator, GB3.1 now reaches the
+ready game stage with 358 live units and six script segments; GER1.0 reaches it
+with 969 game units, 975 presentation units, and six script segments.
 
 Touch controls currently implemented:
 

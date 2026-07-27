@@ -944,6 +944,10 @@ std::string LegacyGameRuntimeReport() {
            << "; stage=" << g_stage
            << "; units=" << g_unit_count
            << "; segments=" << g_segment_count
+           << "; missing_unit_payload_sample="
+           << JoinRefSamples(g_missing_unit_payload_refs, 2)
+           << "; missing_squad_payload_sample="
+           << JoinRefSamples(g_missing_squad_payload_refs, 2)
            << "; map_players=" << g_map_player_count
            << "; diplomacies=" << g_diplomacy_count
            << "; start_unit_objects=" << g_start_unit_object_count
@@ -977,9 +981,7 @@ std::string LegacyGameRuntimeReport() {
            << "; terrain_types=" << g_terrain_type_count
            << "; terrain_grid=" << g_terrain_grid_width
            << "x" << g_terrain_grid_height
-           << "; terrain_features=" << g_terrain_feature_count
-           << "; missing_unit_payload_sample=" << JoinRefSamples(g_missing_unit_payload_refs, 2)
-           << "; missing_squad_payload_sample=" << JoinRefSamples(g_missing_squad_payload_refs, 2);
+           << "; terrain_features=" << g_terrain_feature_count;
     return report.str();
 }
 

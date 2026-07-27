@@ -8,19 +8,23 @@
 #include "bk2_port_paths.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <dirent.h>
 #include <mutex>
 #include <set>
 #include <string>
 #include <sys/stat.h>
+#include <unordered_map>
 #include <unistd.h>
 #include <vector>
 
 namespace {
 
 std::mutex g_vfs_mutex;
+std::mutex g_resolution_mutex;
 bool g_vfs_initialized = false;
+std::unordered_map<std::string, std::string> g_file_resolution_cache;
 
 std::string NormalizePath(std::string path) {
     std::replace(path.begin(), path.end(), '\\', '/');
@@ -51,6 +55,80 @@ bool IsRegularFile(const std::string& path) {
 bool IsDirectory(const std::string& path) {
     struct stat st;
     return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+bool AsciiCaseEqual(const std::string& left, const char* right) {
+    if (right == nullptr || left.size() != strlen(right)) {
+        return false;
+    }
+    for (size_t index = 0; index < left.size(); ++index) {
+        const unsigned char leftChar = static_cast<unsigned char>(left[index]);
+        const unsigned char rightChar = static_cast<unsigned char>(right[index]);
+        if (std::tolower(leftChar) != std::tolower(rightChar)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string ResolvePathCaseInsensitive(const std::string& path, bool requireDirectory) {
+    if ((requireDirectory && IsDirectory(path))
+            || (!requireDirectory && IsRegularFile(path))) {
+        return path;
+    }
+
+    std::string current;
+    size_t position = 0;
+    if (!path.empty() && path[0] == '/') {
+        current = "/";
+        position = 1;
+    } else {
+        current = ".";
+    }
+
+    while (position <= path.size()) {
+        const size_t slash = path.find('/', position);
+        const std::string part = path.substr(position, slash - position);
+        if (!part.empty() && part != ".") {
+            if (part == "..") {
+                return {};
+            }
+
+            const std::string exactPath = JoinPath(current, part);
+            struct stat exactStats;
+            if (stat(exactPath.c_str(), &exactStats) == 0) {
+                current = exactPath;
+            } else {
+                DIR* directory = opendir(current.c_str());
+                if (directory == nullptr) {
+                    return {};
+                }
+
+                std::string actualName;
+                while (dirent* entry = readdir(directory)) {
+                    if (AsciiCaseEqual(part, entry->d_name)) {
+                        actualName = entry->d_name;
+                        break;
+                    }
+                }
+                closedir(directory);
+                if (actualName.empty()) {
+                    return {};
+                }
+                current = JoinPath(current, actualName);
+            }
+        }
+        if (slash == std::string::npos) {
+            break;
+        }
+        position = slash + 1;
+    }
+
+    if ((requireDirectory && IsDirectory(current))
+            || (!requireDirectory && IsRegularFile(current))) {
+        return current;
+    }
+    return {};
 }
 
 bool EnsureDirectory(const std::string& directory) {
@@ -128,13 +206,28 @@ std::vector<std::string> BuildCandidates(const std::string& path) {
 }
 
 std::string ResolveExistingFile(const std::string& path) {
-    const std::vector<std::string> candidates = BuildCandidates(path);
-    for (const std::string& candidate : candidates) {
-        if (IsRegularFile(candidate)) {
-            return candidate;
+    {
+        std::lock_guard<std::mutex> lock(g_resolution_mutex);
+        const auto cached = g_file_resolution_cache.find(path);
+        if (cached != g_file_resolution_cache.end()) {
+            return cached->second;
         }
     }
-    return {};
+
+    const std::vector<std::string> candidates = BuildCandidates(path);
+    std::string resolved;
+    for (const std::string& candidate : candidates) {
+        resolved = ResolvePathCaseInsensitive(candidate, false);
+        if (!resolved.empty()) {
+            break;
+        }
+    }
+
+    if (!resolved.empty()) {
+        std::lock_guard<std::mutex> lock(g_resolution_mutex);
+        g_file_resolution_cache[path] = resolved;
+    }
+    return resolved;
 }
 
 std::string ResolveWriteFile(const std::string& path) {
@@ -233,8 +326,9 @@ public:
         std::set<std::string> found;
         const std::string normalizedFolder = NormalizePath(folder.c_str());
         for (const std::string& root : BuildRoots()) {
-            const std::string absoluteDir = JoinPath(root, normalizedFolder);
-            if (IsDirectory(absoluteDir)) {
+            const std::string absoluteDir =
+                    ResolvePathCaseInsensitive(JoinPath(root, normalizedFolder), true);
+            if (!absoluteDir.empty()) {
                 CollectFiles(root, absoluteDir, normalizedFolder, &found);
             }
         }
@@ -280,6 +374,10 @@ bool InitializeLegacyVfs() {
         return true;
     }
 
+    {
+        std::lock_guard<std::mutex> resolutionLock(g_resolution_mutex);
+        g_file_resolution_cache.clear();
+    }
     NVFS::SetMainVFS(new CAndroidVFS());
     NVFS::SetMainFileCreator(new CAndroidFileCreator());
     g_vfs_initialized = NVFS::GetMainVFS() != 0 && NVFS::GetMainFileCreator() != 0;
@@ -294,6 +392,10 @@ void ShutdownLegacyVfs() {
 
     NVFS::SetMainFileCreator(0);
     NVFS::SetMainVFS(0);
+    {
+        std::lock_guard<std::mutex> resolutionLock(g_resolution_mutex);
+        g_file_resolution_cache.clear();
+    }
     g_vfs_initialized = false;
 }
 

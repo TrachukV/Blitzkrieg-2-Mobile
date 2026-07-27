@@ -1875,6 +1875,48 @@ MissionRuntimeResult StartDirectMissionState(const std::string& mission_id, int 
         return ErrorResult("mission_map_missing");
     }
 
+    const NDb::SGameRoot* game_root = NGameX::GetGameRoot();
+    if (game_root != nullptr) {
+        for (int campaign_index = 0;
+             campaign_index < game_root->campaigns.size();
+             ++campaign_index) {
+            const NDb::SCampaign* campaign =
+                    game_root->campaigns[campaign_index].GetPtr();
+            if (campaign == nullptr) {
+                continue;
+            }
+            for (int chapter_index = 0;
+                 chapter_index < campaign->chapters.size();
+                 ++chapter_index) {
+                const NDb::SChapter* chapter =
+                        campaign->chapters[chapter_index].GetPtr();
+                if (chapter == nullptr) {
+                    continue;
+                }
+                for (int mission_index = 0;
+                     mission_index < chapter->missionPath.size();
+                     ++mission_index) {
+                    if (chapter->missionPath[mission_index].pMap.GetPtr() == map) {
+                        return StartCampaignMissionState(
+                                campaign_index,
+                                chapter_index,
+                                mission_index,
+                                difficulty);
+                    }
+                }
+            }
+        }
+        for (int tutorial_index = 0;
+             tutorial_index < game_root->tutorialMaps.size();
+             ++tutorial_index) {
+            if (game_root->tutorialMaps[tutorial_index].pMapInfo.GetPtr() == map) {
+                return StartTutorialMissionState(
+                        tutorial_index,
+                        difficulty);
+            }
+        }
+    }
+
     MissionRuntimeState state;
     state.active = true;
     state.mission_active = true;

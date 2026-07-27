@@ -1401,6 +1401,7 @@ std::string SinglePlayerRuntimeReport() {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
     std::ostringstream report;
     report << "single_player_runtime=" << (g_ready ? "ready" : "not_ready")
+           << "; error=" << (g_last_error.empty() ? "<none>" : g_last_error)
            << "; mission=" << (g_mission_id.empty() ? "<none>" : g_mission_id)
            << "; map=" << (g_map_path.empty() ? "<none>" : g_map_path)
            << "; heightfield=" << g_height_width << "x" << g_height_height
@@ -1421,9 +1422,6 @@ std::string SinglePlayerRuntimeReport() {
            << "; presentation_snapshot="
            << (g_presentation_snapshot_written ? "written" : "not_written")
            << "; " << LegacyGameRuntimeReport();
-    if (!g_last_error.empty()) {
-        report << "; error=" << g_last_error;
-    }
     return report.str();
 }
 
