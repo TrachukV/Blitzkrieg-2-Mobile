@@ -40,6 +40,7 @@ if [[ "${BK2_SKIP_GEOMETRY_CONVERSION:-0}" != "1" ]]; then
         node convert_granny_geometry.mjs \
             --input "${GEOMETRY_SOURCE}" \
             --output "${CONVERTED_GEOMETRY}" \
+            --idle-animation "${DATA_SOURCE}/Data/bin/Animations/3977" \
             --all
     )
 fi

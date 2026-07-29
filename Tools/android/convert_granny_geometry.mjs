@@ -3,16 +3,19 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 
-import { parseModel } from "granny-ro-js";
+import { parseAnimated, parseModel, poseSkeletonAt } from "granny-ro-js";
 
 const MAGIC = Buffer.from([0x42, 0x4b, 0x32, 0x4d, 0x53, 0x48, 0x31, 0x00]);
-const FORMAT_VERSION = 2;
+const FORMAT_VERSION = 3;
 const VERTEX_FLOAT_COUNT = 8;
+const DEFAULT_ANIMATION_FRAME_COUNT = 16;
 
 function usage() {
   process.stderr.write(
     "Usage: node convert_granny_geometry.mjs " +
       "--input <Data/bin/Geometries> --output <Converted/Geometries> " +
+      "[--idle-animation <Data/bin/Animations/resource>] " +
+      "[--animation-frames <count>] " +
       "[--all | <resource-id> ...]\n",
   );
 }
@@ -20,6 +23,8 @@ function usage() {
 function parseArguments(argv) {
   let input = "";
   let output = "";
+  let idleAnimation = "";
+  let animationFrames = DEFAULT_ANIMATION_FRAME_COUNT;
   let all = false;
   const ids = [];
   for (let index = 0; index < argv.length; ++index) {
@@ -28,6 +33,10 @@ function parseArguments(argv) {
       input = argv[++index] ?? "";
     } else if (argument === "--output") {
       output = argv[++index] ?? "";
+    } else if (argument === "--idle-animation") {
+      idleAnimation = argv[++index] ?? "";
+    } else if (argument === "--animation-frames") {
+      animationFrames = Number.parseInt(argv[++index] ?? "", 10);
     } else if (argument === "--all") {
       all = true;
     } else if (/^\d+$/.test(argument)) {
@@ -36,7 +45,14 @@ function parseArguments(argv) {
       throw new Error(`Unknown argument: ${argument}`);
     }
   }
-  if (!input || !output || (!all && ids.length === 0)) {
+  if (
+    !input ||
+    !output ||
+    (!all && ids.length === 0) ||
+    !Number.isInteger(animationFrames) ||
+    animationFrames < 2 ||
+    animationFrames > 120
+  ) {
     usage();
     process.exitCode = 2;
     return null;
@@ -44,6 +60,8 @@ function parseArguments(argv) {
   return {
     input: resolve(input),
     output: resolve(output),
+    idleAnimation: idleAnimation ? resolve(idleAnimation) : "",
+    animationFrames,
     all,
     ids,
   };
@@ -60,7 +78,108 @@ function orderedMeshes(parsed) {
   return parsed.meshes;
 }
 
-function serializeGeometry(parsed) {
+function transformPoint(matrix, value, translation) {
+  const x = value[0] ?? 0;
+  const y = value[1] ?? 0;
+  const z = value[2] ?? 0;
+  return [
+    matrix[0] * x + matrix[4] * y + matrix[8] * z +
+      (translation ? matrix[12] : 0),
+    matrix[1] * x + matrix[5] * y + matrix[9] * z +
+      (translation ? matrix[13] : 0),
+    matrix[2] * x + matrix[6] * y + matrix[10] * z +
+      (translation ? matrix[14] : 0),
+  ];
+}
+
+function normalize(value) {
+  const length = Math.hypot(value[0], value[1], value[2]);
+  return length > 1e-8
+    ? [value[0] / length, value[1] / length, value[2] / length]
+    : [0, 0, 1];
+}
+
+function canUseAnimation(mesh, skeleton, animation) {
+  if (
+    !skeleton ||
+    !animation ||
+    mesh.vertexWeights.length !== mesh.vertexCount ||
+    mesh.boneBindings.length === 0 ||
+    !mesh.vertexWeights.some((weights) => weights.length > 0)
+  ) {
+    return false;
+  }
+  const skeletonNames = new Set(skeleton.bones.map((bone) => bone.name));
+  const trackNames = new Set(
+    animation.trackGroups.flatMap((group) =>
+      group.transformTracks.map((track) => track.name),
+    ),
+  );
+  return mesh.boneBindings.every(
+    (binding) =>
+      skeletonNames.has(binding.name) && trackNames.has(binding.name),
+  );
+}
+
+function animatedFrames(mesh, skeleton, animation, frameCount) {
+  if (!canUseAnimation(mesh, skeleton, animation)) {
+    return [];
+  }
+  const skeletonIndexByName = new Map(
+    skeleton.bones.map((bone, index) => [bone.name, index]),
+  );
+  const bindingToSkeleton = mesh.boneBindings.map((binding) =>
+    skeletonIndexByName.get(binding.name),
+  );
+  const frames = [];
+  for (let frame = 0; frame < frameCount; ++frame) {
+    const time = animation.duration * frame / frameCount;
+    const pose = poseSkeletonAt(skeleton, animation, time);
+    const positions = [];
+    const normals = [];
+    for (let vertex = 0; vertex < mesh.vertexCount; ++vertex) {
+      const weights = mesh.vertexWeights[vertex];
+      const sourcePosition = mesh.positions[vertex] ?? [0, 0, 0];
+      const sourceNormal = mesh.normals[vertex] ?? [0, 0, 1];
+      let position = [0, 0, 0];
+      let normal = [0, 0, 0];
+      let totalWeight = 0;
+      for (const weight of weights) {
+        const skeletonIndex = bindingToSkeleton[weight.boneIndex];
+        if (
+          !Number.isInteger(skeletonIndex) ||
+          !pose.skinningMatrices[skeletonIndex] ||
+          weight.weight <= 0
+        ) {
+          continue;
+        }
+        const matrix = pose.skinningMatrices[skeletonIndex];
+        const weightedPosition = transformPoint(matrix, sourcePosition, true);
+        const weightedNormal = transformPoint(matrix, sourceNormal, false);
+        position[0] += weightedPosition[0] * weight.weight;
+        position[1] += weightedPosition[1] * weight.weight;
+        position[2] += weightedPosition[2] * weight.weight;
+        normal[0] += weightedNormal[0] * weight.weight;
+        normal[1] += weightedNormal[1] * weight.weight;
+        normal[2] += weightedNormal[2] * weight.weight;
+        totalWeight += weight.weight;
+      }
+      if (totalWeight <= 1e-8) {
+        position = [...sourcePosition];
+        normal = [...sourceNormal];
+      } else if (Math.abs(totalWeight - 1) > 1e-5) {
+        position = position.map((value) => value / totalWeight);
+        normal = normal.map((value) => value / totalWeight);
+      }
+      positions.push(position);
+      normals.push(normalize(normal));
+    }
+    frames.push({ positions, normals });
+  }
+  return frames;
+}
+
+function serializeGeometry(parsed, animation, animationFrameCount) {
   const meshes = orderedMeshes(parsed).filter(
     (mesh) =>
       mesh.vertexCount > 0 &&
@@ -77,8 +196,16 @@ function serializeGeometry(parsed) {
       mesh.triangleGroups.length > 0
         ? mesh.triangleGroups
         : [{ materialIndex: 0, triFirst: 0, triCount: mesh.indexCount / 3 }];
-    byteLength += 12;
-    byteLength += mesh.vertexCount * VERTEX_FLOAT_COUNT * 4;
+    const frames = animatedFrames(
+      mesh,
+      parsed.skeletons[0],
+      animation,
+      animationFrameCount,
+    );
+    mesh.androidAnimationFrames = frames;
+    const frameCount = frames.length > 0 ? frames.length : 1;
+    byteLength += 20;
+    byteLength += frameCount * mesh.vertexCount * VERTEX_FLOAT_COUNT * 4;
     byteLength += mesh.indexCount * 4;
     byteLength += groups.length * 12;
   }
@@ -96,24 +223,39 @@ function serializeGeometry(parsed) {
     output.writeUInt32LE(mesh.vertexCount, offset);
     output.writeUInt32LE(mesh.indexCount, offset + 4);
     output.writeUInt32LE(groups.length, offset + 8);
-    offset += 12;
-    for (let vertex = 0; vertex < mesh.vertexCount; ++vertex) {
-      const position = mesh.positions[vertex] ?? [0, 0, 0];
-      const normal = mesh.normals[vertex] ?? [0, 0, 1];
-      const uv = mesh.uvs[vertex] ?? [0, 0];
-      const values = [
-        position[0] ?? 0,
-        position[1] ?? 0,
-        position[2] ?? 0,
-        normal[0] ?? 0,
-        normal[1] ?? 0,
-        normal[2] ?? 1,
-        uv[0] ?? 0,
-        uv[1] ?? 0,
-      ];
-      for (const value of values) {
-        output.writeFloatLE(Number.isFinite(value) ? value : 0, offset);
-        offset += 4;
+    const frames = mesh.androidAnimationFrames;
+    const frameCount = frames.length > 0 ? frames.length : 1;
+    output.writeUInt32LE(frameCount, offset + 12);
+    output.writeFloatLE(
+      frames.length > 0 ? animation.duration : 0,
+      offset + 16,
+    );
+    offset += 20;
+    for (let frame = 0; frame < frameCount; ++frame) {
+      for (let vertex = 0; vertex < mesh.vertexCount; ++vertex) {
+        const position =
+          frames[frame]?.positions[vertex] ??
+          mesh.positions[vertex] ??
+          [0, 0, 0];
+        const normal =
+          frames[frame]?.normals[vertex] ??
+          mesh.normals[vertex] ??
+          [0, 0, 1];
+        const uv = mesh.uvs[vertex] ?? [0, 0];
+        const values = [
+          position[0] ?? 0,
+          position[1] ?? 0,
+          position[2] ?? 0,
+          normal[0] ?? 0,
+          normal[1] ?? 0,
+          normal[2] ?? 1,
+          uv[0] ?? 0,
+          uv[1] ?? 0,
+        ];
+        for (const value of values) {
+          output.writeFloatLE(Number.isFinite(value) ? value : 0, offset);
+          offset += 4;
+        }
       }
     }
     for (const index of mesh.indices) {
@@ -155,14 +297,18 @@ async function resourceIds(options) {
     .sort((left, right) => Number(left) - Number(right));
 }
 
-async function convertOne(options, id) {
+async function convertOne(options, id, animation) {
   const source = join(options.input, id);
   const target = join(options.output, `${id}.bk2mesh`);
   const sourceBytes = await readFile(source);
   // Geometry conversion does not need embedded Granny textures. Avoiding the
   // texture path also keeps unrelated legacy IGC payloads from blocking a mesh.
   const parsed = parseModel(toArrayBuffer(sourceBytes));
-  const { output, meshes } = serializeGeometry(parsed);
+  const { output, meshes } = serializeGeometry(
+    parsed,
+    animation,
+    options.animationFrames,
+  );
   await writeFile(target, output);
   return {
     id,
@@ -171,6 +317,9 @@ async function convertOne(options, id) {
     meshes: meshes.length,
     vertices: meshes.reduce((sum, mesh) => sum + mesh.vertexCount, 0),
     triangles: meshes.reduce((sum, mesh) => sum + mesh.indexCount / 3, 0),
+    animatedMeshes: meshes.filter(
+      (mesh) => mesh.androidAnimationFrames.length > 0,
+    ).length,
   };
 }
 
@@ -180,6 +329,14 @@ async function main() {
     return;
   }
   await mkdir(options.output, { recursive: true });
+  let animation = null;
+  if (options.idleAnimation) {
+    const animationBytes = await readFile(options.idleAnimation);
+    animation = parseAnimated(toArrayBuffer(animationBytes)).animations[0] ?? null;
+    if (animation === null) {
+      throw new Error("idle animation resource has no animation");
+    }
+  }
   const ids = await resourceIds(options);
   let converted = 0;
   let skipped = 0;
@@ -187,16 +344,19 @@ async function main() {
   let vertices = 0;
   let triangles = 0;
   let outputBytes = 0;
+  let animatedMeshes = 0;
   for (const id of ids) {
     try {
-      const result = await convertOne(options, id);
+      const result = await convertOne(options, id, animation);
       ++converted;
       vertices += result.vertices;
       triangles += result.triangles;
       outputBytes += result.outputBytes;
+      animatedMeshes += result.animatedMeshes;
       if (!options.all) {
         process.stdout.write(
           `geometry=${result.id}; meshes=${result.meshes}; ` +
+            `animated_meshes=${result.animatedMeshes}; ` +
             `vertices=${result.vertices}; triangles=${result.triangles}; ` +
             `output=${basename(join(options.output, `${id}.bk2mesh`))}\n`,
         );
@@ -213,7 +373,8 @@ async function main() {
   process.stdout.write(
     `geometry_conversion_complete=1; requested=${ids.length}; ` +
       `converted=${converted}; skipped=${skipped}; failed=${failed}; vertices=${vertices}; ` +
-      `triangles=${triangles}; output_bytes=${outputBytes}\n`,
+      `triangles=${triangles}; animated_meshes=${animatedMeshes}; ` +
+      `output_bytes=${outputBytes}\n`,
   );
   if (failed > 0) {
     process.exitCode = 1;

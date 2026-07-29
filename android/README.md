@@ -21,8 +21,9 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   `ranchu` Vulkan driver crashes inside debug-utils object naming. The backend
   now renders the real mission heightfield and terrain materials plus converted
   original Granny meshes for mapped static objects and live AI units. Original
-  model DDS materials are wired; skinning/animation and the full legacy UI are
-  still pending.
+  model DDS materials are wired, and compatible infantry meshes use baked
+  frames from the original rifle idle clip. General runtime skinning and the
+  full legacy UI are still pending.
 - `BK2_ENABLE_LEGACY_TEXTURE_RUNTIME=ON` links the Android
   `NGfx::CTexture`/`I2DBuffer` contract. Legacy callers can allocate textures,
   lock mip levels with `CTextureLock`, write the original pixel formats into CPU
@@ -291,6 +292,7 @@ python3 Tools/android/build_geometry_index.py \
   node convert_granny_geometry.mjs \
     --input ../../Versions/Current/Data/bin/Geometries \
     --output ../../DataAndroid/Converted/Geometries \
+    --idle-animation ../../Versions/Current/Data/bin/Animations/3977 \
     --all
 )
 
@@ -460,11 +462,14 @@ missing converted file. Unmapped objects retain the temporary proxy instead of
 disappearing.
 
 The same offline index resolves each selected Model's material list and each
-Texture descriptor's original DDS `DestName`. Version 2 of the `BK2MSH1` cache
-preserves Granny triangle material groups, and the bgfx backend submits a
-separate index layer per model texture. Direct DDS loading deliberately avoids
-the incomplete Android `ObjectRecordID` table. On the first USA mission the
-verified runtime loads all 31 referenced model textures for 31 material layers.
+Texture descriptor's original DDS `DestName`. Version 3 of the `BK2MSH1` cache
+preserves Granny triangle material groups and can carry pre-skinned animation
+frames. The converter samples the shipped RIFLE idle animation through the
+mesh's real bone bindings and vertex weights; compatible infantry instances
+advance those frames in the live mission. The bgfx backend submits a separate
+index layer per model texture. Direct DDS loading deliberately avoids the
+incomplete Android `ObjectRecordID` table. On the first USA mission the verified
+runtime loads all 31 referenced model textures for 31 material layers.
 
 The Android VFS resolves legacy asset paths case-insensitively while preserving
 the actual on-disk spelling. This is required for content such as GB3.1 whose
@@ -515,9 +520,11 @@ green/red proxies. The camera starts focused on the player's formation.
 
 This is a playable runtime milestone, not a complete visual port. Terrain now
 uses original game materials and the first runtime model path uses original
-Granny geometry and DDS materials. Multi-part attachment transforms, skeleton
-skinning, animations, combat effects, complete briefing HUD behavior, and the
-complete campaign-selection/progression UI remain unfinished.
+Granny geometry and DDS materials. Compatible rifle infantry now uses original
+bone weights and idle-animation frames. Multi-part attachment transforms,
+state-driven animation selection, GPU/runtime skinning, combat effects,
+complete briefing HUD behavior, and the complete
+campaign-selection/progression UI remain unfinished.
 
 The video transcode manifest now writes Android-canonical runtime paths. A Bink
 ref such as `Movies\Nival.bik` maps to `DataAndroid/Movies/Nival.mp4`, not to a
