@@ -1307,6 +1307,39 @@ BASIC_REGISTER_CLASS(NGfx::CCubeTexture)
 
 namespace bk2::android {
 
+bool CopyLegacyTextureArgb(
+        NGfx::CTexture* texture,
+        std::vector<uint32_t>* pixels,
+        int* width,
+        int* height) {
+    if (pixels == nullptr || width == nullptr || height == nullptr) {
+        return false;
+    }
+    pixels->clear();
+    *width = 0;
+    *height = 0;
+    if (!IsValid(texture)) {
+        return false;
+    }
+
+    CArray2D<NGfx::SPixel8888> readback;
+    NGfx::GetRenderTargetData(&readback, texture);
+    if (readback.GetSizeX() <= 0 || readback.GetSizeY() <= 0) {
+        return false;
+    }
+
+    *width = readback.GetSizeX();
+    *height = readback.GetSizeY();
+    pixels->resize(static_cast<size_t>(*width) * *height);
+    for (int y = 0; y < *height; ++y) {
+        for (int x = 0; x < *width; ++x) {
+            (*pixels)[static_cast<size_t>(y * *width + x)] =
+                    readback[y][x].dwColor;
+        }
+    }
+    return true;
+}
+
 std::string RunLegacyTextureProbe() {
     std::ostringstream report;
 

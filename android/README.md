@@ -717,15 +717,19 @@ and populated the original portrait, health card, and command grid, verifying
 that projection and input remain aligned after the inset.
 The detailed Android objective summary is hidden during normal battlefield play
 and toggled by the Objectives touch zone instead of remaining as a permanent
-debug overlay. The minimap is generated from the live terrain-type map and
-presentation entities, then clipped into the original diamond frame. It now
-applies the live `GetMiniMapWarForInfo` grid using the desktop client's
-128-alpha hidden-cell overlay and 0-alpha visible-cell endpoint. Friendly and
-currently visible hostile units remain readable above that layer; the active
-selection is yellow. Tap or drag inside the diamond converts back to terrain
-coordinates and updates the shared camera target without changing zoom or yaw.
-The verified center tap logged `normalized=0.498626,0.5` and moved the target
-to `175.516,176,0`. The F10
+debug overlay. The minimap combines the map-specific background and live
+presentation entities, then clips them into the original diamond frame. When
+the map declares `MapInfo.pMiniMap`, Android decodes that original
+mission-specific DDS through the legacy texture backend and uses terrain-type
+colors only as a fallback. It applies the live
+`GetMiniMapWarForInfo` grid using the desktop client's 128-alpha hidden-cell
+overlay and 0-alpha visible-cell endpoint. Friendly and currently visible
+hostile units remain readable above that layer; the active selection is yellow.
+Tap or drag inside the diamond converts back to terrain coordinates and updates
+the shared camera target without changing zoom or yaw. The `US1.2` runtime
+loaded `us1_2_8x8_minimap_texture.dds` at `256x256`; a verified tap logged
+`normalized=0.504808,0.476562` and moved the target to
+`177.692,184.25,0`. The F10
 menu returns to the native single-player mission list without terminating the
 app process. The center panel now follows the original battle-screen layout:
 mission/objective text is kept at the top-left, while selecting a real legacy

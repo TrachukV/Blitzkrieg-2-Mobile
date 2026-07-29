@@ -100,6 +100,11 @@ WorldObjectMesh g_static_world_object_mesh;
 WorldObjectMesh g_world_object_mesh;
 CObj<NGfx::CTexture> g_terrain_texture;
 std::string g_terrain_texture_path;
+CObj<NGfx::CTexture> g_minimap_texture;
+std::string g_minimap_texture_path;
+std::vector<uint32_t> g_minimap_base_pixels;
+int g_minimap_base_width = 0;
+int g_minimap_base_height = 0;
 std::vector<CObj<NGfx::CTexture> > g_terrain_layer_textures;
 std::vector<std::string> g_terrain_layer_texture_paths;
 size_t g_terrain_layer_count = 0;
@@ -3108,6 +3113,41 @@ bool LoadTerrainTexture(const NDb::SMapInfo* map) {
     return true;
 }
 
+bool LoadMinimapTexture(const NDb::SMapInfo* map) {
+    g_minimap_texture = 0;
+    g_minimap_texture_path.clear();
+    g_minimap_base_pixels.clear();
+    g_minimap_base_width = 0;
+    g_minimap_base_height = 0;
+    if (map == nullptr || !map->pMiniMap || !map->pMiniMap->pTexture) {
+        return false;
+    }
+
+    const NDb::STexture* texture_desc = map->pMiniMap->pTexture;
+    CObj<NGfx::CTexture> texture;
+    if (!LoadTextureImmediately(texture_desc, &texture) ||
+        !CopyLegacyTextureArgb(
+                texture,
+                &g_minimap_base_pixels,
+                &g_minimap_base_width,
+                &g_minimap_base_height)) {
+        g_minimap_base_pixels.clear();
+        g_minimap_base_width = 0;
+        g_minimap_base_height = 0;
+        return false;
+    }
+
+    g_minimap_texture = texture;
+    g_minimap_texture_path = texture_desc->szDestName.c_str();
+    PlatformRuntime::instance().log_info(
+            "minimap_texture=ready; path=" +
+            g_minimap_texture_path +
+            "; size=" +
+            std::to_string(g_minimap_base_width) + "x" +
+            std::to_string(g_minimap_base_height));
+    return true;
+}
+
 size_t LoadTerrainLayerTextures(
         const NDb::SMapInfo* map,
         TerrainMesh* mesh) {
@@ -3230,8 +3270,14 @@ bool InitializeSinglePlayerRuntime() {
     BuildTerrainLayers(map, terrain_info, &mesh);
     WorldObjectMesh presentation_world_mesh;
     BuildPresentationStaticWorldMesh(map, terrain_info, &presentation_world_mesh);
+    LoadMinimapTexture(map);
     if (LoadTerrainLayerTextures(map, &mesh) == 0) {
-        LoadTerrainTexture(map);
+        if (IsValid(g_minimap_texture)) {
+            g_terrain_texture = g_minimap_texture;
+            g_terrain_texture_path = g_minimap_texture_path;
+        } else {
+            LoadTerrainTexture(map);
+        }
     }
 
     g_camera.target_x = mesh.center_x;
@@ -3322,6 +3368,7 @@ void ShutdownSinglePlayerRuntime() {
     RenderBackend().clear_terrain_mesh();
     RenderBackend().clear_world_object_mesh();
     g_terrain_texture = 0;
+    g_minimap_texture = 0;
     g_terrain_layer_textures.clear();
     g_terrain_layer_texture_paths.clear();
     g_terrain_mesh = TerrainMesh();
@@ -3333,6 +3380,10 @@ void ShutdownSinglePlayerRuntime() {
     g_mission_id.clear();
     g_map_path.clear();
     g_terrain_texture_path.clear();
+    g_minimap_texture_path.clear();
+    g_minimap_base_pixels.clear();
+    g_minimap_base_width = 0;
+    g_minimap_base_height = 0;
     g_terrain_layer_count = 0;
     g_terrain_layer_texture_count = 0;
     g_terrain_type_map.clear();
@@ -4076,6 +4127,12 @@ std::string SinglePlayerRuntimeReport() {
            << (g_terrain_texture_path.empty()
                        ? "<none>"
                        : g_terrain_texture_path)
+           << "; minimap_texture="
+           << (g_minimap_texture_path.empty()
+                       ? "<none>"
+                       : g_minimap_texture_path)
+           << "; minimap_texture_size="
+           << g_minimap_base_width << "x" << g_minimap_base_height
            << "; terrain_layers=" << g_terrain_layer_count
            << "; terrain_layer_textures=" << g_terrain_layer_texture_count
            << "; terrain_layer_triangles=" << terrain_layer_triangles
@@ -4182,14 +4239,23 @@ std::string SinglePlayerRuntimeReport() {
 
 std::vector<int32_t> MissionMinimapArgb(int width, int height) {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    const bool has_original_minimap =
+            g_minimap_base_width > 0 &&
+            g_minimap_base_height > 0 &&
+            g_minimap_base_pixels.size() ==
+                    static_cast<size_t>(
+                            g_minimap_base_width *
+                            g_minimap_base_height);
+    const bool has_terrain_fallback =
+            g_terrain_type_width > 0 &&
+            g_terrain_type_height > 0 &&
+            !g_terrain_type_map.empty();
     if (!g_ready ||
         width <= 0 ||
         height <= 0 ||
         width > 1024 ||
         height > 1024 ||
-        g_terrain_type_width <= 0 ||
-        g_terrain_type_height <= 0 ||
-        g_terrain_type_map.empty()) {
+        (!has_original_minimap && !has_terrain_fallback)) {
         return {};
     }
     std::vector<int32_t> pixels(
@@ -4204,34 +4270,64 @@ std::vector<int32_t> MissionMinimapArgb(int width, int height) {
                     static_cast<size_t>(
                             war_fog.width * war_fog.height);
     for (int y = 0; y < height; ++y) {
-        const int source_y = std::min(
-                g_terrain_type_height - 1,
-                (height - 1 - y) * g_terrain_type_height / height);
+        const int source_y = has_terrain_fallback
+                ? std::min(
+                        g_terrain_type_height - 1,
+                        (height - 1 - y) *
+                                g_terrain_type_height /
+                                height)
+                : 0;
+        const int minimap_y = has_original_minimap
+                ? std::min(
+                        g_minimap_base_height - 1,
+                        y * g_minimap_base_height / height)
+                : 0;
         for (int x = 0; x < width; ++x) {
-            const int source_x = std::min(
-                    g_terrain_type_width - 1,
-                    x * g_terrain_type_width / width);
-            const int type_index = g_terrain_type_map[
-                    static_cast<size_t>(
-                            source_y * g_terrain_type_width + source_x)];
-            if (type_index >= 0 &&
-                type_index <
-                        static_cast<int>(g_terrain_type_colors.size())) {
-                uint32_t color = g_terrain_type_colors[type_index];
-                color = 0xff000000u | (color & 0x00ffffffu);
+            const int source_x = has_terrain_fallback
+                    ? std::min(
+                            g_terrain_type_width - 1,
+                            x * g_terrain_type_width / width)
+                    : 0;
+            uint32_t color = 0xff1d3027u;
+            bool has_color = false;
+            if (has_original_minimap) {
+                const int minimap_x = std::min(
+                        g_minimap_base_width - 1,
+                        x * g_minimap_base_width / width);
+                color = 0xff000000u |
+                        (g_minimap_base_pixels[
+                                 static_cast<size_t>(
+                                         minimap_y *
+                                                 g_minimap_base_width +
+                                         minimap_x)] &
+                         0x00ffffffu);
+                has_color = true;
+            } else {
+                const int type_index = g_terrain_type_map[
+                        static_cast<size_t>(
+                                source_y *
+                                        g_terrain_type_width +
+                                source_x)];
+                if (type_index >= 0 &&
+                    type_index <
+                            static_cast<int>(
+                                    g_terrain_type_colors.size())) {
+                    color = 0xff000000u |
+                            (g_terrain_type_colors[type_index] &
+                             0x00ffffffu);
+                    has_color = true;
+                }
+            }
+            if (has_color) {
                 if (has_war_fog) {
                     const int fog_x = std::clamp(
-                            source_x * (war_fog.width - 1) /
-                                    std::max(
-                                            g_terrain_type_width - 1,
-                                            1),
+                            x * war_fog.width / width,
                             0,
                             war_fog.width - 1);
                     const int fog_y = std::clamp(
-                            source_y * (war_fog.height - 1) /
-                                    std::max(
-                                            g_terrain_type_height - 1,
-                                            1),
+                            (height - 1 - y) *
+                                    war_fog.height /
+                                    height,
                             0,
                             war_fog.height - 1);
                     const float visibility = std::clamp(

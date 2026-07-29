@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace NGfx {
 class CTexture;
@@ -19,5 +20,10 @@ void ConfigureLegacyTerrainTexture(NGfx::CTexture* texture);
 void ConfigureLegacyLuminanceAlphaTexture(NGfx::CTexture* texture);
 uint16_t LegacyTextureHandleIndex(NGfx::CTexture* texture);
 NGfx::CTexture* LegacyTextureSmokeTexture();
+bool CopyLegacyTextureArgb(
+        NGfx::CTexture* texture,
+        std::vector<uint32_t>* pixels,
+        int* width,
+        int* height);
 
 }  // namespace bk2::android
