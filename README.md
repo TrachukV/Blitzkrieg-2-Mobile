@@ -49,7 +49,10 @@ Spyglass, Clear Mines, Place Mines, and the original two-point Build Trenches
 command reach the original simulation, while commands without a ported handler
 use their original disabled artwork. Original combat textures now provide
 tracer ribbons, muzzle flashes, and animated fire/smoke on destroyed mechanized
-units. Double-tapping a selected unit expands the selection to nearby units of
+units. Static objects and live units now cast translucent projected silhouettes
+derived from their actual converted Granny vertices; animated infantry shadows
+follow the current frame instead of using fixed circles. Double-tapping a
+selected unit expands the selection to nearby units of
 the same legacy type (up to twelve), gives each unit an original selection
 marker and HUD card, and sends Move, Attack, Stop, and supported abilities
 through one legacy AI command group. Holding for 350 ms and then dragging draws

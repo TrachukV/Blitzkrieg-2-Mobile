@@ -45,7 +45,10 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   selects up to twelve friendly units of any type; quick drags still pan the
   camera. Tapping a member card changes the active unit and therefore the
   type-specific command grid, while common desktop actions still address the
-  full mixed selection. General runtime skinning, remaining action-specific
+  full mixed selection. Original converted geometry now also supplies projected
+  silhouette shadows for static objects and live units; animated infantry
+  shadows use the same current pre-skinned frame as the visible mesh. General
+  runtime skinning, remaining action-specific
   clips, transient scenario-notification queues, command subpanels, briefings,
   and the rest of the legacy UI are still pending.
 - `BK2_ENABLE_LEGACY_TEXTURE_RUNTIME=ON` links the Android
@@ -771,6 +774,15 @@ muzzle DDS files encode transparency through RGB luminance with a zero alpha
 channel; the Android texture bridge derives a compatible alpha channel during
 GPU upload. Particle layers depth-test against the scene but do not write the
 depth buffer, so overlapping fire and smoke remain visible.
+
+The first model-shadow layer projects every converted Granny vertex along one
+sun direction, computes a convex ground hull, and submits that hull once through
+an alpha-blended white-texture layer. Static hulls remain in the cached world
+mesh; dynamic hulls are rebuilt from the currently selected animation frame.
+This restores the strong readable ground contact visible in the original game
+without using generic circular blobs. It is not yet the desktop engine's
+terrain-conforming shadow-map renderer, so steep terrain and self-shadowing
+remain part of the larger renderer port.
 
 This is a targeted native presentation path driven by real legacy combat/death
 events, not yet the general `.xdb` particle-system interpreter. Multi-mesh

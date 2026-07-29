@@ -51,6 +51,8 @@ constexpr const char* kMechanizedTraceTexture =
         "Scene/TexAndMats/All/Units/Weapons/GunShotTraceOrange_texture.dds";
 constexpr const char* kMuzzleFlashTexture =
         "Scene/TexAndMats/All/Effects/Shots/CannonShot/Shot8_Texture.dds";
+constexpr const char* kProjectedShadowLayer =
+        "__android_projected_shadow__";
 constexpr const char* kDestructionFireTextures[] = {
         "Scene/TexAndMats/All/Effects/Destructions/Fire/Fire2_Texture.dds",
         "Scene/TexAndMats/All/Effects/Destructions/Fire/Fire3_Texture.dds",
@@ -1279,6 +1281,170 @@ void AppendPartIndices(
     }
 }
 
+const std::vector<ConvertedGeometryVertex>*
+SelectConvertedGeometryVertices(
+        const ConvertedGeometryPart& part,
+        ConvertedAnimationVariant animation_variant,
+        float animation_time_seconds) {
+    if (part.animation_frames.size() <= 1 ||
+        part.animation_duration_seconds <= 0.0f) {
+        return &part.vertices;
+    }
+    const float animation_time =
+            animation_variant == ConvertedAnimationVariant::Death
+            ? std::min(
+                      std::max(animation_time_seconds, 0.0f),
+                      part.animation_duration_seconds)
+            : std::fmod(
+                      std::max(animation_time_seconds, 0.0f),
+                      part.animation_duration_seconds);
+    const size_t animation_frame = std::min(
+            static_cast<size_t>(
+                    animation_time /
+                    part.animation_duration_seconds *
+                    part.animation_frames.size()),
+            part.animation_frames.size() - 1);
+    return &part.animation_frames[animation_frame];
+}
+
+struct ProjectedShadowPoint {
+    float x;
+    float y;
+};
+
+float ProjectedShadowCross(
+        const ProjectedShadowPoint& origin,
+        const ProjectedShadowPoint& left,
+        const ProjectedShadowPoint& right) {
+    return (left.x - origin.x) * (right.y - origin.y) -
+            (left.y - origin.y) * (right.x - origin.x);
+}
+
+void AppendProjectedGeometryShadow(
+        WorldObjectMesh* mesh,
+        const ConvertedGeometry& geometry,
+        const GeometryBinding& binding,
+        float x,
+        float y,
+        float z,
+        float cosine,
+        float sine,
+        ConvertedAnimationVariant animation_variant,
+        float animation_time_seconds) {
+    if (mesh == nullptr) {
+        return;
+    }
+    constexpr float kShadowProjectionX = 0.42f;
+    constexpr float kShadowProjectionY = -0.28f;
+    std::vector<ProjectedShadowPoint> points;
+    for (const ConvertedGeometryPart& part : geometry.parts) {
+        const std::vector<ConvertedGeometryVertex>* vertices =
+                SelectConvertedGeometryVertices(
+                        part,
+                        animation_variant,
+                        animation_time_seconds);
+        points.reserve(points.size() + vertices->size());
+        for (const ConvertedGeometryVertex& vertex : *vertices) {
+            const float local_x =
+                    binding.geometry_scale *
+                    (cosine * vertex.x - sine * vertex.y);
+            const float local_y =
+                    binding.geometry_scale *
+                    (sine * vertex.x + cosine * vertex.y);
+            const float local_height = std::max(
+                    binding.geometry_scale * vertex.z,
+                    0.0f);
+            points.push_back({
+                    x + local_x + local_height * kShadowProjectionX,
+                    y + local_y + local_height * kShadowProjectionY});
+        }
+    }
+    if (points.size() < 3) {
+        return;
+    }
+    std::sort(
+            points.begin(),
+            points.end(),
+            [](const ProjectedShadowPoint& left,
+               const ProjectedShadowPoint& right) {
+                return left.x != right.x
+                        ? left.x < right.x
+                        : left.y < right.y;
+            });
+    points.erase(
+            std::unique(
+                    points.begin(),
+                    points.end(),
+                    [](const ProjectedShadowPoint& left,
+                       const ProjectedShadowPoint& right) {
+                        return std::abs(left.x - right.x) < 0.0001f &&
+                                std::abs(left.y - right.y) < 0.0001f;
+                    }),
+            points.end());
+    if (points.size() < 3) {
+        return;
+    }
+    std::vector<ProjectedShadowPoint> hull(points.size() * 2);
+    size_t hull_size = 0;
+    for (const ProjectedShadowPoint& point : points) {
+        while (hull_size >= 2 &&
+               ProjectedShadowCross(
+                       hull[hull_size - 2],
+                       hull[hull_size - 1],
+                       point) <= 0.0f) {
+            --hull_size;
+        }
+        hull[hull_size++] = point;
+    }
+    const size_t lower_size = hull_size;
+    for (size_t index = points.size() - 1; index > 0; --index) {
+        const ProjectedShadowPoint& point = points[index - 1];
+        while (hull_size > lower_size &&
+               ProjectedShadowCross(
+                       hull[hull_size - 2],
+                       hull[hull_size - 1],
+                       point) <= 0.0f) {
+            --hull_size;
+        }
+        hull[hull_size++] = point;
+    }
+    if (hull_size <= 3) {
+        return;
+    }
+    --hull_size;
+    const uint32_t vertex_base =
+            static_cast<uint32_t>(mesh->vertices.size());
+    constexpr uint32_t kShadowArgb = 0x5811170du;
+    const uint32_t shadow_abgr = ArgbToAbgr(kShadowArgb);
+    for (size_t index = 0; index < hull_size; ++index) {
+        mesh->vertices.push_back(TerrainVertex{
+                hull[index].x,
+                hull[index].y,
+                z + 0.08f,
+                0.0f,
+                0.0f,
+                shadow_abgr});
+    }
+    WorldObjectMesh::Layer* shadow_layer =
+            FindOrAddWorldObjectLayer(
+                    mesh,
+                    kProjectedShadowLayer);
+    if (shadow_layer == nullptr) {
+        return;
+    }
+    shadow_layer->alpha_blended = true;
+    shadow_layer->triangle_indices.reserve(
+            shadow_layer->triangle_indices.size() +
+            (hull_size - 2) * 3);
+    for (uint32_t index = 1;
+         index + 1 < static_cast<uint32_t>(hull_size);
+         ++index) {
+        shadow_layer->triangle_indices.push_back(vertex_base);
+        shadow_layer->triangle_indices.push_back(vertex_base + index);
+        shadow_layer->triangle_indices.push_back(vertex_base + index + 1);
+    }
+}
+
 bool AppendConvertedGeometry(
         WorldObjectMesh* mesh,
         uint64_t stats_path_hash,
@@ -1345,6 +1511,17 @@ bool AppendConvertedGeometry(
     }
     const float cosine = std::cos(heading);
     const float sine = std::sin(heading);
+    AppendProjectedGeometryShadow(
+            mesh,
+            *geometry,
+            binding,
+            x,
+            y,
+            z,
+            cosine,
+            sine,
+            animation_variant,
+            animation_time_seconds);
     size_t total_vertices = 0;
     for (const ConvertedGeometryPart& part : geometry->parts) {
         total_vertices += part.vertices.size();
@@ -1362,25 +1539,10 @@ bool AppendConvertedGeometry(
          ++part_index) {
         const ConvertedGeometryPart& part = geometry->parts[part_index];
         const std::vector<ConvertedGeometryVertex>* vertices =
-                &part.vertices;
-        if (part.animation_frames.size() > 1 &&
-            part.animation_duration_seconds > 0.0f) {
-            const float animation_time =
-                    animation_variant == ConvertedAnimationVariant::Death
-                    ? std::min(
-                              std::max(animation_time_seconds, 0.0f),
-                              part.animation_duration_seconds)
-                    : std::fmod(
-                              std::max(animation_time_seconds, 0.0f),
-                              part.animation_duration_seconds);
-            const size_t animation_frame = std::min(
-                    static_cast<size_t>(
-                            animation_time /
-                            part.animation_duration_seconds *
-                            part.animation_frames.size()),
-                    part.animation_frames.size() - 1);
-            vertices = &part.animation_frames[animation_frame];
-        }
+                SelectConvertedGeometryVertices(
+                        part,
+                        animation_variant,
+                        animation_time_seconds);
         const uint32_t vertex_base =
                 static_cast<uint32_t>(mesh->vertices.size());
         for (const ConvertedGeometryVertex& vertex : *vertices) {
@@ -2726,7 +2888,8 @@ bool LoadTextureImmediately(
 }
 
 uint16_t ModelTextureHandle(const std::string& texture_path) {
-    if (texture_path.empty()) {
+    if (texture_path.empty() ||
+        texture_path == kProjectedShadowLayer) {
         return UINT16_MAX;
     }
     auto cached = g_model_textures.find(texture_path);

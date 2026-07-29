@@ -29,7 +29,11 @@ the orange `PAUSED` label over the playable viewport while leaving the original
 bottom panel visible, matching the desktop mission presentation. A dedicated
 JNI headline call resolves the active primary `SMissionObjective` header through
 the shipped UTF-16 localization and displays it at the top-left; the internal
-campaign/map ID is now only a startup fallback.
+campaign/map ID is now only a startup fallback. Converted static and dynamic
+models also produce one translucent ground silhouette from the convex hull of
+their sun-projected Granny vertices. The dynamic path samples the same current
+pre-skinned animation frame used by the visible model, so infantry shadows move
+with the unit rather than remaining fixed proxy circles.
 
 ## Implemented In This Slice
 
@@ -367,8 +371,9 @@ layer is legacy UI integration: connect real DB-referenced UI textures,
 font/text, and menu/briefing layouts to this adapter, then replace the temporary
 immediate-mode stubs with proper batching/render-target behavior.
 After that, the larger render work remains terrain,
-static/skinned meshes, particles, water, shadows, shader translation, and post
-effects. In parallel, the bootstrap loop still needs to be split into the real
+static/skinned meshes, particles, water, full terrain-conforming shadow maps,
+shader translation, and post effects. In parallel, the bootstrap loop still
+needs to be split into the real
 legacy main/simulation frame, and the Android mission-state bridge still needs
 replacement by the portable parts of `CScenarioTracker`.
 
