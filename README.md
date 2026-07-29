@@ -42,9 +42,12 @@ release. It currently runs original single-player campaign data through the
 legacy C++ AI/game simulation, renders original terrain, models, materials, and
 supported infantry animations through bgfx, renders the live legacy fog-of-war
 grid and hides enemies the player's party cannot see, and uses the shipped
-mission HUD, minimap, command buttons, unit portraits, and hit bars. Original
-combat textures now provide tracer ribbons, muzzle flashes, and animated
-fire/smoke on destroyed mechanized units. See
+mission HUD, minimap, unit portraits, and hit bars. Its original 4x3 command
+grid is rebuilt from the selected legacy unit's available actions instead of a
+fixed mobile button row; Move, Attack, Stop, Entrench, and Stand Ground reach
+the original simulation, while commands without a ported handler use their
+original disabled artwork. Original combat textures now provide tracer ribbons,
+muzzle flashes, and animated fire/smoke on destroyed mechanized units. See
 [`android/README.md`](android/README.md) for build, content-staging, verification,
 and remaining-port details.
 

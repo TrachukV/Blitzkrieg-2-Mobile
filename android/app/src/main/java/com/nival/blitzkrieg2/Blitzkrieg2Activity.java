@@ -13,6 +13,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.GridLayout;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -22,6 +23,12 @@ import com.google.androidgamesdk.GameActivity;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public final class Blitzkrieg2Activity extends GameActivity {
     public static final String EXTRA_MISSION_ID = "com.nival.blitzkrieg2.MISSION_ID";
@@ -34,8 +41,11 @@ public final class Blitzkrieg2Activity extends GameActivity {
     private TextView missionStatus;
     private TextView pauseIndicator;
     private OriginalMissionHudView originalHud;
+    private GridLayout commandGrid;
     private ImageButton moveCommandButton;
     private ImageButton attackCommandButton;
+    private File hudDataRoot;
+    private String displayedCommandSnapshot = "";
     private boolean outcomePolling;
     private int hudPollCount;
     private final Runnable outcomePoll = new Runnable() {
@@ -57,9 +67,10 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 }
                 missionStatus.setText(status);
             }
+            String selectedUnitSnapshot =
+                    NativeBridge.getSelectedUnitHudSnapshot();
             if (originalHud != null) {
-                originalHud.setSelectedUnitSnapshot(
-                        NativeBridge.getSelectedUnitHudSnapshot());
+                originalHud.setSelectedUnitSnapshot(selectedUnitSnapshot);
                 if ((hudPollCount++ & 3) == 0) {
                     int[] pixels =
                             NativeBridge.getMissionMinimapArgb(192, 192);
@@ -68,6 +79,7 @@ public final class Blitzkrieg2Activity extends GameActivity {
                     }
                 }
             }
+            updateActionGrid(selectedUnitSnapshot);
             updateCommandButtonState(
                     NativeBridge.getTouchCommandMode());
             String outcome = NativeBridge.getMissionOutcome();
@@ -120,6 +132,7 @@ public final class Blitzkrieg2Activity extends GameActivity {
         root.setFocusable(false);
 
         File dataRoot = new File(getFilesDir(), "DataAndroid");
+        hudDataRoot = dataRoot;
         int hudHeight = dp(112);
         FrameLayout hud = new FrameLayout(this);
         originalHud = new OriginalMissionHudView(this, dataRoot);
@@ -166,64 +179,48 @@ public final class Blitzkrieg2Activity extends GameActivity {
         missionInfoParams.setMargins(dp(8), dp(4), 0, 0);
         root.addView(missionInfo, missionInfoParams);
 
-        LinearLayout commandButtons = new LinearLayout(this);
-        commandButtons.setOrientation(LinearLayout.HORIZONTAL);
-        commandButtons.setGravity(Gravity.CENTER);
-        moveCommandButton = originalImageButton(
-                dataRoot,
-                "Complete/UI/Buttons/Move/MoveNormal.tga",
-                view -> toggleTouchCommandMode(1));
-        moveCommandButton.setContentDescription("Move");
-        commandButtons.addView(
-                moveCommandButton,
-                new LinearLayout.LayoutParams(dp(38), dp(38)));
-        attackCommandButton = originalImageButton(
-                dataRoot,
-                "Complete/UI/Buttons/Attack/AttackNormal.tga",
-                view -> toggleTouchCommandMode(2));
-        attackCommandButton.setContentDescription("Attack");
-        commandButtons.addView(
-                attackCommandButton,
-                new LinearLayout.LayoutParams(dp(38), dp(38)));
-        ImageButton stopCommandButton = originalImageButton(
-                dataRoot,
-                "Complete/UI/Buttons/Stop/StopNormal.tga",
-                view -> {
-                    if (!NativeBridge.stopSelectedUnit()) {
-                        showCommandHint("Select a unit first");
-                    }
-                    updateCommandButtonState(0);
-                });
-        stopCommandButton.setContentDescription("Stop");
-        commandButtons.addView(
-                stopCommandButton,
-                new LinearLayout.LayoutParams(dp(38), dp(38)));
-        updateCommandButtonState(0);
+        commandGrid = new GridLayout(this);
+        commandGrid.setColumnCount(4);
+        commandGrid.setRowCount(3);
+        rebuildActionGrid(
+                new HashSet<>(),
+                new HashSet<>(),
+                new HashMap<>());
 
+        LinearLayout utilityTouchTargets = new LinearLayout(this);
+        utilityTouchTargets.setOrientation(LinearLayout.HORIZONTAL);
         ImageButton objectives = touchOnlyButton(
                 "Objectives",
                 view -> missionStatus.setVisibility(
                         missionStatus.getVisibility() == View.VISIBLE
                                 ? View.INVISIBLE
                                 : View.VISIBLE));
-        commandButtons.addView(
+        utilityTouchTargets.addView(
                 objectives,
-                new LinearLayout.LayoutParams(dp(42), dp(38)));
+                new LinearLayout.LayoutParams(dp(32), dp(38)));
 
         ImageButton menu = touchOnlyButton(
                 "F10 menu",
                 view -> setMissionMenuVisible(
                         missionMenu.getVisibility() != View.VISIBLE));
-        commandButtons.addView(
+        utilityTouchTargets.addView(
                 menu,
-                new LinearLayout.LayoutParams(dp(42), dp(38)));
+                new LinearLayout.LayoutParams(dp(32), dp(38)));
 
         FrameLayout.LayoutParams commandParams = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER_VERTICAL | Gravity.END);
         commandParams.setMargins(0, 0, dp(8), 0);
-        hud.addView(commandButtons, commandParams);
+        hud.addView(commandGrid, commandParams);
+
+        FrameLayout.LayoutParams utilityParams =
+                new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        Gravity.CENTER_VERTICAL | Gravity.END);
+        utilityParams.setMargins(0, 0, dp(156), 0);
+        hud.addView(utilityTouchTargets, utilityParams);
 
         FrameLayout.LayoutParams hudParams = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -322,6 +319,205 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 Gravity.CENTER);
         root.addView(outcomePanel, outcomeParams);
         return root;
+    }
+
+    private void updateActionGrid(String snapshot) {
+        if (commandGrid == null) {
+            return;
+        }
+        String actionsValue = snapshotField(snapshot, "actions");
+        String enabledValue = snapshotField(snapshot, "enabled");
+        String tiersValue = snapshotField(snapshot, "tiers");
+        String commandSnapshot =
+                actionsValue + ";" + enabledValue + ";" + tiersValue;
+        if (commandSnapshot.equals(displayedCommandSnapshot)) {
+            return;
+        }
+        displayedCommandSnapshot = commandSnapshot;
+        rebuildActionGrid(
+                parseActionSet(actionsValue),
+                parseActionSet(enabledValue),
+                parseActionTiers(tiersValue));
+    }
+
+    private void rebuildActionGrid(
+            Set<Integer> actions,
+            Set<Integer> enabledActions,
+            Map<Integer, Integer> abilityTiers) {
+        if (commandGrid == null || hudDataRoot == null) {
+            return;
+        }
+        OriginalActionButtonCatalog.Spec[] slots =
+                new OriginalActionButtonCatalog.Spec[12];
+        List<OriginalActionButtonCatalog.Spec> abilities =
+                new ArrayList<>();
+        for (int action : actions) {
+            OriginalActionButtonCatalog.Spec spec =
+                    OriginalActionButtonCatalog.forAction(action);
+            if (spec == null) {
+                continue;
+            }
+            if (spec.ability) {
+                abilities.add(spec);
+            } else if (
+                    spec.slot >= 1
+                            && spec.slot <= slots.length
+                            && slots[spec.slot - 1] == null) {
+                slots[spec.slot - 1] = spec;
+            }
+        }
+        abilities.sort((left, right) -> {
+            int tierOrder = Integer.compare(
+                    abilityTiers.getOrDefault(
+                            left.action,
+                            Integer.MAX_VALUE),
+                    abilityTiers.getOrDefault(
+                            right.action,
+                            Integer.MAX_VALUE));
+            return tierOrder != 0
+                    ? tierOrder
+                    : Integer.compare(left.action, right.action);
+        });
+        for (OriginalActionButtonCatalog.Spec ability : abilities) {
+            for (int slot = 8; slot < slots.length; ++slot) {
+                if (slots[slot] == null) {
+                    slots[slot] = ability;
+                    break;
+                }
+            }
+        }
+
+        commandGrid.removeAllViews();
+        moveCommandButton = null;
+        attackCommandButton = null;
+        final int cellSize = dp(36);
+        for (int slot = 0; slot < slots.length; ++slot) {
+            FrameLayout cell = new FrameLayout(this);
+            GridLayout.LayoutParams cellParams =
+                    new GridLayout.LayoutParams(
+                            GridLayout.spec(slot / 4),
+                            GridLayout.spec(slot % 4));
+            cellParams.width = cellSize;
+            cellParams.height = cellSize;
+            commandGrid.addView(cell, cellParams);
+
+            OriginalActionButtonCatalog.Spec spec = slots[slot];
+            if (spec == null) {
+                continue;
+            }
+            boolean enabled = enabledActions.contains(spec.action);
+            ImageButton button = originalActionButton(spec, enabled);
+            cell.addView(
+                    button,
+                    new FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT));
+            if (spec.action == 1) {
+                moveCommandButton = button;
+            } else if (spec.action == 2) {
+                attackCommandButton = button;
+            }
+        }
+        updateCommandButtonState(NativeBridge.getTouchCommandMode());
+    }
+
+    private ImageButton originalActionButton(
+            OriginalActionButtonCatalog.Spec spec,
+            boolean enabled) {
+        ImageButton button = new ImageButton(this);
+        button.setPadding(0, 0, 0, 0);
+        button.setBackgroundColor(Color.TRANSPARENT);
+        button.setScaleType(ImageButton.ScaleType.FIT_CENTER);
+        String iconPath = enabled
+                ? spec.iconPath
+                : spec.disabledIconPath();
+        android.graphics.Bitmap bitmap =
+                TgaDecoder.decode(new File(hudDataRoot, iconPath));
+        if (bitmap == null && !enabled) {
+            bitmap = TgaDecoder.decode(
+                    new File(hudDataRoot, spec.iconPath));
+        }
+        if (bitmap != null) {
+            button.setImageDrawable(
+                    new BitmapDrawable(getResources(), bitmap));
+        }
+        button.setContentDescription(
+                enabled
+                        ? spec.label
+                        : spec.label + " (not yet available)");
+        button.setEnabled(enabled);
+        button.setFocusable(enabled);
+        button.setClickable(enabled);
+        if (enabled) {
+            button.setOnClickListener(
+                    view -> performSelectedAction(spec.action));
+        }
+        return button;
+    }
+
+    private void performSelectedAction(int userAction) {
+        if (userAction == 1) {
+            toggleTouchCommandMode(1);
+            return;
+        }
+        if (userAction == 2) {
+            toggleTouchCommandMode(2);
+            return;
+        }
+        boolean performed = userAction == 39
+                ? NativeBridge.stopSelectedUnit()
+                : NativeBridge.performSelectedUnitAction(userAction);
+        if (!performed) {
+            showCommandHint("Action is not available");
+        }
+        updateCommandButtonState(0);
+    }
+
+    private Set<Integer> parseActionSet(String value) {
+        Set<Integer> actions = new HashSet<>();
+        if (value == null || value.isEmpty()) {
+            return actions;
+        }
+        for (String item : value.split(",")) {
+            try {
+                actions.add(Integer.parseInt(item));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return actions;
+    }
+
+    private Map<Integer, Integer> parseActionTiers(String value) {
+        Map<Integer, Integer> tiers = new HashMap<>();
+        if (value == null || value.isEmpty()) {
+            return tiers;
+        }
+        for (String item : value.split(",")) {
+            int separator = item.indexOf(':');
+            if (separator <= 0 || separator + 1 >= item.length()) {
+                continue;
+            }
+            try {
+                tiers.put(
+                        Integer.parseInt(item.substring(0, separator)),
+                        Integer.parseInt(item.substring(separator + 1)));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return tiers;
+    }
+
+    private String snapshotField(String snapshot, String fieldName) {
+        if (snapshot == null || snapshot.isEmpty()) {
+            return "";
+        }
+        String prefix = fieldName + "=";
+        for (String field : snapshot.split(";")) {
+            if (field.startsWith(prefix)) {
+                return field.substring(prefix.length());
+            }
+        }
+        return "";
     }
 
     private void toggleTouchCommandMode(int requestedMode) {

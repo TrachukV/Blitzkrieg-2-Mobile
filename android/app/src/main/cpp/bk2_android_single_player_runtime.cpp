@@ -3235,6 +3235,17 @@ bool StopSelectedSinglePlayerUnit() {
     return RefreshDynamicWorldMeshLocked(true);
 }
 
+bool PerformSelectedSinglePlayerUnitAction(int user_action) {
+    std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    if (!g_ready ||
+        g_user_paused ||
+        !PerformSelectedLegacyUnitAction(user_action)) {
+        return false;
+    }
+    g_touch_command_mode = TouchCommandMode::Contextual;
+    return RefreshDynamicWorldMeshLocked(true);
+}
+
 void SetSinglePlayerPaused(bool paused) {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
     if (!g_ready || g_user_paused == paused) {
@@ -3545,6 +3556,17 @@ Java_com_nival_blitzkrieg2_NativeBridge_stopSelectedUnit(
         JNIEnv*,
         jclass) {
     return bk2::android::StopSelectedSinglePlayerUnit()
+            ? JNI_TRUE
+            : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_performSelectedUnitAction(
+        JNIEnv*,
+        jclass,
+        jint user_action) {
+    return bk2::android::PerformSelectedSinglePlayerUnitAction(
+                   static_cast<int>(user_action))
             ? JNI_TRUE
             : JNI_FALSE;
 }

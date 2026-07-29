@@ -21,6 +21,7 @@ bool HandleSinglePlayerTap(
 bool SetSinglePlayerTouchCommandMode(int mode);
 int SinglePlayerTouchCommandMode();
 bool StopSelectedSinglePlayerUnit();
+bool PerformSelectedSinglePlayerUnitAction(int user_action);
 void SetSinglePlayerPaused(bool paused);
 bool IsSinglePlayerPaused();
 

@@ -32,6 +32,7 @@
 #include "SceneB2/TerrainInfo.h"
 #include "Stats_B2_M1/DBMapInfo.h"
 #include "Stats_B2_M1/DBVisObj.h"
+#include "Stats_B2_M1/ActionsRemap.h"
 #include "Stats_B2_M1/AIUpdates.h"
 #include "Stats_B2_M1/FeedBackUpdates.h"
 #include "Stats_B2_M1/TerraAIObserver.h"
@@ -143,6 +144,64 @@ uint32_t g_android_move_log_millis = 0;
 std::set<std::string> g_missing_unit_payload_refs;
 std::set<std::string> g_missing_squad_payload_refs;
 std::string g_stage = "not_started";
+
+CUserActions LegacyUnitActions(CAIUnit* unit);
+
+bool IsLegacyUnitAction(CAIUnit* unit, int user_action) {
+    return unit != nullptr &&
+            user_action >= 0 &&
+            user_action <= 127 &&
+            LegacyUnitActions(unit).HasAction(user_action);
+}
+
+CUserActions LegacyUnitActions(CAIUnit* unit) {
+    CUserActions actions;
+    if (unit == nullptr) {
+        return actions;
+    }
+    const NDb::SUnitBaseRPGStats* stats = unit->GetStats();
+    if (stats == nullptr || stats->GetActions() == nullptr) {
+        return actions;
+    }
+    actions = stats->GetActions()->availUserActions;
+    actions |= stats->GetActions()->availUserExposures;
+    for (int command = 0; command < 128; ++command) {
+        if (!stats->GetActions()->availCommands.GetData(command) &&
+            !stats->GetActions()->availExposures.GetData(command)) {
+            continue;
+        }
+        const NDb::EUserAction action =
+                GetActionByCommand(static_cast<EActionCommand>(command));
+        if (action != NDb::USER_ACTION_UNKNOWN) {
+            actions.SetAction(static_cast<int>(action));
+        }
+    }
+    // SUnitActions::ToAIUnits adds these common controls during the desktop
+    // PostLoad path. Some mobile-loaded mission references skip that pass, so
+    // derive the same visible controls without mutating shared DB resources.
+    actions.SetAction(NDb::USER_ACTION_STOP);
+    actions.SetAction(NDb::USER_ACTION_ATTACK);
+    if (unit->CanMove()) {
+        actions.SetAction(NDb::USER_ACTION_MOVE);
+    }
+    const int ability_count = std::min(
+            static_cast<int>(
+                    stats->GetActions()->specialAbilities.size()),
+            unit->GetAbilityLevel());
+    for (int index = 0; index < ability_count; ++index) {
+        const NDb::SUnitSpecialAblityDesc* ability =
+                stats->GetActions()->specialAbilities[index];
+        if (ability == nullptr) {
+            continue;
+        }
+        const NDb::EUserAction action =
+                GetActionByAbility(ability->eName);
+        if (action != NDb::USER_ACTION_UNKNOWN) {
+            actions.SetAction(static_cast<int>(action));
+        }
+    }
+    return actions;
+}
 
 bool UpdateWarFogSnapshot() {
     if (g_ai_logic == nullptr) {
@@ -1474,6 +1533,48 @@ bool StopSelectedLegacyUnit() {
     return true;
 }
 
+bool PerformSelectedLegacyUnitAction(int user_action) {
+    if (!g_ready || g_selected_unit_id < 0) {
+        return false;
+    }
+    if (user_action == NDb::USER_ACTION_STOP) {
+        return StopSelectedLegacyUnit();
+    }
+    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+    if (unit == nullptr ||
+        !unit->IsAlive() ||
+        !unit->IsSelectable() ||
+        unit->GetPlayer() != 0 ||
+        !IsLegacyUnitAction(unit, user_action)) {
+        return false;
+    }
+
+    EActionCommand command_type;
+    switch (user_action) {
+        case NDb::USER_ACTION_ENTRENCH_SELF:
+            command_type = ACTION_COMMAND_ENTRENCH_SELF;
+            break;
+        case NDb::USER_ACTION_STAND_GROUND:
+            command_type = ACTION_COMMAND_STAND_GROUND;
+            break;
+        default:
+            return false;
+    }
+
+    SAIUnitCmd command(command_type);
+    command.bFromAI = false;
+    theGroupLogic.UnitCommand(command, unit, false);
+    g_android_move_active = false;
+    g_android_move_log_millis = 0;
+    g_attack_target_unit_id = -1;
+    PublishPresentationEntities();
+    PlatformRuntime::instance().log_info(
+            std::string("player_unit_action=") +
+            std::to_string(user_action) +
+            "; unit=" + std::to_string(g_selected_unit_id));
+    return true;
+}
+
 int SelectedLegacyUnitId() {
     return g_selected_unit_id;
 }
@@ -1524,6 +1625,60 @@ std::string SelectedLegacyUnitHudSnapshot() {
                     std::max(unit->GetHitPoints(), 0.0f)))
              << ";max_hp="
              << static_cast<int>(std::round(stats->fMaxHP));
+    const CUserActions actions = LegacyUnitActions(unit);
+    snapshot << ";actions=";
+    bool first_action = true;
+    for (int action = 1; action <= 127; ++action) {
+        if (!actions.HasAction(action)) {
+            continue;
+        }
+        if (!first_action) {
+            snapshot << ",";
+        }
+        snapshot << action;
+        first_action = false;
+    }
+    snapshot << ";enabled=";
+    bool first_enabled = true;
+    for (const int action : {
+                 static_cast<int>(NDb::USER_ACTION_MOVE),
+                 static_cast<int>(NDb::USER_ACTION_ATTACK),
+                 static_cast<int>(NDb::USER_ACTION_ENTRENCH_SELF),
+                 static_cast<int>(NDb::USER_ACTION_STAND_GROUND),
+                 static_cast<int>(NDb::USER_ACTION_STOP)}) {
+        if (!actions.HasAction(action) ||
+            (action == NDb::USER_ACTION_MOVE && !unit->CanMove())) {
+            continue;
+        }
+        if (!first_enabled) {
+            snapshot << ",";
+        }
+        snapshot << action;
+        first_enabled = false;
+    }
+    snapshot << ";tiers=";
+    const int ability_count = std::min(
+            static_cast<int>(
+                    stats->GetActions()->specialAbilities.size()),
+            unit->GetAbilityLevel());
+    bool first_tier = true;
+    for (int tier = 0; tier < ability_count; ++tier) {
+        const NDb::SUnitSpecialAblityDesc* ability =
+                stats->GetActions()->specialAbilities[tier];
+        if (ability == nullptr) {
+            continue;
+        }
+        const NDb::EUserAction action =
+                GetActionByAbility(ability->eName);
+        if (action == NDb::USER_ACTION_UNKNOWN) {
+            continue;
+        }
+        if (!first_tier) {
+            snapshot << ",";
+        }
+        snapshot << static_cast<int>(action) << ":" << tier;
+        first_tier = false;
+    }
     return snapshot.str();
 }
 

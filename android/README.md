@@ -28,9 +28,13 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   now renders the real mission heightfield and terrain materials plus converted
   original Granny meshes for mapped static objects and live AI units. Original
   model DDS materials are wired, and compatible infantry meshes use baked
-  frames from the original rifle idle, move, and shoot clips. General runtime
-  skinning, the remaining action-specific clips, and the full legacy UI are
-  still pending.
+  frames from the original rifle idle, move, and shoot clips. The shipped
+  mission HUD, minimap, selected-unit cards, hit bars, and the original 4x3
+  command grid are active. The grid is populated from the selected legacy
+  unit's `CUserActions`; Move, Attack, Stop, Entrench, and Stand Ground have
+  native command round trips, and unavailable handlers render the shipped
+  disabled icons. General runtime skinning, remaining action-specific clips,
+  command subpanels, briefings, and the rest of the legacy UI are still pending.
 - `BK2_ENABLE_LEGACY_TEXTURE_RUNTIME=ON` links the Android
   `NGfx::CTexture`/`I2DBuffer` contract. Legacy callers can allocate textures,
   lock mip levels with `CTextureLock`, write the original pixel formats into CPU

@@ -1,5 +1,17 @@
 # Android Single-Player Port Status
 
+## Playable Vertical Slice
+
+The current ARM64 build runs the original single-player legacy AI/game
+simulation and renders the mission through bgfx with staged terrain, converted
+original unit/static geometry, materials, supported infantry animation, legacy
+fog of war, combat effects, minimap, selected-unit cards, and the shipped
+mission HUD. The right action panel follows the original twelve-slot layout and
+is rebuilt from the selected `CAIUnit` action data. Move, Attack, Stop,
+Entrench, and Stand Ground call the legacy command path; visible actions whose
+mobile interaction is not implemented remain disabled instead of pretending to
+work.
+
 ## Implemented In This Slice
 
 - Android Gradle project using GameActivity and one native `libblitzkrieg2.so`.

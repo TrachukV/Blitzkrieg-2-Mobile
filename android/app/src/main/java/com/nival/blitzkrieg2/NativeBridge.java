@@ -28,6 +28,7 @@ final class NativeBridge {
     static native boolean setTouchCommandMode(int mode);
     static native int getTouchCommandMode();
     static native boolean stopSelectedUnit();
+    static native boolean performSelectedUnitAction(int userAction);
     static native void setMissionPaused(boolean paused);
     static native boolean isMissionPaused();
     static native int[] getMissionMinimapArgb(int width, int height);

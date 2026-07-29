@@ -64,6 +64,7 @@ bool SelectLegacyUnit(int unit_id, int player);
 bool MoveSelectedLegacyUnit(float world_x, float world_y);
 bool AttackSelectedLegacyUnit(int target_unit_id);
 bool StopSelectedLegacyUnit();
+bool PerformSelectedLegacyUnitAction(int user_action);
 int SelectedLegacyUnitId();
 std::string SelectedLegacyUnitHudStatus();
 std::string SelectedLegacyUnitHudSnapshot();
