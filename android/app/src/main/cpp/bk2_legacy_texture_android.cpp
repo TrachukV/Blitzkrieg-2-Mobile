@@ -340,6 +340,7 @@ public:
               frame_mru_(0),
               uploaded_levels_(0),
               force_opaque_(false),
+              derive_alpha_from_luminance_(false),
               force_base_level_only_(false) {
 #if defined(BK2_BGFX_RENDERER_ENABLED)
         texture_handle_ = BGFX_INVALID_HANDLE;
@@ -364,6 +365,7 @@ public:
               frame_mru_(0),
               uploaded_levels_(0),
               force_opaque_(false),
+              derive_alpha_from_luminance_(false),
               force_base_level_only_(false) {
 #if defined(BK2_BGFX_RENDERER_ENABLED)
         texture_handle_ = BGFX_INVALID_HANDLE;
@@ -449,6 +451,15 @@ public:
         force_base_level_only_ = true;
         DestroyGpuTexture();
         UploadLevel(0);
+    }
+
+    void ConfigureLuminanceAlphaSampling() {
+        if (derive_alpha_from_luminance_) {
+            return;
+        }
+        derive_alpha_from_luminance_ = true;
+        DestroyGpuTexture();
+        UploadMipChain();
     }
 
     uint8_t* MutableLevelBytes(int level) {
@@ -659,7 +670,15 @@ private:
                 }
             }
         }
-        if (force_opaque_) {
+        if (derive_alpha_from_luminance_) {
+            for (size_t offset = 0; offset < rgba->size(); offset += 4) {
+                (*rgba)[offset + 3] = std::max(
+                        (*rgba)[offset + 0],
+                        std::max(
+                                (*rgba)[offset + 1],
+                                (*rgba)[offset + 2]));
+            }
+        } else if (force_opaque_) {
             for (size_t offset = 3; offset < rgba->size(); offset += 4) {
                 (*rgba)[offset] = 0xff;
             }
@@ -779,6 +798,7 @@ private:
     int frame_mru_;
     int uploaded_levels_;
     bool force_opaque_;
+    bool derive_alpha_from_luminance_;
     bool force_base_level_only_;
     std::vector<SAndroidTextureLevel> levels_;
 #if defined(BK2_BGFX_RENDERER_ENABLED)
@@ -1627,6 +1647,12 @@ void EnsureLegacyTextureMipChainUploaded(NGfx::CTexture* texture) {
 void ConfigureLegacyTerrainTexture(NGfx::CTexture* texture) {
     if (IsValid(texture)) {
         texture->ConfigureTerrainSampling();
+    }
+}
+
+void ConfigureLegacyLuminanceAlphaTexture(NGfx::CTexture* texture) {
+    if (IsValid(texture)) {
+        texture->ConfigureLuminanceAlphaSampling();
     }
 }
 

@@ -108,8 +108,15 @@ struct TimedCombatEffect {
     uint64_t expires_millis = 0;
 };
 std::vector<TimedCombatEffect> g_combat_effects;
+struct TimedDestructionEffect {
+    AndroidDestructionEffect effect;
+    uint64_t created_millis = 0;
+    uint64_t expires_millis = 0;
+};
+std::vector<TimedDestructionEffect> g_destruction_effects;
 uint64_t g_infantry_shot_effect_count = 0;
 uint64_t g_mechanized_shot_effect_count = 0;
+uint64_t g_mechanized_destruction_effect_count = 0;
 uint64_t g_forwarded_unit_kill_count = 0;
 uint64_t g_forwarded_unit_kill_error_count = 0;
 struct PresentationCorpse {
@@ -575,9 +582,16 @@ void CapturePresentationCorpse(
         return;
     }
     const auto previous = g_last_presentation_entities.find(unit_id);
-    if (previous == g_last_presentation_entities.end() ||
-        (previous->second.flags &
-         BK2_PRESENTATION_ENTITY_INFANTRY) == 0 ||
+    if (previous == g_last_presentation_entities.end()) {
+        return;
+    }
+    const bool infantry =
+            (previous->second.flags &
+             BK2_PRESENTATION_ENTITY_INFANTRY) != 0;
+    const bool mechanized =
+            (previous->second.flags &
+             BK2_PRESENTATION_ENTITY_MECHANIZED) != 0;
+    if ((!infantry && !mechanized) ||
         (previous->second.flags &
          BK2_PRESENTATION_ENTITY_FORMATION) != 0) {
         return;
@@ -601,8 +615,29 @@ void CapturePresentationCorpse(
     g_presentation_corpses[unit_id] = corpse;
     ++g_presentation_death_count;
     PlatformRuntime::instance().log_info(
-            std::string("infantry_death_presentation=") +
+            std::string(
+                    mechanized
+                            ? "mechanized_death_presentation="
+                            : "infantry_death_presentation=") +
             std::to_string(unit_id));
+    if (mechanized) {
+        TimedDestructionEffect destruction;
+        destruction.effect.unit_id = unit_id;
+        destruction.effect.x = corpse.entity.x;
+        destruction.effect.y = corpse.entity.y;
+        destruction.effect.z = corpse.entity.z;
+        destruction.effect.lifetime_millis = 10000u;
+        destruction.created_millis = g_timer_millis;
+        destruction.expires_millis =
+                g_timer_millis + destruction.effect.lifetime_millis;
+        g_destruction_effects.push_back(destruction);
+        ++g_mechanized_destruction_effect_count;
+        if (g_mechanized_destruction_effect_count == 1) {
+            PlatformRuntime::instance().log_info(
+                    std::string("destruction_effect=mechanized; unit=") +
+                    std::to_string(unit_id));
+        }
+    }
 }
 
 void CaptureCombatEffect(
@@ -654,6 +689,14 @@ void PruneExpiredCombatEffects() {
                         return effect.expires_millis <= g_timer_millis;
                     }),
             g_combat_effects.end());
+    g_destruction_effects.erase(
+            std::remove_if(
+                    g_destruction_effects.begin(),
+                    g_destruction_effects.end(),
+                    [](const TimedDestructionEffect& effect) {
+                        return effect.expires_millis <= g_timer_millis;
+                    }),
+            g_destruction_effects.end());
 }
 
 void DrainLegacyClientUpdates() {
@@ -1066,8 +1109,10 @@ void ResetReportState() {
     g_client_update_count = 0;
     g_objective_update_count = 0;
     g_combat_effects.clear();
+    g_destruction_effects.clear();
     g_infantry_shot_effect_count = 0;
     g_mechanized_shot_effect_count = 0;
+    g_mechanized_destruction_effect_count = 0;
     g_forwarded_unit_kill_count = 0;
     g_forwarded_unit_kill_error_count = 0;
     g_last_presentation_entities.clear();
@@ -1631,6 +1676,28 @@ void HandleLegacyInputEvent(const char* event_name) {
                     "; lying=" +
                     (soldier->IsLying() ? "true" : "false"));
         }
+    } else if (std::strcmp(event_name, "debug_kill_mechanized") == 0) {
+        CAIUnit* target = nullptr;
+        for (CGlobalIter iter(0, ANY_PARTY);
+             !iter.IsFinished();
+             iter.Iterate()) {
+            CAIUnit* candidate = *iter;
+            if (candidate != nullptr &&
+                candidate->IsAlive() &&
+                candidate->IsMech() &&
+                candidate->IsVisible(theDipl.GetMyParty())) {
+                target = candidate;
+                break;
+            }
+        }
+        if (target != nullptr) {
+            PlatformRuntime::instance().log_info(
+                    std::string("debug_kill_mechanized=") +
+                    std::to_string(target->GetUniqueIdQU()));
+            target->Die(
+                    true,
+                    target->GetHitPoints() + 1.0f);
+        }
 #endif
     }
 }
@@ -1644,6 +1711,22 @@ std::vector<AndroidCombatEffect> CopyActiveAndroidCombatEffects() {
     result.reserve(g_combat_effects.size());
     for (const TimedCombatEffect& timed : g_combat_effects) {
         AndroidCombatEffect effect = timed.effect;
+        effect.age_millis = static_cast<uint32_t>(
+                std::min(
+                        g_timer_millis - timed.created_millis,
+                        static_cast<uint64_t>(
+                                effect.lifetime_millis)));
+        result.push_back(effect);
+    }
+    return result;
+}
+
+std::vector<AndroidDestructionEffect>
+CopyActiveAndroidDestructionEffects() {
+    std::vector<AndroidDestructionEffect> result;
+    result.reserve(g_destruction_effects.size());
+    for (const TimedDestructionEffect& timed : g_destruction_effects) {
+        AndroidDestructionEffect effect = timed.effect;
         effect.age_millis = static_cast<uint32_t>(
                 std::min(
                         g_timer_millis - timed.created_millis,
@@ -1690,8 +1773,10 @@ void ShutdownLegacyGameRuntime() {
     g_war_fog_snapshot = AndroidWarFogSnapshot();
     g_war_fog_first_update = true;
     g_combat_effects.clear();
+    g_destruction_effects.clear();
     g_infantry_shot_effect_count = 0;
     g_mechanized_shot_effect_count = 0;
+    g_mechanized_destruction_effect_count = 0;
     g_forwarded_unit_kill_count = 0;
     g_forwarded_unit_kill_error_count = 0;
     g_mission_outcome.store(kLegacyMissionRunning);
@@ -1735,6 +1820,10 @@ std::string LegacyGameRuntimeReport() {
            << "; mechanized_shot_effects="
            << g_mechanized_shot_effect_count
            << "; active_combat_effects=" << g_combat_effects.size()
+           << "; mechanized_destruction_effects="
+           << g_mechanized_destruction_effect_count
+           << "; active_destruction_effects="
+           << g_destruction_effects.size()
            << "; forwarded_unit_kills="
            << g_forwarded_unit_kill_count
            << "; forwarded_unit_kill_errors="

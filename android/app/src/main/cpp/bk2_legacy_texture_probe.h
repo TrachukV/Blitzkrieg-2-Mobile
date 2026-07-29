@@ -16,6 +16,7 @@ void ReleaseLegacyTextureGpuResources();
 void EnsureLegacyTextureUploaded(NGfx::CTexture* texture, int level);
 void EnsureLegacyTextureMipChainUploaded(NGfx::CTexture* texture);
 void ConfigureLegacyTerrainTexture(NGfx::CTexture* texture);
+void ConfigureLegacyLuminanceAlphaTexture(NGfx::CTexture* texture);
 uint16_t LegacyTextureHandleIndex(NGfx::CTexture* texture);
 NGfx::CTexture* LegacyTextureSmokeTexture();
 

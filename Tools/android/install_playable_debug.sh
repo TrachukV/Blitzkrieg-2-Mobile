@@ -14,6 +14,18 @@ CONVERTED_GEOMETRY="${CONVERTED_ROOT}/Geometries"
 TRACE_ASSET_ROOT="Scene/TexAndMats/All/Units/Weapons"
 INFANTRY_TRACE="${TRACE_ASSET_ROOT}/GunShotTraceBlue_Texture.dds"
 MECHANIZED_TRACE="${TRACE_ASSET_ROOT}/GunShotTraceOrange_texture.dds"
+MUZZLE_FLASH_ASSET_ROOT="Scene/TexAndMats/All/Effects/Shots/CannonShot"
+MUZZLE_FLASH="${MUZZLE_FLASH_ASSET_ROOT}/Shot8_Texture.dds"
+DESTRUCTION_FIRE_ASSET_ROOT="Scene/TexAndMats/All/Effects/Destructions/Fire"
+DESTRUCTION_SMOKE_ASSET_ROOT="Scene/TexAndMats/All/Effects/Explosions/GroundExplosion"
+DESTRUCTION_EFFECT_ASSETS=(
+    "${DESTRUCTION_FIRE_ASSET_ROOT}/Fire2_Texture.dds"
+    "${DESTRUCTION_FIRE_ASSET_ROOT}/Fire3_Texture.dds"
+    "${DESTRUCTION_FIRE_ASSET_ROOT}/Fire4_Texture.dds"
+    "${DESTRUCTION_FIRE_ASSET_ROOT}/Fire5_Texture.dds"
+    "${DESTRUCTION_SMOKE_ASSET_ROOT}/Explosion2_Texture.dds"
+    "${DESTRUCTION_SMOKE_ASSET_ROOT}/Explosion3_Texture.dds"
+)
 
 if [[ -z "${ANDROID_HOME:-}" &&
       -d "${HOME}/Library/Android/sdk" ]]; then
@@ -99,17 +111,32 @@ else
         "${ADB_BIN}" shell run-as "${PACKAGE}" tar -xf - -C files/DataAndroid
 fi
 
+MISSING_EFFECT_ASSET=0
+for EFFECT_ASSET in "${DESTRUCTION_EFFECT_ASSETS[@]}"; do
+    if [[ ! -r "${DATA_SOURCE}/Data/${EFFECT_ASSET}" ]]; then
+        MISSING_EFFECT_ASSET=1
+    fi
+done
 if [[ ! -r "${DATA_SOURCE}/Data/${INFANTRY_TRACE}" ||
-      ! -r "${DATA_SOURCE}/Data/${MECHANIZED_TRACE}" ]]; then
-    echo "Original tracer textures are missing from DataAndroid." >&2
-    echo "Add Versions/Current/Data/${TRACE_ASSET_ROOT} to the sparse checkout." >&2
+      ! -r "${DATA_SOURCE}/Data/${MECHANIZED_TRACE}" ||
+      ! -r "${DATA_SOURCE}/Data/${MUZZLE_FLASH}" ||
+      "${MISSING_EFFECT_ASSET}" == "1" ]]; then
+    echo "Original tracer, muzzle-flash, fire, or smoke textures are missing from DataAndroid." >&2
+    echo "Add the Units/Weapons and Effects paths documented in android/README.md to the sparse checkout." >&2
     exit 1
 fi
-echo "Staging original tracer textures into app-private storage."
+echo "Staging original tracer, muzzle-flash, fire, and smoke textures into app-private storage."
 "${ADB_BIN}" shell run-as "${PACKAGE}" \
     mkdir -p "files/DataAndroid/Data/${TRACE_ASSET_ROOT}"
+"${ADB_BIN}" shell run-as "${PACKAGE}" \
+    mkdir -p "files/DataAndroid/Data/${MUZZLE_FLASH_ASSET_ROOT}"
+"${ADB_BIN}" shell run-as "${PACKAGE}" \
+    mkdir -p "files/DataAndroid/Data/${DESTRUCTION_FIRE_ASSET_ROOT}"
+"${ADB_BIN}" shell run-as "${PACKAGE}" \
+    mkdir -p "files/DataAndroid/Data/${DESTRUCTION_SMOKE_ASSET_ROOT}"
 COPYFILE_DISABLE=1 tar -chf - -C "${DATA_SOURCE}/Data" \
-    "${INFANTRY_TRACE}" "${MECHANIZED_TRACE}" |
+    "${INFANTRY_TRACE}" "${MECHANIZED_TRACE}" "${MUZZLE_FLASH}" \
+    "${DESTRUCTION_EFFECT_ASSETS[@]}" |
     "${ADB_BIN}" shell run-as "${PACKAGE}" tar -xf - \
         -C files/DataAndroid/Data
 

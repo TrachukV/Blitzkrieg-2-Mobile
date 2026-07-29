@@ -48,6 +48,18 @@ constexpr const char* kInfantryTraceTexture =
         "Scene/TexAndMats/All/Units/Weapons/GunShotTraceBlue_Texture.dds";
 constexpr const char* kMechanizedTraceTexture =
         "Scene/TexAndMats/All/Units/Weapons/GunShotTraceOrange_texture.dds";
+constexpr const char* kMuzzleFlashTexture =
+        "Scene/TexAndMats/All/Effects/Shots/CannonShot/Shot8_Texture.dds";
+constexpr const char* kDestructionFireTextures[] = {
+        "Scene/TexAndMats/All/Effects/Destructions/Fire/Fire2_Texture.dds",
+        "Scene/TexAndMats/All/Effects/Destructions/Fire/Fire3_Texture.dds",
+        "Scene/TexAndMats/All/Effects/Destructions/Fire/Fire4_Texture.dds",
+        "Scene/TexAndMats/All/Effects/Destructions/Fire/Fire5_Texture.dds",
+};
+constexpr const char* kDestructionSmokeTextures[] = {
+        "Scene/TexAndMats/All/Effects/Explosions/GroundExplosion/Explosion2_Texture.dds",
+        "Scene/TexAndMats/All/Effects/Explosions/GroundExplosion/Explosion3_Texture.dds",
+};
 
 std::mutex g_runtime_mutex;
 bool g_ready = false;
@@ -91,8 +103,11 @@ size_t g_lying_move_animation_instance_count = 0;
 size_t g_lying_attack_animation_instance_count = 0;
 size_t g_combat_effect_render_count = 0;
 size_t g_active_combat_effect_count = 0;
+size_t g_active_destruction_effect_count = 0;
 size_t g_active_unit_indicator_count = 0;
 bool g_combat_effect_trace_texture_logged = false;
+bool g_muzzle_flash_texture_logged = false;
+bool g_destruction_effect_texture_logged = false;
 
 enum class TouchCommandMode {
     Contextual = 0,
@@ -1663,6 +1678,134 @@ void AppendEntityModel(
     }
 }
 
+void AppendCameraFacingSprite(
+        WorldObjectMesh* mesh,
+        float x,
+        float y,
+        float z,
+        float width,
+        float height,
+        uint32_t abgr,
+        const std::string& texture_path) {
+    if (mesh == nullptr || texture_path.empty() ||
+        width <= 0.0f || height <= 0.0f) {
+        return;
+    }
+    const float half_width = width * 0.5f;
+    const float half_height = height * 0.5f;
+    const float right_x = std::cos(g_camera.yaw_radians);
+    const float right_y = std::sin(g_camera.yaw_radians);
+    const uint32_t base =
+            static_cast<uint32_t>(mesh->vertices.size());
+    mesh->vertices.push_back(TerrainVertex{
+            x - right_x * half_width,
+            y - right_y * half_width,
+            z - half_height,
+            0.0f,
+            1.0f,
+            abgr});
+    mesh->vertices.push_back(TerrainVertex{
+            x + right_x * half_width,
+            y + right_y * half_width,
+            z - half_height,
+            1.0f,
+            1.0f,
+            abgr});
+    mesh->vertices.push_back(TerrainVertex{
+            x + right_x * half_width,
+            y + right_y * half_width,
+            z + half_height,
+            1.0f,
+            0.0f,
+            abgr});
+    mesh->vertices.push_back(TerrainVertex{
+            x - right_x * half_width,
+            y - right_y * half_width,
+            z + half_height,
+            0.0f,
+            0.0f,
+            abgr});
+    WorldObjectMesh::Layer* layer =
+            FindOrAddWorldObjectLayer(mesh, texture_path);
+    if (layer == nullptr) {
+        return;
+    }
+    layer->alpha_blended = true;
+    const uint32_t indices[] = {0, 1, 2, 0, 2, 3};
+    for (uint32_t index : indices) {
+        layer->triangle_indices.push_back(base + index);
+    }
+}
+
+void AppendDestructionEffect(
+        WorldObjectMesh* mesh,
+        const AndroidDestructionEffect& effect) {
+    if (mesh == nullptr || effect.lifetime_millis == 0) {
+        return;
+    }
+    constexpr uint32_t kSmokeCycleMillis = 2600u;
+    constexpr int kSmokePuffCount = 3;
+    for (int puff = 0; puff < kSmokePuffCount; ++puff) {
+        const uint32_t cycle_age =
+                (effect.age_millis +
+                 static_cast<uint32_t>(puff) *
+                         (kSmokeCycleMillis / kSmokePuffCount)) %
+                kSmokeCycleMillis;
+        const float phase =
+                static_cast<float>(cycle_age) /
+                static_cast<float>(kSmokeCycleMillis);
+        const float envelope =
+                std::sin(
+                        phase *
+                        3.14159265358979323846f);
+        const uint32_t alpha =
+                static_cast<uint32_t>(
+                        std::lround(
+                                std::max(envelope, 0.0f) * 190.0f));
+        const float seed =
+                static_cast<float>(
+                        (effect.unit_id & 0xff) + puff * 37);
+        const float drift_x =
+                std::sin(seed * 0.73f) * phase * 1.2f;
+        const float drift_y =
+                std::cos(seed * 0.51f) * phase * 1.2f;
+        const float size = 3.8f + phase * 4.2f;
+        AppendCameraFacingSprite(
+                mesh,
+                effect.x + drift_x,
+                effect.y + drift_y,
+                effect.z + 3.0f + phase * 7.0f,
+                size,
+                size,
+                (alpha << 24) | 0x00404040u,
+                kDestructionSmokeTextures[
+                        static_cast<size_t>(puff) %
+                         (sizeof(kDestructionSmokeTextures) /
+                         sizeof(kDestructionSmokeTextures[0]))]);
+    }
+
+    const uint32_t fire_frame =
+            (effect.age_millis / 110u) %
+            static_cast<uint32_t>(
+                    sizeof(kDestructionFireTextures) /
+                    sizeof(kDestructionFireTextures[0]));
+    const float flicker =
+            0.9f +
+            0.12f *
+                    std::sin(
+                            static_cast<float>(effect.age_millis) *
+                            0.035f);
+    AppendCameraFacingSprite(
+            mesh,
+            effect.x,
+            effect.y,
+            effect.z + 3.2f,
+            4.8f * flicker,
+            6.4f * flicker,
+            0xffffffffu,
+            kDestructionFireTextures[fire_frame]);
+}
+
 void AppendCombatEffectRibbon(
         WorldObjectMesh* mesh,
         const AndroidCombatEffect& effect) {
@@ -1774,19 +1917,26 @@ void AppendCombatEffectRibbon(
         trace_indices->push_back(ribbon_base + index);
     }
 
-    if (effect.age_millis <= 80u) {
+    if (effect.age_millis <= 120u) {
         const float flash_size =
                 effect.type == AndroidCombatEffectType::InfantryShot
-                ? 0.38f
-                : 0.7f;
-        AppendObjectMarker(
+                ? 0.9f
+                : 1.75f;
+        const float flash_progress =
+                static_cast<float>(effect.age_millis) / 120.0f;
+        const uint32_t flash_alpha =
+                static_cast<uint32_t>(
+                        std::lround(
+                                (1.0f - flash_progress) * 255.0f));
+        AppendCameraFacingSprite(
                 mesh,
-                effect.source_x + direction_x * flash_size,
-                effect.source_y + direction_y * flash_size,
+                effect.source_x + direction_x * flash_size * 0.45f,
+                effect.source_y + direction_y * flash_size * 0.45f,
                 effect.source_z + source_height,
                 flash_size,
-                flash_size * 1.7f,
-                color);
+                flash_size,
+                (flash_alpha << 24) | 0x00ffffffu,
+                kMuzzleFlashTexture);
     }
     ++g_combat_effect_render_count;
     if (g_combat_effect_render_count == 1) {
@@ -1942,6 +2092,8 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
             bk2_presentation_snapshot_info();
     const std::vector<AndroidCombatEffect> combat_effects =
             CopyActiveAndroidCombatEffects();
+    const std::vector<AndroidDestructionEffect> destruction_effects =
+            CopyActiveAndroidDestructionEffects();
     const AndroidWarFogSnapshot war_fog =
             CopyAndroidWarFogSnapshot();
     if (!force &&
@@ -1949,7 +2101,9 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         war_fog.generation == g_rendered_war_fog_generation &&
         g_animated_geometry_part_count == 0 &&
         combat_effects.empty() &&
-        g_active_combat_effect_count == 0) {
+        g_active_combat_effect_count == 0 &&
+        destruction_effects.empty() &&
+        g_active_destruction_effect_count == 0) {
         return true;
     }
     std::vector<Bk2PresentationEntity> entities(info.entity_count);
@@ -2029,6 +2183,24 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         g_active_combat_effect_count == 0) {
         PlatformRuntime::instance().log_info(
                 "combat_effect_render=cleared");
+    }
+    const size_t previous_active_destruction_effect_count =
+            g_active_destruction_effect_count;
+    for (const AndroidDestructionEffect& effect :
+         destruction_effects) {
+        AppendDestructionEffect(&combined, effect);
+    }
+    g_active_destruction_effect_count =
+            destruction_effects.size();
+    if (g_active_destruction_effect_count > 0 &&
+        previous_active_destruction_effect_count == 0) {
+        PlatformRuntime::instance().log_info(
+                "destruction_effect_render=active");
+    } else if (
+            g_active_destruction_effect_count == 0 &&
+            previous_active_destruction_effect_count > 0) {
+        PlatformRuntime::instance().log_info(
+                "destruction_effect_render=cleared");
     }
     if (war_fog.width >= 2 &&
         war_fog.height >= 2 &&
@@ -2492,6 +2664,11 @@ uint16_t ModelTextureHandle(const std::string& texture_path) {
     if (!IsValid(cached->second)) {
         return UINT16_MAX;
     }
+    if (texture_path == kMuzzleFlashTexture ||
+        texture_path.find(
+                "Scene/TexAndMats/All/Effects/Destructions/Fire/") == 0) {
+        ConfigureLegacyLuminanceAlphaTexture(cached->second);
+    }
     EnsureLegacyTextureMipChainUploaded(cached->second);
     return LegacyTextureHandleIndex(cached->second);
 }
@@ -2514,6 +2691,29 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
                              : "ready") +
                     "; path=" + layer.texture_path);
             g_combat_effect_trace_texture_logged = true;
+        }
+        if (layer.texture_path == kMuzzleFlashTexture &&
+            !g_muzzle_flash_texture_logged) {
+            PlatformRuntime::instance().log_info(
+                    std::string("muzzle_flash_texture=") +
+                    (layer.texture_handle == UINT16_MAX
+                             ? "unavailable"
+                             : "ready") +
+                    "; path=" + layer.texture_path);
+            g_muzzle_flash_texture_logged = true;
+        }
+        if ((layer.texture_path.find(
+                     "Scene/TexAndMats/All/Effects/Destructions/Fire/") == 0 ||
+             layer.texture_path.find(
+                     "Scene/TexAndMats/All/Effects/Explosions/GroundExplosion/") == 0) &&
+            !g_destruction_effect_texture_logged) {
+            PlatformRuntime::instance().log_info(
+                    std::string("destruction_effect_texture=") +
+                    (layer.texture_handle == UINT16_MAX
+                             ? "unavailable"
+                             : "ready") +
+                    "; path=" + layer.texture_path);
+            g_destruction_effect_texture_logged = true;
         }
     }
 }
@@ -2772,8 +2972,11 @@ void ShutdownSinglePlayerRuntime() {
     g_lying_attack_animation_instance_count = 0;
     g_combat_effect_render_count = 0;
     g_active_combat_effect_count = 0;
+    g_active_destruction_effect_count = 0;
     g_active_unit_indicator_count = 0;
     g_combat_effect_trace_texture_logged = false;
+    g_muzzle_flash_texture_logged = false;
+    g_destruction_effect_texture_logged = false;
     g_touch_command_mode = TouchCommandMode::Contextual;
     g_converted_geometries.clear();
     g_missing_converted_geometries.clear();

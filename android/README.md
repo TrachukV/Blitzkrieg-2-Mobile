@@ -287,6 +287,7 @@ git sparse-checkout add \
   Versions/Current/Data/Scenario \
   Versions/Current/Data/Consts \
   Versions/Current/Data/Other/Text \
+  Versions/Current/Data/Scene/TexAndMats/All/Effects \
   Versions/Current/Data/Scene/TexAndMats/All/Units/Weapons \
   Versions/Current/Data/Weapons
 
@@ -615,8 +616,10 @@ infantry member through the original `CStatistics::UnitKilled` and
 smoke-tested together. Keyboard `V` sends the same `local_win` event used by
 mission Lua, allowing campaign autosave and continuation to be tested without
 completing a full battle. Keyboard `L` toggles one live soldier between the
-original standing and prone states for animation validation. All five shortcuts
-are absent from release builds.
+original standing and prone states for animation validation. Keyboard `M`
+kills a visible mechanized unit through the same statistics/death path and is
+used to validate the destruction presentation. All six shortcuts are absent
+from release builds.
 
 `Data/Weapons` is required runtime DB payload. Without it, mine descriptors keep
 an unresolved `pWeapon`; the original `CMineStaticObject::Detonate` path then
@@ -716,14 +719,25 @@ ribbons at the source and destination coordinates supplied by the legacy AI
 simulation. Infantry ribbons use the shipped DXT3
 `GunShotTraceBlue_Texture.dds`; mechanized ribbons use the shipped
 `GunShotTraceOrange_texture.dds`. These effect-only layers enable alpha blending
-without changing the opaque model layers. Multi-mesh
+without changing the opaque model layers. The first native particle milestone
+also replaces the temporary shot marker with the shipped
+`Shot8_Texture.dds` muzzle flash. A visible mechanized death now keeps its
+original wreck model for ten seconds and animates shipped `Fire2`–`Fire5`
+textures plus rising `Explosion2`/`Explosion3` smoke. Those legacy fire and
+muzzle DDS files encode transparency through RGB luminance with a zero alpha
+channel; the Android texture bridge derives a compatible alpha channel during
+GPU upload. Particle layers depth-test against the scene but do not write the
+depth buffer, so overlapping fire and smoke remain visible.
+
+This is a targeted native presentation path driven by real legacy combat/death
+events, not yet the general `.xdb` particle-system interpreter. Multi-mesh
 Granny models preserve all of their model mesh bindings;
 global `InitialPlacement` is intentionally not reapplied because shipped
 infantry geometry already contains the correct root placement. Standing-to-prone
 and prone-to-standing transition clips, GPU/runtime skinning, original
-muzzle-flash/explosion particles and projectile geometry, complete briefing HUD
-behavior, and the original chapter-map/statistics/progression UI remain
-unfinished.
+descriptor-driven explosion/projectile geometry and the remaining particle
+emitters, complete briefing HUD behavior, and the original
+chapter-map/statistics/progression UI remain unfinished.
 
 The video transcode manifest now writes Android-canonical runtime paths. A Bink
 ref such as `Movies\Nival.bik` maps to `DataAndroid/Movies/Nival.mp4`, not to a
