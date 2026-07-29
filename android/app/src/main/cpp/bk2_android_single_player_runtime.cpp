@@ -14,6 +14,7 @@
 #include "3Dmotor/GTexture.h"
 #include "SceneB2/TerrainInfo.h"
 #include "Stats_B2_M1/DBMapInfo.h"
+#include "Stats_B2_M1/DBVisObj.h"
 #include "Stats_B2_M1/Vis2AI.h"
 #include "System/BinSaver.h"
 #include "System/VFSOperations.h"
@@ -22,11 +23,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cerrno>
+#include <cstring>
 #include <cstdlib>
 #include <fstream>
 #include <limits>
 #include <mutex>
 #include <sstream>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace bk2::android {
@@ -59,6 +63,29 @@ std::vector<CObj<NGfx::CTexture> > g_terrain_layer_textures;
 std::vector<std::string> g_terrain_layer_texture_paths;
 size_t g_terrain_layer_count = 0;
 size_t g_terrain_layer_texture_count = 0;
+size_t g_converted_geometry_instance_count = 0;
+size_t g_converted_geometry_fallback_count = 0;
+
+struct ConvertedGeometryVertex {
+    float x;
+    float y;
+    float z;
+    float nx;
+    float ny;
+    float nz;
+    float u;
+    float v;
+};
+
+struct ConvertedGeometry {
+    std::vector<ConvertedGeometryVertex> vertices;
+    std::vector<uint32_t> triangle_indices;
+};
+
+std::unordered_map<int, ConvertedGeometry> g_converted_geometries;
+std::unordered_set<int> g_missing_converted_geometries;
+std::unordered_map<uint64_t, int> g_stats_geometry_index;
+bool g_stats_geometry_index_loaded = false;
 
 struct MissionLaunchOverride {
     bool present = false;
@@ -502,6 +529,241 @@ uint32_t ObjectColor(int player, bool scenario_object) {
     return ArgbToAbgr(kPlayerColors[index]);
 }
 
+int GeometryRecordId(const NDb::SHPObjectRPGStats* stats) {
+    if (stats == nullptr) {
+        return -1;
+    }
+    const NDb::SVisObj* visual = stats->pvisualObject.GetPtr();
+    if (visual == nullptr) {
+        return -1;
+    }
+    const NDb::SModel* fallback = nullptr;
+    const NDb::SModel* summer = nullptr;
+    for (const NDb::SVisObj::SSingleObj& candidate : visual->models) {
+        const NDb::SModel* model = candidate.pModel.GetPtr();
+        if (model == nullptr || model->pGeometry.IsEmpty()) {
+            continue;
+        }
+        if (fallback == nullptr) {
+            fallback = model;
+        }
+        if (candidate.eSeason == NDb::SEASON_ASIA) {
+            return model->pGeometry->GetRecordID();
+        }
+        if (candidate.eSeason == NDb::SEASON_SUMMER) {
+            summer = model;
+        }
+    }
+    const NDb::SModel* model = summer == nullptr ? fallback : summer;
+    return model == nullptr ? -1 : model->pGeometry->GetRecordID();
+}
+
+uint64_t StatsPathHash(const NDb::SHPObjectRPGStats* stats) {
+    if (stats == nullptr) {
+        return 0;
+    }
+    std::string path(stats->GetDBID().ToString().c_str());
+    const size_t xpointer = path.find('#');
+    if (xpointer != std::string::npos) {
+        path.resize(xpointer);
+    }
+    while (!path.empty() && (path[0] == '/' || path[0] == '\\')) {
+        path.erase(path.begin());
+    }
+    uint64_t result = 0xcbf29ce484222325ull;
+    for (char character : path) {
+        unsigned char byte = static_cast<unsigned char>(
+                character == '\\' ? '/' : character);
+        if (byte >= 'A' && byte <= 'Z') {
+            byte = static_cast<unsigned char>(byte - 'A' + 'a');
+        }
+        result ^= byte;
+        result *= 0x100000001b3ull;
+    }
+    return result;
+}
+
+bool ReadExact(std::ifstream* input, void* output, size_t size) {
+    if (input == nullptr || output == nullptr ||
+        size > static_cast<size_t>(std::numeric_limits<std::streamsize>::max())) {
+        return false;
+    }
+    input->read(
+            reinterpret_cast<char*>(output),
+            static_cast<std::streamsize>(size));
+    return input->good();
+}
+
+const ConvertedGeometry* LoadConvertedGeometry(int record_id) {
+    const auto loaded = g_converted_geometries.find(record_id);
+    if (loaded != g_converted_geometries.end()) {
+        return &loaded->second;
+    }
+    if (record_id < 0 ||
+        g_missing_converted_geometries.find(record_id) !=
+                g_missing_converted_geometries.end()) {
+        return nullptr;
+    }
+
+    const std::string path = JoinHostPath(
+            GetPortPaths().data_root(),
+            "Converted/Geometries/" + std::to_string(record_id) + ".bk2mesh");
+    std::ifstream input(path, std::ios::in | std::ios::binary);
+    char magic[8] = {};
+    uint32_t version = 0;
+    uint32_t mesh_count = 0;
+    const char expected_magic[8] = {'B', 'K', '2', 'M', 'S', 'H', '1', '\0'};
+    if (!input.is_open() ||
+        !ReadExact(&input, magic, sizeof(magic)) ||
+        std::memcmp(magic, expected_magic, sizeof(magic)) != 0 ||
+        !ReadExact(&input, &version, sizeof(version)) ||
+        !ReadExact(&input, &mesh_count, sizeof(mesh_count)) ||
+        version != 1 ||
+        mesh_count == 0 ||
+        mesh_count > 128) {
+        g_missing_converted_geometries.insert(record_id);
+        return nullptr;
+    }
+
+    ConvertedGeometry geometry;
+    for (uint32_t mesh_index = 0; mesh_index < mesh_count; ++mesh_index) {
+        uint32_t vertex_count = 0;
+        uint32_t index_count = 0;
+        if (!ReadExact(&input, &vertex_count, sizeof(vertex_count)) ||
+            !ReadExact(&input, &index_count, sizeof(index_count)) ||
+            vertex_count == 0 ||
+            vertex_count > 5000000 ||
+            index_count < 3 ||
+            index_count > 15000000 ||
+            index_count % 3 != 0) {
+            g_missing_converted_geometries.insert(record_id);
+            return nullptr;
+        }
+        const uint32_t vertex_base =
+                static_cast<uint32_t>(geometry.vertices.size());
+        const size_t old_vertex_count = geometry.vertices.size();
+        geometry.vertices.resize(old_vertex_count + vertex_count);
+        if (!ReadExact(
+                    &input,
+                    geometry.vertices.data() + old_vertex_count,
+                    static_cast<size_t>(vertex_count) *
+                            sizeof(ConvertedGeometryVertex))) {
+            g_missing_converted_geometries.insert(record_id);
+            return nullptr;
+        }
+        std::vector<uint32_t> indices(index_count);
+        if (!ReadExact(
+                    &input,
+                    indices.data(),
+                    static_cast<size_t>(index_count) * sizeof(uint32_t))) {
+            g_missing_converted_geometries.insert(record_id);
+            return nullptr;
+        }
+        geometry.triangle_indices.reserve(
+                geometry.triangle_indices.size() + index_count);
+        for (uint32_t index : indices) {
+            if (index >= vertex_count) {
+                g_missing_converted_geometries.insert(record_id);
+                return nullptr;
+            }
+            geometry.triangle_indices.push_back(vertex_base + index);
+        }
+    }
+
+    auto inserted = g_converted_geometries.emplace(
+            record_id,
+            std::move(geometry));
+    return &inserted.first->second;
+}
+
+int ResolveGeometryRecordId(
+        uint64_t stats_path_hash,
+        int stats_record_id,
+        int geometry_record_id) {
+    (void)stats_record_id;
+    if (geometry_record_id >= 0) {
+        return geometry_record_id;
+    }
+    if (!g_stats_geometry_index_loaded) {
+        g_stats_geometry_index_loaded = true;
+        const std::string path = JoinHostPath(
+                GetPortPaths().data_root(),
+                "Converted/geometry_index.tsv");
+        std::ifstream input(path);
+        std::string line;
+        while (std::getline(input, line)) {
+            if (line.empty() || line[0] == '#') {
+                continue;
+            }
+            std::istringstream parser(line);
+            std::string hash_text;
+            int stats = -1;
+            int geometry = -1;
+            if (!(parser >> hash_text >> stats >> geometry) ||
+                hash_text.empty() ||
+                stats < 0 ||
+                geometry < 0) {
+                continue;
+            }
+            char* end = nullptr;
+            const uint64_t path_hash = std::strtoull(
+                    hash_text.c_str(),
+                    &end,
+                    16);
+            if (end != hash_text.c_str() && *end == '\0') {
+                g_stats_geometry_index[path_hash] = geometry;
+            }
+        }
+    }
+    const auto mapped = g_stats_geometry_index.find(stats_path_hash);
+    return mapped == g_stats_geometry_index.end() ? -1 : mapped->second;
+}
+
+bool AppendConvertedGeometry(
+        WorldObjectMesh* mesh,
+        uint64_t stats_path_hash,
+        int stats_record_id,
+        int geometry_record_id,
+        float x,
+        float y,
+        float z,
+        float heading,
+        uint32_t abgr) {
+    if (mesh == nullptr) {
+        return false;
+    }
+    const int record_id =
+            ResolveGeometryRecordId(
+                    stats_path_hash,
+                    stats_record_id,
+                    geometry_record_id);
+    const ConvertedGeometry* geometry = LoadConvertedGeometry(record_id);
+    if (geometry == nullptr) {
+        return false;
+    }
+    const uint32_t base = static_cast<uint32_t>(mesh->vertices.size());
+    const float cosine = std::cos(heading);
+    const float sine = std::sin(heading);
+    mesh->vertices.reserve(mesh->vertices.size() + geometry->vertices.size());
+    for (const ConvertedGeometryVertex& vertex : geometry->vertices) {
+        mesh->vertices.push_back(TerrainVertex{
+                x + cosine * vertex.x - sine * vertex.y,
+                y + sine * vertex.x + cosine * vertex.y,
+                z + vertex.z + 0.05f,
+                vertex.u,
+                vertex.v,
+                abgr});
+    }
+    mesh->triangle_indices.reserve(
+            mesh->triangle_indices.size() +
+            geometry->triangle_indices.size());
+    for (uint32_t index : geometry->triangle_indices) {
+        mesh->triangle_indices.push_back(base + index);
+    }
+    ++g_converted_geometry_instance_count;
+    return true;
+}
+
 void AppendObjectMarker(
         WorldObjectMesh* mesh,
         float x,
@@ -588,6 +850,19 @@ void AppendEntityModel(
         const Bk2PresentationEntity& entity,
         uint32_t abgr,
         bool selected) {
+    if (AppendConvertedGeometry(
+                mesh,
+                entity.rpg_stats_path_hash,
+                entity.rpg_stats_record_id,
+                entity.geometry_record_id,
+                entity.x,
+                entity.y,
+                entity.z,
+                entity.heading_radians,
+                abgr)) {
+        return;
+    }
+    ++g_converted_geometry_fallback_count;
     const float scale = selected ? 1.25f : 1.0f;
     if ((entity.flags & BK2_PRESENTATION_ENTITY_MECHANIZED) != 0) {
         AppendOrientedBox(
@@ -688,14 +963,29 @@ void AppendMapObjects(
         const float y = AI2Vis(object.vPos.y);
         const float z =
                 TerrainHeightAt(terrain_info, x, y) + AI2Vis(object.vPos.z);
-        AppendObjectMarker(
-                mesh,
-                x,
-                y,
-                z,
-                scenario_objects ? 1.25f : 0.85f,
-                scenario_objects ? 5.0f : 3.5f,
-                ObjectColor(object.nPlayer, scenario_objects));
+        const float heading =
+                static_cast<float>(object.nDir & 0xffff) /
+                65536.0f * 6.28318530717958647692f;
+        if (!AppendConvertedGeometry(
+                    mesh,
+                    StatsPathHash(stats),
+                    stats->GetRecordID(),
+                    GeometryRecordId(stats),
+                    x,
+                    y,
+                    z,
+                    heading,
+                    ObjectColor(object.nPlayer, scenario_objects))) {
+            ++g_converted_geometry_fallback_count;
+            AppendObjectMarker(
+                    mesh,
+                    x,
+                    y,
+                    z,
+                    scenario_objects ? 1.25f : 0.85f,
+                    scenario_objects ? 5.0f : 3.5f,
+                    ObjectColor(object.nPlayer, scenario_objects));
+        }
         if (count_rendered) {
             ++g_rendered_object_count;
         }
@@ -1391,6 +1681,12 @@ void ShutdownSinglePlayerRuntime() {
     g_terrain_texture_path.clear();
     g_terrain_layer_count = 0;
     g_terrain_layer_texture_count = 0;
+    g_converted_geometry_instance_count = 0;
+    g_converted_geometry_fallback_count = 0;
+    g_converted_geometries.clear();
+    g_missing_converted_geometries.clear();
+    g_stats_geometry_index.clear();
+    g_stats_geometry_index_loaded = false;
     g_height_width = 0;
     g_height_height = 0;
     g_triangle_count = 0;
@@ -1575,6 +1871,16 @@ std::string SinglePlayerRuntimeReport() {
            << "; rendered_objects=" << g_rendered_object_count
            << "; dynamic_rendered_objects="
            << g_dynamic_rendered_object_count
+           << "; converted_geometry_cache="
+           << g_converted_geometries.size()
+           << "; missing_converted_geometry="
+           << g_missing_converted_geometries.size()
+           << "; stats_geometry_index="
+           << g_stats_geometry_index.size()
+           << "; converted_geometry_instances="
+           << g_converted_geometry_instance_count
+           << "; converted_geometry_fallbacks="
+           << g_converted_geometry_fallback_count
            << "; presentation_snapshot="
            << (g_presentation_snapshot_written ? "written" : "not_written")
            << "; " << LegacyGameRuntimeReport();

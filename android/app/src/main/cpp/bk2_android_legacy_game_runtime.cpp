@@ -28,6 +28,7 @@
 #include "Main/GameTimer.h"
 #include "SceneB2/TerrainInfo.h"
 #include "Stats_B2_M1/DBMapInfo.h"
+#include "Stats_B2_M1/DBVisObj.h"
 #include "Stats_B2_M1/FeedBackUpdates.h"
 #include "Stats_B2_M1/TerraAIObserver.h"
 #include "Stats_B2_M1/Vis2AI.h"
@@ -108,6 +109,60 @@ uint32_t g_android_move_log_millis = 0;
 std::set<std::string> g_missing_unit_payload_refs;
 std::set<std::string> g_missing_squad_payload_refs;
 std::string g_stage = "not_started";
+
+uint64_t StatsPathHash(const NDb::SHPObjectRPGStats* stats) {
+    if (stats == nullptr) {
+        return 0;
+    }
+    std::string path(stats->GetDBID().ToString().c_str());
+    const size_t xpointer = path.find('#');
+    if (xpointer != std::string::npos) {
+        path.resize(xpointer);
+    }
+    while (!path.empty() && (path[0] == '/' || path[0] == '\\')) {
+        path.erase(path.begin());
+    }
+    uint64_t result = 0xcbf29ce484222325ull;
+    for (char character : path) {
+        unsigned char byte = static_cast<unsigned char>(
+                character == '\\' ? '/' : character);
+        if (byte >= 'A' && byte <= 'Z') {
+            byte = static_cast<unsigned char>(byte - 'A' + 'a');
+        }
+        result ^= byte;
+        result *= 0x100000001b3ull;
+    }
+    return result;
+}
+
+int GeometryRecordId(const NDb::SHPObjectRPGStats* stats) {
+    if (stats == nullptr) {
+        return -1;
+    }
+    const NDb::SVisObj* visual = stats->pvisualObject.GetPtr();
+    if (visual == nullptr) {
+        return -1;
+    }
+    const NDb::SModel* fallback = nullptr;
+    const NDb::SModel* summer = nullptr;
+    for (const NDb::SVisObj::SSingleObj& candidate : visual->models) {
+        const NDb::SModel* model = candidate.pModel.GetPtr();
+        if (model == nullptr || model->pGeometry.IsEmpty()) {
+            continue;
+        }
+        if (fallback == nullptr) {
+            fallback = model;
+        }
+        if (candidate.eSeason == NDb::SEASON_ASIA) {
+            return model->pGeometry->GetRecordID();
+        }
+        if (candidate.eSeason == NDb::SEASON_SUMMER) {
+            summer = model;
+        }
+    }
+    const NDb::SModel* model = summer == nullptr ? fallback : summer;
+    return model == nullptr ? -1 : model->pGeometry->GetRecordID();
+}
 
 void SetStage(const char* stage) {
     g_stage = stage;
@@ -501,6 +556,7 @@ void PublishPresentationEntities() {
             flags |= BK2_PRESENTATION_ENTITY_FORMATION;
         }
         const CVec3& center = unit->GetCenter();
+        const NDb::SUnitBaseRPGStats* stats = unit->GetStats();
         entities.push_back(Bk2PresentationEntity{
                 unit->GetUniqueIdQU(),
                 static_cast<int32_t>(unit->GetPlayer()),
@@ -509,7 +565,11 @@ void PublishPresentationEntities() {
                 AI2Vis(center.y),
                 AI2Vis(unit->GetVisZ()),
                 unit->GetDir(),
-                unit->GetHitPoints()});
+                unit->GetHitPoints(),
+                StatsPathHash(stats),
+                stats == nullptr ? -1 : stats->GetRecordID(),
+                GeometryRecordId(stats),
+                stats == nullptr ? 1.0f : stats->fSelectionScale});
     }
     bk2::presentation::PublishEntities(std::move(entities));
 }

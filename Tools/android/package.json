@@ -1,0 +1,11 @@
+{
+  "name": "blitzkrieg-2-android-content-tools",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "granny-ro-js": "1.5.0"
+  }
+}

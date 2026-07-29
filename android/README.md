@@ -19,9 +19,9 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   links the first Android `NGfx` backend boundary. Real devices prefer Vulkan
   with bgfx fallback enabled; Android emulators use the GLES3 backend because the
   `ranchu` Vulkan driver crashes inside debug-utils object naming. The backend
-  now renders the real mission heightfield and minimap texture, static gameplay
-  placeholders, and live AI-unit markers in addition to the original bootstrap
-  primitives. Full legacy UI and model/animation rendering are still pending.
+  now renders the real mission heightfield and terrain materials plus converted
+  original Granny meshes for mapped static objects and live AI units. Material
+  textures, skinning/animation, and the full legacy UI are still pending.
 - `BK2_ENABLE_LEGACY_TEXTURE_RUNTIME=ON` links the Android
   `NGfx::CTexture`/`I2DBuffer` contract. Legacy callers can allocate textures,
   lock mip levels with `CTextureLock`, write the original pixel formats into CPU
@@ -280,6 +280,19 @@ python3 tools/android/prepare_data_android.py \
   --output DataAndroid \
   --mode symlink
 
+python3 Tools/android/build_geometry_index.py \
+  --data-root Versions/Current/Data \
+  --output DataAndroid/Converted/geometry_index.tsv
+
+(
+  cd Tools/android
+  npm install --ignore-scripts
+  node convert_granny_geometry.mjs \
+    --input ../../Versions/Current/Data/bin/Geometries \
+    --output ../../DataAndroid/Converted/Geometries \
+    --all
+)
+
 clang++ -std=c++17 -Wall -Wextra -Werror \
   -Iandroid/app/src/main/cpp \
   tools/android/audio_decode_smoke.cpp \
@@ -433,6 +446,18 @@ original multi-layer terrain shader and otherwise produced black distant
 terrain in the current bgfx path. The current renderer assigns one dominant
 material per tile; the original soft terrain-mask blending is still pending.
 
+The Android content step now decodes the shipped Granny format-6/Oodle0
+geometry into a small native `BK2MSH1` cache. The current checkout yields 1,457
+renderable geometry files (640,989 vertices and 414,400 triangles); 26 geometry
+records contain no renderable mesh and are skipped. An offline index follows
+the original `RPGStats -> VisObj -> Model -> Geometry` XDB chain, preferring the
+Asia season and falling back through the other seasons. The runtime keys this
+index by a stable normalized DB-path hash because the current Android DB bridge
+does not preserve `ObjectRecordID` on loaded RPG resources. On the first USA
+mission, the verified runtime loads 31 distinct original geometries with no
+missing converted file. Unmapped objects retain the temporary proxy instead of
+disappearing.
+
 The Android VFS resolves legacy asset paths case-insensitively while preserving
 the actual on-disk spelling. This is required for content such as GB3.1 whose
 XML uses `units/.../mechunitrpgstats.xdb` while the staged files use
@@ -471,17 +496,16 @@ discarded because the old desktop `WorldClient` was not linked. The in-game
 ARM64 emulator through the result panel and back to the 75-map selector.
 
 The selected unit is yellow, the current attack target is orange, and moving
-units follow the real terrain height.
-Green proxies are player units and red proxies are hostile units. Formations
-are shown as small groups and mechanized units use oriented low-poly hull,
-turret, and barrel geometry. The camera starts focused on the player's
-formation.
+units follow the real terrain height. Converted original meshes keep the
+current player/hostile tint until original material textures are wired.
+Unmapped formations and objects remain green/red proxies. The camera starts
+focused on the player's formation.
 
 This is a playable runtime milestone, not a complete visual port. Terrain now
-uses original game materials, but units and buildings still use temporary
-generated geometry. Original Granny models,
-skeletons, animations, combat presentation, briefing/game HUD, and the
-complete campaign-selection/progression UI remain unfinished.
+uses original game materials and the first runtime model path uses original
+Granny geometry. Original model material textures, multi-part attachment
+transforms, skeleton skinning, animations, combat effects, briefing/game HUD,
+and the complete campaign-selection/progression UI remain unfinished.
 
 The video transcode manifest now writes Android-canonical runtime paths. A Bink
 ref such as `Movies\Nival.bik` maps to `DataAndroid/Movies/Nival.mp4`, not to a

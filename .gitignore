@@ -54,6 +54,7 @@ CVS/
 *.log
 build/
 DataAndroid/
+node_modules/
 
 # Android build outputs
 android/.gradle/

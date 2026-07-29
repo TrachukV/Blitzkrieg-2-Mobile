@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define BK2_PRESENTATION_API_VERSION 1u
+#define BK2_PRESENTATION_API_VERSION 2u
 #define BK2_PRESENTATION_MISSION_ID_CAPACITY 256u
 
 enum Bk2PresentationEntityFlags {
@@ -39,6 +39,10 @@ typedef struct Bk2PresentationEntity {
     float z;
     float heading_radians;
     float hit_points;
+    uint64_t rpg_stats_path_hash;
+    int32_t rpg_stats_record_id;
+    int32_t geometry_record_id;
+    float visual_scale;
 } Bk2PresentationEntity;
 
 typedef struct Bk2PresentationSnapshotInfo {
