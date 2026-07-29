@@ -870,10 +870,14 @@ uses the unit RPG descriptor's `pEffectSmoke` or `pEffectFatality`, matching the
 selected legacy death animation. The bridge snapshots each resolved
 descriptor's scene-effect variant and carries its emitter texture sequence,
 dimensions, cycle duration, time offset, scale, speed, particle count, and
-alpha/additive conversion mode to bgfx. It retains the visible wreck for ten
-seconds. The earlier fixed `Fire2`–`Fire5` plus `Explosion2`/`Explosion3`
-recipe remains only as a fallback when the content has no usable effect
-descriptor. Legacy effect DDS files that encode transparency through RGB
+alpha/additive conversion mode to bgfx. XDB light instances carry the same
+placement, cycle, speed, offset, and scale timing and produce an additive
+ground pulse through the shipped `LightFX/Flare_Texture.dds`; the unavailable
+desktop animated-light track is approximated with a fast flash envelope. The
+visible wreck remains for ten seconds. The earlier fixed `Fire2`–`Fire5` plus
+`Explosion2`/`Explosion3` recipe remains only as a fallback when the content
+has no usable effect descriptor. Legacy effect DDS files that encode
+transparency through RGB
 luminance with a zero alpha channel receive a compatible alpha channel during
 GPU upload. Particle layers depth-test against the scene but do not write the
 depth buffer, so overlapping fire and smoke remain visible.
@@ -896,9 +900,11 @@ textures, while the compiled particle keyframe tracks used by the old renderer
 are not available to this Android path. Android therefore preserves descriptor
 selection, timing, texture animation, scale, speed, count, and blend mode but
 approximates per-particle position, size, and color curves with camera-facing
-billboards. A verified US1.2 emulator run consumed
+billboards and animated light intensity with a ground flare. A verified US1.2
+emulator run consumed
 `AntitankMineExplosion_ComplexEffect.xdb`, rendered both of its emitters from
-`Explosion1_Texture.dds`, and retired the effect after its descriptor lifetime.
+`Explosion1_Texture.dds`, resolved one XDB light instance through
+`Flare_Texture.dds`, and retired the effect after its descriptor lifetime.
 Multi-mesh Granny models preserve all of their model mesh bindings;
 global `InitialPlacement` is intentionally not reapplied because shipped
 infantry geometry already contains the correct root placement. Standing-to-prone

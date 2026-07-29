@@ -57,6 +57,17 @@ struct AndroidParticleEmitter {
     std::vector<AndroidParticleTexture> textures;
 };
 
+struct AndroidEffectLight {
+    float offset_x = 0.0f;
+    float offset_y = 0.0f;
+    float offset_z = 0.0f;
+    float scale = 1.0f;
+    float speed = 1.0f;
+    float time_offset_seconds = 0.0f;
+    float end_cycle_seconds = 0.0f;
+    int cycle_count = 1;
+};
+
 struct AndroidSceneEffect {
     int32_t victim_unit_id = -1;
     float x = 0.0f;
@@ -64,6 +75,7 @@ struct AndroidSceneEffect {
     float z = 0.0f;
     std::string descriptor_id;
     std::vector<AndroidParticleEmitter> emitters;
+    std::vector<AndroidEffectLight> lights;
     uint32_t age_millis = 0;
     uint32_t lifetime_millis = 0;
 };
@@ -75,6 +87,7 @@ struct AndroidDestructionEffect {
     float z = 0.0f;
     std::string descriptor_id;
     std::vector<AndroidParticleEmitter> emitters;
+    std::vector<AndroidEffectLight> lights;
     bool uses_fallback_recipe = false;
     uint32_t age_millis = 0;
     uint32_t lifetime_millis = 0;

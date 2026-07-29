@@ -59,6 +59,8 @@ constexpr const char* kMechanizedTraceTexture =
         "Scene/TexAndMats/All/Units/Weapons/GunShotTraceOrange_texture.dds";
 constexpr const char* kMuzzleFlashTexture =
         "Scene/TexAndMats/All/Effects/Shots/CannonShot/Shot8_Texture.dds";
+constexpr const char* kEffectLightTexture =
+        "Scene/TexAndMats/All/Effects/LightFX/Flare_Texture.dds";
 constexpr const char* kProjectedShadowLayer =
         "__android_projected_shadow__";
 constexpr const char* kDestructionFireTextures[] = {
@@ -124,6 +126,7 @@ size_t g_lying_idle_animation_instance_count = 0;
 size_t g_lying_move_animation_instance_count = 0;
 size_t g_lying_attack_animation_instance_count = 0;
 size_t g_combat_effect_render_count = 0;
+size_t g_effect_light_render_count = 0;
 size_t g_active_combat_effect_count = 0;
 size_t g_active_scene_effect_count = 0;
 size_t g_active_destruction_effect_count = 0;
@@ -2098,6 +2101,145 @@ void AppendCameraFacingSprite(
     }
 }
 
+void AppendGroundFacingSprite(
+        WorldObjectMesh* mesh,
+        float x,
+        float y,
+        float z,
+        float radius,
+        uint32_t abgr,
+        const std::string& texture_path) {
+    if (mesh == nullptr || texture_path.empty() || radius <= 0.0f) {
+        return;
+    }
+    const uint32_t base =
+            static_cast<uint32_t>(mesh->vertices.size());
+    mesh->vertices.push_back(TerrainVertex{
+            x - radius,
+            y - radius,
+            z,
+            0.0f,
+            1.0f,
+            abgr});
+    mesh->vertices.push_back(TerrainVertex{
+            x + radius,
+            y - radius,
+            z,
+            1.0f,
+            1.0f,
+            abgr});
+    mesh->vertices.push_back(TerrainVertex{
+            x + radius,
+            y + radius,
+            z,
+            1.0f,
+            0.0f,
+            abgr});
+    mesh->vertices.push_back(TerrainVertex{
+            x - radius,
+            y + radius,
+            z,
+            0.0f,
+            0.0f,
+            abgr});
+    WorldObjectMesh::Layer* layer =
+            FindOrAddWorldObjectLayer(mesh, texture_path);
+    if (layer == nullptr) {
+        return;
+    }
+    layer->additive_blended = true;
+    const uint32_t indices[] = {0, 1, 2, 0, 2, 3};
+    for (uint32_t index : indices) {
+        layer->triangle_indices.push_back(base + index);
+    }
+}
+
+void AppendDescriptorEffectLights(
+        WorldObjectMesh* mesh,
+        const std::vector<AndroidEffectLight>& lights,
+        float origin_x,
+        float origin_y,
+        float origin_z,
+        uint32_t age_millis,
+        uint32_t lifetime_millis) {
+    if (mesh == nullptr || lights.empty() ||
+        lifetime_millis == 0) {
+        return;
+    }
+    const float age_seconds =
+            static_cast<float>(age_millis) / 1000.0f;
+    const size_t light_count =
+            std::min<size_t>(lights.size(), 8);
+    for (size_t light_index = 0;
+         light_index < light_count;
+         ++light_index) {
+        const AndroidEffectLight& light = lights[light_index];
+        const float speed =
+                std::abs(light.speed) > 0.001f
+                ? std::abs(light.speed)
+                : 1.0f;
+        const float local_seconds =
+                age_seconds * speed -
+                light.time_offset_seconds * speed;
+        if (local_seconds < 0.0f) {
+            continue;
+        }
+        const float cycle_seconds =
+                light.end_cycle_seconds > 0.001f
+                ? light.end_cycle_seconds
+                : std::max(
+                          static_cast<float>(lifetime_millis) /
+                                  1000.0f,
+                          0.1f);
+        if (light.cycle_count > 0 &&
+            local_seconds >=
+                    cycle_seconds *
+                            static_cast<float>(
+                                    light.cycle_count)) {
+            continue;
+        }
+        const float phase = std::clamp(
+                std::fmod(local_seconds, cycle_seconds) /
+                        cycle_seconds,
+                0.0f,
+                1.0f);
+        const float fade_in = std::clamp(phase * 18.0f, 0.0f, 1.0f);
+        const float envelope =
+                fade_in * std::exp(-phase * 5.0f);
+        const uint32_t alpha = static_cast<uint32_t>(
+                std::lround(
+                        180.0f *
+                        std::clamp(envelope, 0.0f, 1.0f)));
+        if (alpha == 0) {
+            continue;
+        }
+        const float light_x = origin_x + light.offset_x;
+        const float light_y = origin_y + light.offset_y;
+        const float ground_z =
+                TerrainMeshHeightAtLocked(light_x, light_y);
+        const float elevation = std::max(
+                origin_z + light.offset_z - ground_z,
+                0.0f);
+        const float radius =
+                std::clamp(
+                        11.0f * light.scale *
+                                (0.75f + envelope * 0.35f) +
+                                elevation * 0.25f,
+                        3.5f,
+                        30.0f);
+        AppendGroundFacingSprite(
+                mesh,
+                light_x,
+                light_y,
+                ground_z + 0.12f,
+                radius,
+                ArgbToAbgr(
+                        (alpha << 24) | 0x00ff8438u),
+                kEffectLightTexture);
+        ++g_effect_light_render_count;
+    }
+}
+
 bool ParticlePathContains(
         const std::string& path,
         const char* needle) {
@@ -2305,6 +2447,14 @@ void AppendDescriptorParticleEffect(
 void AppendSceneEffect(
         WorldObjectMesh* mesh,
         const AndroidSceneEffect& effect) {
+    AppendDescriptorEffectLights(
+            mesh,
+            effect.lights,
+            effect.x,
+            effect.y,
+            effect.z,
+            effect.age_millis,
+            effect.lifetime_millis);
     AppendDescriptorParticleEffect(
             mesh,
             effect.emitters,
@@ -2322,6 +2472,14 @@ void AppendDestructionEffect(
     if (mesh == nullptr || effect.lifetime_millis == 0) {
         return;
     }
+    AppendDescriptorEffectLights(
+            mesh,
+            effect.lights,
+            effect.x,
+            effect.y,
+            effect.z,
+            effect.age_millis,
+            effect.lifetime_millis);
     if (!effect.emitters.empty()) {
         AppendDescriptorParticleEffect(
                 mesh,
@@ -2805,7 +2963,10 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
                 scene_effects.front().descriptor_id +
                 "; emitters=" +
                 std::to_string(
-                        scene_effects.front().emitters.size()));
+                        scene_effects.front().emitters.size()) +
+                "; lights=" +
+                std::to_string(
+                        scene_effects.front().lights.size()));
     } else if (
             g_active_scene_effect_count == 0 &&
             previous_active_scene_effect_count > 0) {
@@ -2823,7 +2984,9 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
     if (g_active_destruction_effect_count > 0 &&
         previous_active_destruction_effect_count == 0) {
         PlatformRuntime::instance().log_info(
-                "destruction_effect_render=active");
+                std::string("destruction_effect_render=active; lights=") +
+                std::to_string(
+                        destruction_effects.front().lights.size()));
     } else if (
             g_active_destruction_effect_count == 0 &&
             previous_active_destruction_effect_count > 0) {
@@ -3856,6 +4019,7 @@ void ShutdownSinglePlayerRuntime() {
     g_lying_move_animation_instance_count = 0;
     g_lying_attack_animation_instance_count = 0;
     g_combat_effect_render_count = 0;
+    g_effect_light_render_count = 0;
     g_active_combat_effect_count = 0;
     g_active_scene_effect_count = 0;
     g_active_destruction_effect_count = 0;
@@ -4675,6 +4839,8 @@ std::string SinglePlayerRuntimeReport() {
            << g_lying_attack_animation_instance_count
            << "; combat_effect_renders="
            << g_combat_effect_render_count
+           << "; effect_light_renders="
+           << g_effect_light_render_count
            << "; active_combat_effects_rendered="
            << g_active_combat_effect_count
            << "; active_scene_effects_rendered="

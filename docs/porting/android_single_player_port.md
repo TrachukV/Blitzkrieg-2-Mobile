@@ -56,14 +56,19 @@ water, and air impacts, then snapshots the selected `SComplexEffect` variant.
 Mechanized death similarly selects `pEffectSmoke` or `pEffectFatality` from the
 unit RPG descriptor according to the legacy death animation. The bgfx particle
 path preserves the descriptor's emitter timing, texture sequence, scale, speed,
-count, and alpha/additive blend mode. In a verified US1.2 emulator run, the
-scenario triggered `AntitankMineExplosion_ComplexEffect.xdb`; Android loaded
-both emitters and their shipped `Explosion1_Texture.dds`, rendered the effect,
-and removed it after its declared lifetime without a process failure.
+count, and alpha/additive blend mode. Descriptor light instances also preserve
+their placement and cycle timing and use the shipped additive
+`LightFX/Flare_Texture.dds` for a ground pulse. In a verified US1.2 emulator
+run, the scenario triggered `AntitankMineExplosion_ComplexEffect.xdb`; Android
+loaded both emitters, their shipped `Explosion1_Texture.dds`, and one light
+instance backed by `Flare_Texture.dds`, then removed the effect after its
+declared lifetime without a process failure.
 The old fixed fire/smoke recipe now runs only when no usable descriptor exists.
 The compiled desktop particle keyframe tracks are not available to this path,
 so per-particle position, size, and color curves remain a billboard
 approximation rather than a byte-identical rendering of the original effect.
+The compiled animated-light intensity track is similarly represented by a
+short flash envelope rather than a full dynamic-light shader.
 The Android build packages the required 4.2 MiB original HUD subset and the TGA
 loader uses it only when the corresponding external `Complete/UI` file is
 missing. This keeps the original panel functional after a partial content sync
