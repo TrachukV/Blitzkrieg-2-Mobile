@@ -60,9 +60,14 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 return;
             }
             if (missionTitle != null) {
-                String missionId = NativeBridge.getCurrentMissionId();
-                if (missionId != null && !missionId.isEmpty()) {
-                    missionTitle.setText(missionLabel(missionId));
+                String headline = NativeBridge.getMissionHudHeadline();
+                if (headline != null && !headline.isEmpty()) {
+                    missionTitle.setText(headline);
+                } else {
+                    String missionId = NativeBridge.getCurrentMissionId();
+                    if (missionId != null && !missionId.isEmpty()) {
+                        missionTitle.setText(missionLabel(missionId));
+                    }
                 }
             }
             if (missionStatus != null) {
@@ -154,7 +159,9 @@ public final class Blitzkrieg2Activity extends GameActivity {
 
         missionTitle = new TextView(this);
         missionTitle.setTextColor(Color.WHITE);
-        missionTitle.setTextSize(14.0f);
+        missionTitle.setTextSize(12.0f);
+        missionTitle.setTypeface(
+                Typeface.create("sans-serif-condensed", Typeface.BOLD));
         missionTitle.setShadowLayer(dp(2), dp(1), dp(1), Color.BLACK);
         missionTitle.setText(missionLabel());
         missionTitle.setSingleLine(true);

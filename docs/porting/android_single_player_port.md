@@ -26,7 +26,10 @@ actions address the full selection, while type-specific actions are derived
 from and dispatched to the active unit's matching legacy stats group. `P` and
 `Space` toggle the native pause state. The Java HUD polls that state and centers
 the orange `PAUSED` label over the playable viewport while leaving the original
-bottom panel visible, matching the desktop mission presentation.
+bottom panel visible, matching the desktop mission presentation. A dedicated
+JNI headline call resolves the active primary `SMissionObjective` header through
+the shipped UTF-16 localization and displays it at the top-left; the internal
+campaign/map ID is now only a startup fallback.
 
 ## Implemented In This Slice
 

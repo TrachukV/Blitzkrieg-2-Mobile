@@ -46,8 +46,8 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   camera. Tapping a member card changes the active unit and therefore the
   type-specific command grid, while common desktop actions still address the
   full mixed selection. General runtime skinning, remaining action-specific
-  clips, command subpanels, briefings, and the rest of the legacy UI are still
-  pending.
+  clips, transient scenario-notification queues, command subpanels, briefings,
+  and the rest of the legacy UI are still pending.
 - `BK2_ENABLE_LEGACY_TEXTURE_RUNTIME=ON` links the Android
   `NGfx::CTexture`/`I2DBuffer` contract. Legacy callers can allocate textures,
   lock mip levels with `CTextureLock`, write the original pixel formats into CPU
@@ -612,6 +612,9 @@ Touch controls currently implemented:
   type-specific action grid, and keep common commands bound to the full group;
 - press `P` or `Space` to toggle native mission pause and the centered
   original-style orange `PAUSED` overlay without opening the Android menu;
+- the top-left headline resolves the localized header of the active primary
+  legacy objective, with the internal mission ID used only before objectives
+  are ready;
 - tap a red hostile unit while a player unit is selected to issue the original
   legacy attack command;
 - tap terrain to issue the original legacy move command and move the selected

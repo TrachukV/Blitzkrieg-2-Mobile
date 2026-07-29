@@ -3204,6 +3204,30 @@ MissionRuntimeState GetMissionRuntimeState() {
     return g_state;
 }
 
+std::string GetMissionHudHeadlineText() {
+    const MissionRuntimeState state = GetMissionRuntimeState();
+    const MissionObjectiveState* active = nullptr;
+    for (std::vector<MissionObjectiveState>::const_iterator it =
+                 state.objectives.begin();
+         it != state.objectives.end();
+         ++it) {
+        if (it->state != EMOS_RECEIVED) {
+            continue;
+        }
+        if (active == nullptr || (!active->primary && it->primary)) {
+            active = &*it;
+        }
+    }
+    if (active == nullptr) {
+        return "";
+    }
+    std::string text = LoadUtf16Text(active->header_ref);
+    if (text.empty()) {
+        text = LoadUtf16Text(active->description_ref);
+    }
+    return text;
+}
+
 std::string GetMissionHudStatusText() {
     const MissionRuntimeState state = GetMissionRuntimeState();
     std::ostringstream text;
@@ -3657,6 +3681,12 @@ Java_com_nival_blitzkrieg2_NativeBridge_runMissionCheckpointProbe(JNIEnv* env, j
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_nival_blitzkrieg2_NativeBridge_getMissionOutcome(JNIEnv* env, jclass) {
     return env->NewStringUTF(bk2::android::LegacyMissionOutcome());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_getMissionHudHeadline(JNIEnv* env, jclass) {
+    const std::string text = bk2::android::GetMissionHudHeadlineText();
+    return env->NewStringUTF(text.c_str());
 }
 
 extern "C" JNIEXPORT jstring JNICALL

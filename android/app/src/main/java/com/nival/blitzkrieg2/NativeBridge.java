@@ -22,6 +22,7 @@ final class NativeBridge {
     static native String runMissionCheckpointProbe();
     static native String getMissionOutcome();
     static native String getCurrentMissionId();
+    static native String getMissionHudHeadline();
     static native String getMissionHudStatus();
     static native String getSelectedUnitHudStatus();
     static native String getSelectedUnitHudSnapshot();

@@ -58,7 +58,9 @@ of any type inside it; a quick drag still pans the camera. Tapping a member card
 makes that unit active, so its type-specific actions replace the command grid
 while common commands continue to address the whole selection. Native pause
 from `P` or `Space` now displays the original orange `PAUSED` treatment centered
-over the battlefield without covering the shipped bottom HUD. See
+over the battlefield without covering the shipped bottom HUD. The top-left
+mission line now comes from the localized header of the active primary legacy
+objective instead of exposing the internal campaign/map identifier. See
 [`android/README.md`](android/README.md) for build, content-staging, verification,
 and remaining-port details.
 
