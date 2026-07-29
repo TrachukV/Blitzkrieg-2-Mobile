@@ -254,6 +254,7 @@ public:
             return false;
         }
         upload_terrain_mesh();
+        upload_water_mesh();
         upload_world_object_mesh();
         applied_bottom_inset_ = clamped_requested_bottom_inset();
         configure_view();
@@ -266,6 +267,7 @@ public:
         rect_queue_.clear();
         textured_rect_queue_.clear();
         destroy_terrain_buffers();
+        destroy_water_buffers();
         destroy_world_object_buffers();
         if (bgfx::isValid(white_texture_)) {
             bgfx::destroy(white_texture_);
@@ -382,6 +384,45 @@ public:
         destroy_terrain_buffers();
     }
 
+    bool set_water_mesh(const WaterMesh& mesh) override {
+        water_mesh_ = mesh;
+        if (!ready_) {
+            return water_mesh_.vertices.empty() ||
+                   !water_mesh_.triangle_indices.empty();
+        }
+        return upload_water_mesh();
+    }
+
+    bool update_water_vertices(
+            const std::vector<TerrainVertex>& vertices) override {
+        if (vertices.size() != water_mesh_.vertices.size()) {
+            last_error_ = "water vertex count changed";
+            return false;
+        }
+        water_mesh_.vertices = vertices;
+        if (!ready_ || vertices.empty()) {
+            return true;
+        }
+        if (!bgfx::isValid(water_vertex_buffer_)) {
+            last_error_ = "water dynamic vertex buffer missing";
+            return false;
+        }
+        bgfx::update(
+                water_vertex_buffer_,
+                0,
+                bgfx::copy(
+                        vertices.data(),
+                        static_cast<uint32_t>(
+                                vertices.size() *
+                                sizeof(TerrainVertex))));
+        return true;
+    }
+
+    void clear_water_mesh() override {
+        water_mesh_ = WaterMesh();
+        destroy_water_buffers();
+    }
+
     bool set_world_object_mesh(const WorldObjectMesh& mesh) override {
         world_object_mesh_ = mesh;
         if (!ready_) {
@@ -411,6 +452,7 @@ public:
         }
         apply_requested_bottom_inset();
         submit_terrain();
+        submit_water();
         submit_world_objects();
         submit_rects();
         submit_textured_rects();
@@ -557,6 +599,17 @@ private:
         }
     }
 
+    void destroy_water_buffers() {
+        if (bgfx::isValid(water_index_buffer_)) {
+            bgfx::destroy(water_index_buffer_);
+            water_index_buffer_ = BGFX_INVALID_HANDLE;
+        }
+        if (bgfx::isValid(water_vertex_buffer_)) {
+            bgfx::destroy(water_vertex_buffer_);
+            water_vertex_buffer_ = BGFX_INVALID_HANDLE;
+        }
+    }
+
     bool upload_terrain_mesh() {
         destroy_terrain_buffers();
         if (!ready_ || terrain_mesh_.vertices.empty() ||
@@ -665,6 +718,44 @@ private:
             destroy_world_object_buffers();
             return false;
         }
+        return true;
+    }
+
+    bool upload_water_mesh() {
+        destroy_water_buffers();
+        if (water_mesh_.vertices.empty() ||
+            water_mesh_.triangle_indices.empty()) {
+            return true;
+        }
+        if (!ready_) {
+            return true;
+        }
+
+        water_vertex_buffer_ = bgfx::createDynamicVertexBuffer(
+                static_cast<uint32_t>(water_mesh_.vertices.size()),
+                terrain_layout_,
+                BGFX_BUFFER_ALLOW_RESIZE);
+        water_index_buffer_ = bgfx::createIndexBuffer(
+                bgfx::copy(
+                        water_mesh_.triangle_indices.data(),
+                        static_cast<uint32_t>(
+                                water_mesh_.triangle_indices.size() *
+                                sizeof(uint32_t))),
+                BGFX_BUFFER_INDEX32);
+        if (!bgfx::isValid(water_vertex_buffer_) ||
+            !bgfx::isValid(water_index_buffer_)) {
+            last_error_ = "water GPU buffer creation failed";
+            destroy_water_buffers();
+            return false;
+        }
+        bgfx::update(
+                water_vertex_buffer_,
+                0,
+                bgfx::copy(
+                        water_mesh_.vertices.data(),
+                        static_cast<uint32_t>(
+                                water_mesh_.vertices.size() *
+                                sizeof(TerrainVertex))));
         return true;
     }
 
@@ -890,6 +981,32 @@ private:
         }
     }
 
+    void submit_water() {
+        if (!bgfx::isValid(water_vertex_buffer_) ||
+            !bgfx::isValid(water_index_buffer_) ||
+            !bgfx::isValid(textured_rect_program_) ||
+            !bgfx::isValid(texture_sampler_)) {
+            return;
+        }
+        bgfx::TextureHandle texture = {water_mesh_.texture_handle};
+        if (water_mesh_.texture_handle == UINT16_MAX ||
+            !bgfx::isValid(texture)) {
+            texture = white_texture_;
+        }
+        bgfx::setTransform(kIdentityMatrix);
+        bgfx::setTexture(0, texture_sampler_, texture);
+        bgfx::setVertexBuffer(0, water_vertex_buffer_);
+        bgfx::setIndexBuffer(water_index_buffer_);
+        bgfx::setState(
+                BGFX_STATE_WRITE_RGB |
+                BGFX_STATE_WRITE_A |
+                BGFX_STATE_DEPTH_TEST_LEQUAL |
+                BGFX_STATE_MSAA |
+                BGFX_STATE_BLEND_ALPHA);
+        bgfx::submit(kTerrainView, textured_rect_program_);
+        ++submitted_primitives_;
+    }
+
     void submit_rects() {
         if (rect_queue_.empty() ||
             !bgfx::isValid(rect_program_) ||
@@ -1050,6 +1167,10 @@ private:
             terrain_layer_vertex_buffers_;
     std::vector<bgfx::IndexBufferHandle>
             terrain_layer_index_buffers_;
+    bgfx::DynamicVertexBufferHandle water_vertex_buffer_ =
+            BGFX_INVALID_HANDLE;
+    bgfx::IndexBufferHandle water_index_buffer_ =
+            BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle world_object_vertex_buffer_ =
             BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle world_object_index_buffer_ =
@@ -1058,6 +1179,7 @@ private:
             world_object_layer_index_buffers_;
     bgfx::TextureHandle white_texture_ = BGFX_INVALID_HANDLE;
     TerrainMesh terrain_mesh_;
+    WaterMesh water_mesh_;
     WorldObjectMesh world_object_mesh_;
     TerrainCamera terrain_camera_;
     std::vector<SolidRect> rect_queue_;

@@ -41,7 +41,9 @@ The Android port is a playable native ARM64 milestone, not a finished
 release. It currently runs original single-player campaign data through the
 legacy C++ AI/game simulation, renders original terrain, models, materials, and
 supported infantry animations through bgfx, renders the live legacy fog-of-war
-grid and hides enemies the player's party cannot see, and uses the shipped
+grid and hides enemies the player's party cannot see, restores sea/lake
+surfaces from each map's original `seaMask` with the season-specific DDS and
+descriptor-timed waves, and uses the shipped
 mission HUD, minimap, unit portraits, and hit bars. Its original 4x3 command
 grid is rebuilt from the selected legacy unit's available actions instead of a
 fixed mobile button row; Move, Attack, Rotate, Stop, Entrench, Stand Ground,

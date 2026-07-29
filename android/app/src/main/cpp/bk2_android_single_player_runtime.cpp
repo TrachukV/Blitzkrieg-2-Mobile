@@ -14,6 +14,7 @@
 #include "SceneB2/stdafx.h"
 #include "3Dmotor/DBScene.h"
 #include "3Dmotor/GTexture.h"
+#include "B2_M1_Terrain/DBWater.h"
 #include "GameX/GetConsts.h"
 #include "SceneB2/TerrainInfo.h"
 #include "Stats_B2_M1/DBCameraConsts.h"
@@ -53,6 +54,10 @@ constexpr float kDefaultCameraDistance = 170.0f;
 constexpr float kDefaultCameraPitchDegrees = 45.0f;
 constexpr float kDefaultCameraYawDegrees = 45.0f;
 constexpr float kDefaultCameraHorizontalFovDegrees = 26.0f;
+constexpr float kLegacyWaterHeight = 0.1f;
+constexpr float kWaterAnimationStepSeconds = 1.0f / 20.0f;
+constexpr float kWaterWaveHeightScale = 0.08f;
+constexpr uint32_t kWaterVertexColor = 0xd8ffffffu;
 constexpr const char* kInfantryTraceTexture =
         "Scene/TexAndMats/All/Units/Weapons/GunShotTraceBlue_Texture.dds";
 constexpr const char* kMechanizedTraceTexture =
@@ -99,6 +104,19 @@ struct CameraRuntimeLimits {
 };
 CameraRuntimeLimits g_camera_limits;
 TerrainMesh g_terrain_mesh;
+WaterMesh g_water_mesh;
+std::vector<TerrainVertex> g_water_base_vertices;
+int g_water_mask_width = 0;
+int g_water_mask_height = 0;
+size_t g_water_mask_node_count = 0;
+size_t g_water_rendered_node_count = 0;
+size_t g_water_triangle_count = 0;
+float g_water_wave_amplitude = 1.4f;
+float g_water_wave_period = 0.3f;
+float g_water_texture_tile_count = 6.0f;
+float g_water_last_update_seconds = -1.0f;
+bool g_water_waves_enabled = true;
+bool g_water_texture_logged = false;
 WorldObjectMesh g_static_world_object_mesh;
 WorldObjectMesh g_world_object_mesh;
 CObj<NGfx::CTexture> g_terrain_texture;
@@ -596,6 +614,232 @@ bool BuildTerrainMesh(
     g_height_height = height;
     g_triangle_count = tile_count * 2;
     return true;
+}
+
+uint8_t WaterMaskAt(const STerrainInfo& info, int x, int y) {
+    if (!info.seaMask.IsEmpty() &&
+        x >= 0 &&
+        y >= 0 &&
+        x < info.seaMask.GetSizeX() &&
+        y < info.seaMask.GetSizeY()) {
+        return info.seaMask[y][x];
+    }
+    if (!info.optimizedSeaMask.IsEmpty() &&
+        x >= 0 &&
+        y >= 0 &&
+        x < info.optimizedSeaMask.GetSizeX() &&
+        y < info.optimizedSeaMask.GetSizeY()) {
+        return info.optimizedSeaMask.GetData(x, y) ? 1u : 0u;
+    }
+    return 0u;
+}
+
+std::string WaterTexturePath(NDb::ESeason season) {
+    const char* folder = "summer";
+    switch (season) {
+        case NDb::SEASON_WINTER:
+            folder = "winter";
+            break;
+        case NDb::SEASON_SPRING:
+            folder = "spring";
+            break;
+        case NDb::SEASON_AUTUMN:
+            folder = "autumn";
+            break;
+        case NDb::SEASON_AFRICA:
+            folder = "africa";
+            break;
+        case NDb::SEASON_ASIA:
+            folder = "asia";
+            break;
+        case NDb::SEASON_SUMMER:
+        default:
+            break;
+    }
+    return std::string("Terrain/Water/") + folder + "/water.dds";
+}
+
+void ConfigureWaterDescriptor(const NDb::SMapInfo* map) {
+    g_water_wave_amplitude = 1.4f;
+    g_water_wave_period = 0.3f;
+    g_water_texture_tile_count = 6.0f;
+    g_water_waves_enabled = true;
+    if (map == nullptr || !map->pOceanWater) {
+        return;
+    }
+    const NDb::SWater* water = map->pOceanWater.GetPtr();
+    if (water == nullptr) {
+        return;
+    }
+    g_water_waves_enabled = water->bUseWaves;
+    g_water_texture_tile_count = static_cast<float>(
+            std::max(water->nTilesNumPerWaterTexture, 1));
+    if (!water->waves.empty()) {
+        const NDb::SWater::SWaterWaveType& wave = water->waves.front();
+        if (std::isfinite(wave.fAmplitude)) {
+            g_water_wave_amplitude =
+                    std::clamp(std::fabs(wave.fAmplitude), 0.0f, 4.0f);
+        }
+        if (std::isfinite(wave.fPeriod) &&
+            std::fabs(wave.fPeriod) >= 0.05f) {
+            g_water_wave_period = std::fabs(wave.fPeriod);
+        }
+    }
+}
+
+bool BuildWaterMesh(
+        const NDb::SMapInfo* map,
+        const STerrainInfo& info,
+        WaterMesh* mesh) {
+    if (mesh == nullptr || map == nullptr) {
+        return false;
+    }
+    *mesh = WaterMesh();
+    g_water_base_vertices.clear();
+    g_water_mask_width = !info.seaMask.IsEmpty()
+            ? info.seaMask.GetSizeX()
+            : info.optimizedSeaMask.GetSizeX();
+    g_water_mask_height = !info.seaMask.IsEmpty()
+            ? info.seaMask.GetSizeY()
+            : info.optimizedSeaMask.GetSizeY();
+    g_water_mask_node_count = 0;
+    g_water_rendered_node_count = 0;
+    g_water_triangle_count = 0;
+    g_water_last_update_seconds = -1.0f;
+    ConfigureWaterDescriptor(map);
+    if (g_water_mask_width < 2 || g_water_mask_height < 2) {
+        return false;
+    }
+
+    std::vector<int32_t> vertex_lookup(
+            static_cast<size_t>(g_water_mask_width) *
+                    static_cast<size_t>(g_water_mask_height),
+            -1);
+    const auto add_vertex =
+            [&](int x, int y) -> uint32_t {
+        const size_t source_index =
+                static_cast<size_t>(y * g_water_mask_width + x);
+        int32_t& existing = vertex_lookup[source_index];
+        if (existing >= 0) {
+            return static_cast<uint32_t>(existing);
+        }
+        const bool water = WaterMaskAt(info, x, y) != 0;
+        existing = static_cast<int32_t>(mesh->vertices.size());
+        mesh->vertices.push_back(TerrainVertex{
+                static_cast<float>(x) * VIS_TILE_SIZE,
+                static_cast<float>(y) * VIS_TILE_SIZE,
+                kLegacyWaterHeight,
+                static_cast<float>(x) / g_water_texture_tile_count,
+                static_cast<float>(y) / g_water_texture_tile_count,
+                water ? kWaterVertexColor : 0x00ffffffu});
+        return static_cast<uint32_t>(existing);
+    };
+
+    for (int y = 0; y < g_water_mask_height; ++y) {
+        for (int x = 0; x < g_water_mask_width; ++x) {
+            if (WaterMaskAt(info, x, y) != 0) {
+                ++g_water_mask_node_count;
+            }
+        }
+    }
+    for (int y = 0; y + 1 < g_water_mask_height; ++y) {
+        for (int x = 0; x + 1 < g_water_mask_width; ++x) {
+            const bool top_left_water =
+                    WaterMaskAt(info, x, y) != 0;
+            const bool top_right_water =
+                    WaterMaskAt(info, x + 1, y) != 0;
+            const bool bottom_left_water =
+                    WaterMaskAt(info, x, y + 1) != 0;
+            const bool bottom_right_water =
+                    WaterMaskAt(info, x + 1, y + 1) != 0;
+            if (!top_left_water &&
+                !top_right_water &&
+                !bottom_left_water &&
+                !bottom_right_water) {
+                continue;
+            }
+            const uint32_t top_left = add_vertex(x, y);
+            const uint32_t top_right = add_vertex(x + 1, y);
+            const uint32_t bottom_left = add_vertex(x, y + 1);
+            const uint32_t bottom_right = add_vertex(x + 1, y + 1);
+            mesh->triangle_indices.push_back(top_left);
+            mesh->triangle_indices.push_back(bottom_left);
+            mesh->triangle_indices.push_back(top_right);
+            mesh->triangle_indices.push_back(top_right);
+            mesh->triangle_indices.push_back(bottom_left);
+            mesh->triangle_indices.push_back(bottom_right);
+        }
+    }
+    mesh->texture_path = WaterTexturePath(map->eSeason);
+    g_water_base_vertices = mesh->vertices;
+    g_water_rendered_node_count = mesh->vertices.size();
+    g_water_triangle_count = mesh->triangle_indices.size() / 3;
+
+    std::ostringstream report;
+    report << "water_mesh="
+           << (mesh->triangle_indices.empty() ? "empty" : "ready")
+           << "; mask=" << g_water_mask_width << "x"
+           << g_water_mask_height
+           << "; water_nodes=" << g_water_mask_node_count
+           << "; rendered_nodes=" << g_water_rendered_node_count
+           << "; triangles=" << g_water_triangle_count
+           << "; texture=" << mesh->texture_path
+           << "; waves="
+           << (g_water_waves_enabled ? "descriptor" : "disabled")
+           << "; amplitude=" << g_water_wave_amplitude
+           << "; period=" << g_water_wave_period
+           << "; tiles_per_texture=" << g_water_texture_tile_count;
+    PlatformRuntime::instance().log_info(report.str());
+    return !mesh->triangle_indices.empty();
+}
+
+bool UpdateWaterAnimationLocked(bool force) {
+    if (g_water_mesh.vertices.empty() ||
+        g_water_base_vertices.size() != g_water_mesh.vertices.size()) {
+        return true;
+    }
+    if (!force &&
+        g_water_last_update_seconds >= 0.0f &&
+        g_animation_elapsed_seconds >= g_water_last_update_seconds &&
+        g_animation_elapsed_seconds - g_water_last_update_seconds <
+                kWaterAnimationStepSeconds) {
+        return true;
+    }
+    const float animation_time = g_animation_elapsed_seconds;
+    const float angular_speed =
+            2.0f * kPi / std::max(g_water_wave_period, 0.05f);
+    const float wave_height =
+            g_water_waves_enabled
+            ? g_water_wave_amplitude * kWaterWaveHeightScale
+            : 0.0f;
+    const float uv_offset_u = animation_time * 0.012f;
+    const float uv_offset_v = animation_time * 0.008f;
+    for (size_t index = 0;
+         index < g_water_base_vertices.size();
+         ++index) {
+        const TerrainVertex& base = g_water_base_vertices[index];
+        TerrainVertex& animated = g_water_mesh.vertices[index];
+        animated = base;
+        const float tile_x = base.x / VIS_TILE_SIZE;
+        const float tile_y = base.y / VIS_TILE_SIZE;
+        animated.z +=
+                wave_height *
+                (0.62f *
+                         std::sin(
+                                 tile_x * 0.31f +
+                                 tile_y * 0.17f +
+                                 animation_time * angular_speed) +
+                 0.38f *
+                         std::sin(
+                                 tile_x * 0.11f -
+                                 tile_y * 0.27f +
+                                 animation_time *
+                                         angular_speed * 0.61f));
+        animated.u += uv_offset_u;
+        animated.v += uv_offset_v;
+    }
+    g_water_last_update_seconds = animation_time;
+    return RenderBackend().update_water_vertices(g_water_mesh.vertices);
 }
 
 bool BuildTerrainLayers(
@@ -3837,6 +4081,22 @@ bool RefreshRenderResourcesLocked() {
     if (!RenderBackend().set_terrain_mesh(g_terrain_mesh)) {
         return false;
     }
+    if (!g_water_mesh.vertices.empty()) {
+        g_water_mesh.texture_handle =
+                ModelTextureHandle(g_water_mesh.texture_path);
+        if (!RenderBackend().set_water_mesh(g_water_mesh)) {
+            return false;
+        }
+        if (!g_water_texture_logged &&
+            g_water_mesh.texture_handle != UINT16_MAX) {
+            PlatformRuntime::instance().log_info(
+                    std::string("water_texture=ready; path=") +
+                    g_water_mesh.texture_path);
+            g_water_texture_logged = true;
+        }
+    } else {
+        RenderBackend().clear_water_mesh();
+    }
     RefreshWorldObjectTextureHandles(&g_world_object_mesh);
     if (!g_world_object_mesh.vertices.empty() &&
         !RenderBackend().set_world_object_mesh(g_world_object_mesh)) {
@@ -3887,6 +4147,8 @@ bool InitializeSinglePlayerRuntime() {
         return false;
     }
     BuildTerrainLayers(map, terrain_info, &mesh);
+    WaterMesh water_mesh;
+    BuildWaterMesh(map, terrain_info, &water_mesh);
     WorldObjectMesh presentation_world_mesh;
     BuildPresentationStaticWorldMesh(map, terrain_info, &presentation_world_mesh);
     LoadMinimapTexture(map);
@@ -3905,6 +4167,7 @@ bool InitializeSinglePlayerRuntime() {
     ConfigureCameraFromLegacyConstsLocked();
 
     g_terrain_mesh = std::move(mesh);
+    g_water_mesh = std::move(water_mesh);
     g_static_world_object_mesh = std::move(presentation_world_mesh);
     g_world_object_mesh = g_static_world_object_mesh;
     PublishPresentationMeshes(
@@ -3978,6 +4241,9 @@ void TickSinglePlayerRuntime(uint32_t elapsed_millis) {
     if (!RefreshDynamicWorldMeshLocked(false)) {
         g_last_error = "dynamic_world_render_refresh_failed";
     }
+    if (!UpdateWaterAnimationLocked(false)) {
+        g_last_error = "water_render_refresh_failed";
+    }
 }
 
 void ShutdownSinglePlayerRuntime() {
@@ -3985,12 +4251,15 @@ void ShutdownSinglePlayerRuntime() {
     ShutdownLegacyGameRuntime();
     ResetMissionHudNotifications();
     RenderBackend().clear_terrain_mesh();
+    RenderBackend().clear_water_mesh();
     RenderBackend().clear_world_object_mesh();
     g_terrain_texture = 0;
     g_minimap_texture = 0;
     g_terrain_layer_textures.clear();
     g_terrain_layer_texture_paths.clear();
     g_terrain_mesh = TerrainMesh();
+    g_water_mesh = WaterMesh();
+    g_water_base_vertices.clear();
     g_static_world_object_mesh = WorldObjectMesh();
     g_world_object_mesh = WorldObjectMesh();
     bk2::presentation::Reset();
@@ -4009,6 +4278,17 @@ void ShutdownSinglePlayerRuntime() {
     g_terrain_type_colors.clear();
     g_terrain_type_width = 0;
     g_terrain_type_height = 0;
+    g_water_mask_width = 0;
+    g_water_mask_height = 0;
+    g_water_mask_node_count = 0;
+    g_water_rendered_node_count = 0;
+    g_water_triangle_count = 0;
+    g_water_wave_amplitude = 1.4f;
+    g_water_wave_period = 0.3f;
+    g_water_texture_tile_count = 6.0f;
+    g_water_last_update_seconds = -1.0f;
+    g_water_waves_enabled = true;
+    g_water_texture_logged = false;
     g_converted_geometry_instance_count = 0;
     g_converted_geometry_fallback_count = 0;
     g_animated_geometry_part_count = 0;
@@ -4772,6 +5052,26 @@ std::string SinglePlayerRuntimeReport() {
            << (g_triangle_count > terrain_layer_triangles
                        ? g_triangle_count - terrain_layer_triangles
                        : 0)
+           << "; water_mask="
+           << g_water_mask_width << "x" << g_water_mask_height
+           << "; water_mask_nodes=" << g_water_mask_node_count
+           << "; water_rendered_nodes="
+           << g_water_rendered_node_count
+           << "; water_triangles=" << g_water_triangle_count
+           << "; water_texture="
+           << (g_water_mesh.texture_path.empty()
+                       ? "<none>"
+                       : g_water_mesh.texture_path)
+           << "; water_texture_gpu="
+           << (g_water_mesh.texture_handle == UINT16_MAX
+                       ? "not_ready"
+                       : "ready")
+           << "; water_waves="
+           << (g_water_waves_enabled ? "descriptor" : "disabled")
+           << "; water_wave_amplitude="
+           << g_water_wave_amplitude
+           << "; water_wave_period="
+           << g_water_wave_period
            << "; texture_gpu="
            << ((g_terrain_layer_texture_count > 0 ||
                 g_terrain_mesh.texture_handle != UINT16_MAX)

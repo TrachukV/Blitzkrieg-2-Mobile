@@ -54,6 +54,13 @@ struct WorldObjectMesh {
     std::vector<Layer> layers;
 };
 
+struct WaterMesh {
+    std::vector<TerrainVertex> vertices;
+    std::vector<uint32_t> triangle_indices;
+    std::string texture_path;
+    uint16_t texture_handle = UINT16_MAX;
+};
+
 struct TerrainCamera {
     float target_x = 0.0f;
     float target_y = 0.0f;
@@ -90,6 +97,10 @@ public:
             uint32_t argb) = 0;
     virtual bool set_terrain_mesh(const TerrainMesh& mesh) = 0;
     virtual void clear_terrain_mesh() = 0;
+    virtual bool set_water_mesh(const WaterMesh& mesh) = 0;
+    virtual bool update_water_vertices(
+            const std::vector<TerrainVertex>& vertices) = 0;
+    virtual void clear_water_mesh() = 0;
     virtual bool set_world_object_mesh(const WorldObjectMesh& mesh) = 0;
     virtual void clear_world_object_mesh() = 0;
     virtual void set_terrain_camera(const TerrainCamera& camera) = 0;

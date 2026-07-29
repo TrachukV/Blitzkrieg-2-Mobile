@@ -508,6 +508,18 @@ alpha layers, and each terrain type's `ScaleCoeff` are applied to
 layer-specific vertices. USA 1.0, GB3.1, and GER1.0 have been exercised on the
 ARM64 emulator with all 19, 20, and 19 terrain textures respectively.
 
+Water is now a separate dynamic bgfx mesh instead of a terrain color fallback.
+The runtime reconstructs its coastline from `STerrainInfo::seaMask` (or the
+packed `optimizedSeaMask`), keeps the desktop surface height of `z=0.1`, and
+loads the shipped season-specific `Terrain/Water/<season>/water.dds`. The first
+`SWater` wave amplitude, period, enable flag, and texture tiling count drive a
+20 Hz vertex/UV animation through a dedicated dynamic vertex buffer, so water
+updates no longer require re-uploading all units and static objects. On ARM64
+US1.2 this produced a `129x129` mask, 2,575 water nodes, 3,021 rendered
+coastline nodes, 5,532 triangles, and a ready Asia DDS GPU handle. Two
+one-second-apart captures of a static 600x300 lake crop measured PSNR 31.76 dB,
+confirming the surface changed between frames without a camera move.
+
 The Android content step now decodes the shipped Granny format-6/Oodle0
 geometry into a small native `BK2MSH1` cache. The complete current pass yields
 2,510 renderable geometry files (1,126,692 vertices and 731,200 triangles);

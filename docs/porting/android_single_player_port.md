@@ -5,7 +5,8 @@
 The current ARM64 build runs the original single-player legacy AI/game
 simulation and renders the mission through bgfx with staged terrain, converted
 original unit/static geometry, materials, supported infantry animation, legacy
-fog of war, combat effects, minimap, selected-unit cards, and the shipped
+fog of war, descriptor-driven water, combat effects, minimap, selected-unit
+cards, and the shipped
 mission HUD. The right action panel follows the original twelve-slot layout and
 is rebuilt from the selected `CAIUnit` action data. Move, Attack, Stop,
 Entrench, Stand Ground, Rotate, Spyglass, Clear Mines, Place Mines, and Build
@@ -114,6 +115,15 @@ always used; distance, pitch, and yaw are replaced only when the shipped
 `UseAnchorOnly` flag is false, matching the desktop
 `InterfaceMissionInternal` order. Screen projection, terrain picking, drag
 selection, and bgfx rendering all consume that one camera state.
+Water has its own backend resource path: terrain stays in immutable buffers,
+while `STerrainInfo::seaMask` is compacted into a dedicated 32-bit-indexed
+dynamic water mesh. It uses the original constant surface height `z=0.1`,
+seasonal DDS selection, wrapping texture coordinates, transparent coastline
+vertices, and the active `SWater` descriptor's first amplitude/period and
+tiling values. The backend updates only the water vertex buffer at 20 Hz and
+submits it between terrain and world objects. A US1.2 ARM64 run loaded the Asia
+water DDS and reported 2,575 mask nodes, 3,021 rendered nodes, and 5,532
+triangles with no runtime error.
 
 ## Implemented In This Slice
 
@@ -443,19 +453,15 @@ include or expose:
 - Granny runtime API in mesh, skeleton, and animation loaders.
 - MSVC-only language extensions and pragmas.
 
-The next critical path is no longer the first render boundary; clear/present,
-solid primitive submit, minimal Android texture lock/upload, textured-quad
-submission, the first `C2DQuadsRenderer::AddRect()` adapter, and a
-file-backed `GTexture.cpp` DDS/DXT load gate are proven. The next renderer
-layer is legacy UI integration: connect real DB-referenced UI textures,
-font/text, and menu/briefing layouts to this adapter, then replace the temporary
-immediate-mode stubs with proper batching/render-target behavior.
-After that, the larger render work remains terrain,
-static/skinned meshes, particles, water, full terrain-conforming shadow maps,
-shader translation, and post effects. In parallel, the bootstrap loop still
-needs to be split into the real
-legacy main/simulation frame, and the Android mission-state bridge still needs
-replacement by the portable parts of `CScenarioTracker`.
+The first render boundary is no longer the critical path: terrain materials,
+converted static/skinned meshes, action animations, descriptor particles and
+lights, fog of war, original HUD textures, and dynamic water are all proven on
+ARM64. The remaining renderer work is full GPU/runtime skinning, transition
+clips, effect-attached Granny geometry, terrain-conforming shadow maps, more
+complete legacy shader translation, and post effects. UI work still includes
+the full briefing, chapter-map, statistics, and progression layouts, plus
+replacement of temporary immediate-mode stubs with proper batching and
+render-target behavior.
 
 ## Current Content Evidence
 
