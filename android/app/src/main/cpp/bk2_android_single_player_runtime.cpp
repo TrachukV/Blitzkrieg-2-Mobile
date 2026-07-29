@@ -1266,17 +1266,20 @@ GeometryBinding ResolveGeometryBinding(
 
 WorldObjectMesh::Layer* FindOrAddWorldObjectLayer(
         WorldObjectMesh* mesh,
-        const std::string& texture_path) {
+        const std::string& texture_path,
+        bool alpha_masked_shadow = false) {
     if (mesh == nullptr || texture_path.empty()) {
         return nullptr;
     }
     for (WorldObjectMesh::Layer& layer : mesh->layers) {
-        if (layer.texture_path == texture_path) {
+        if (layer.texture_path == texture_path &&
+            layer.alpha_masked_shadow == alpha_masked_shadow) {
             return &layer;
         }
     }
     mesh->layers.push_back(WorldObjectMesh::Layer());
     mesh->layers.back().texture_path = texture_path;
+    mesh->layers.back().alpha_masked_shadow = alpha_masked_shadow;
     return &mesh->layers.back();
 }
 
@@ -1463,6 +1466,116 @@ void AppendProjectedGeometryShadow(
     }
 }
 
+void AppendAlphaMaskedGeometryShadow(
+        WorldObjectMesh* mesh,
+        const ConvertedGeometry& geometry,
+        const GeometryBinding& binding,
+        float x,
+        float y,
+        float z,
+        float cosine,
+        float sine,
+        ConvertedAnimationVariant animation_variant,
+        float animation_time_seconds) {
+    if (mesh == nullptr || binding.texture_paths.empty()) {
+        return;
+    }
+    constexpr float kShadowProjectionX = 0.42f;
+    constexpr float kShadowProjectionY = -0.28f;
+    constexpr uint32_t kShadowArgb = 0x3411170du;
+    const uint32_t shadow_abgr = ArgbToAbgr(kShadowArgb);
+    int material_base = 0;
+    for (size_t part_index = 0;
+         part_index < geometry.parts.size();
+         ++part_index) {
+        const ConvertedGeometryPart& part = geometry.parts[part_index];
+        const std::vector<ConvertedGeometryVertex>* vertices =
+                SelectConvertedGeometryVertices(
+                        part,
+                        animation_variant,
+                        animation_time_seconds);
+        const uint32_t vertex_base =
+                static_cast<uint32_t>(mesh->vertices.size());
+        mesh->vertices.reserve(mesh->vertices.size() + vertices->size());
+        for (const ConvertedGeometryVertex& vertex : *vertices) {
+            const float local_x =
+                    binding.geometry_scale *
+                    (cosine * vertex.x - sine * vertex.y);
+            const float local_y =
+                    binding.geometry_scale *
+                    (sine * vertex.x + cosine * vertex.y);
+            const float local_height = std::max(
+                    binding.geometry_scale * vertex.z,
+                    0.0f);
+            mesh->vertices.push_back(TerrainVertex{
+                    x + local_x + local_height * kShadowProjectionX,
+                    y + local_y + local_height * kShadowProjectionY,
+                    z + 0.08f,
+                    vertex.u,
+                    vertex.v,
+                    shadow_abgr});
+        }
+
+        if (binding.material_quantities.empty()) {
+            const int material_index = std::min(
+                    static_cast<int>(part_index),
+                    static_cast<int>(binding.texture_paths.size()) - 1);
+            WorldObjectMesh::Layer* layer =
+                    FindOrAddWorldObjectLayer(
+                            mesh,
+                            binding.texture_paths[material_index],
+                            true);
+            if (layer != nullptr) {
+                layer->alpha_blended = true;
+                AppendPartIndices(
+                        &layer->triangle_indices,
+                        part,
+                        vertex_base,
+                        0,
+                        static_cast<uint32_t>(
+                                part.triangle_indices.size()));
+            }
+            continue;
+        }
+
+        const int material_count =
+                part_index < binding.material_quantities.size()
+                ? binding.material_quantities[part_index]
+                : 0;
+        for (const ConvertedGeometryGroup& group : part.groups) {
+            const int material_index = material_count > 0
+                    ? material_base +
+                            std::min(
+                                    static_cast<int>(
+                                            group.material_index),
+                                    material_count - 1)
+                    : -1;
+            if (material_index < 0 ||
+                material_index >=
+                        static_cast<int>(
+                                binding.texture_paths.size())) {
+                continue;
+            }
+            WorldObjectMesh::Layer* layer =
+                    FindOrAddWorldObjectLayer(
+                            mesh,
+                            binding.texture_paths[material_index],
+                            true);
+            if (layer == nullptr) {
+                continue;
+            }
+            layer->alpha_blended = true;
+            AppendPartIndices(
+                    &layer->triangle_indices,
+                    part,
+                    vertex_base,
+                    group.first_index,
+                    group.index_count);
+        }
+        material_base += material_count;
+    }
+}
+
 bool AppendConvertedGeometry(
         WorldObjectMesh* mesh,
         uint64_t stats_path_hash,
@@ -1478,6 +1591,7 @@ bool AppendConvertedGeometry(
         bool alpha_blended,
         bool alpha_tested,
         bool cast_projected_shadow,
+        bool cast_alpha_masked_shadow,
         int frame_index) {
     if (mesh == nullptr) {
         return false;
@@ -1534,6 +1648,19 @@ bool AppendConvertedGeometry(
     const float sine = std::sin(heading);
     if (cast_projected_shadow) {
         AppendProjectedGeometryShadow(
+                mesh,
+                *geometry,
+                binding,
+                x,
+                y,
+                z,
+                cosine,
+                sine,
+                animation_variant,
+                animation_time_seconds);
+    }
+    if (cast_alpha_masked_shadow) {
+        AppendAlphaMaskedGeometryShadow(
                 mesh,
                 *geometry,
                 binding,
@@ -1839,6 +1966,7 @@ void AppendEntityModel(
                 false,
                 false,
                 true,
+                false,
                 -1)) {
         return;
     }
@@ -2243,6 +2371,7 @@ void AppendMapObjects(
                     false,
                     flora,
                     !flora,
+                    flora,
                     object.nFrameIndex)) {
             ++g_converted_geometry_fallback_count;
             ++g_static_fallback_stats_paths[
@@ -4138,6 +4267,16 @@ std::string SinglePlayerRuntimeReport() {
     for (const TerrainLayer& layer : g_terrain_mesh.layers) {
         terrain_layer_triangles += layer.triangle_indices.size() / 3;
     }
+    size_t alpha_masked_shadow_layers = 0;
+    size_t alpha_masked_shadow_triangles = 0;
+    for (const WorldObjectMesh::Layer& layer :
+         g_static_world_object_mesh.layers) {
+        if (layer.alpha_masked_shadow) {
+            ++alpha_masked_shadow_layers;
+            alpha_masked_shadow_triangles +=
+                    layer.triangle_indices.size() / 3;
+        }
+    }
     std::vector<std::pair<std::string, size_t> > static_fallbacks(
             g_static_fallback_stats_paths.begin(),
             g_static_fallback_stats_paths.end());
@@ -4201,6 +4340,10 @@ std::string SinglePlayerRuntimeReport() {
            << "; rendered_objects=" << g_rendered_object_count
            << "; dynamic_rendered_objects="
            << g_dynamic_rendered_object_count
+           << "; alpha_masked_shadow_layers="
+           << alpha_masked_shadow_layers
+           << "; alpha_masked_shadow_triangles="
+           << alpha_masked_shadow_triangles
            << "; converted_geometry_cache="
            << g_converted_geometries.size()
            << "; missing_converted_geometry="

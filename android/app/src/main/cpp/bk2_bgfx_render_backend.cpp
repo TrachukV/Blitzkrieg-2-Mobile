@@ -19,6 +19,8 @@
 #include "fs_debugdraw_fill_texture.bin.h"
 #include "vs_debugdraw_fill_mesh.bin.h"
 #include "vs_debugdraw_fill_texture.bin.h"
+#include "shaders/generated/fs_bk2_alpha_masked_shadow_essl.bin.h"
+#include "shaders/generated/fs_bk2_alpha_masked_shadow_spv.bin.h"
 #include "shaders/generated/fs_bk2_alpha_test_essl.bin.h"
 #include "shaders/generated/fs_bk2_alpha_test_spv.bin.h"
 
@@ -38,6 +40,10 @@ const bgfx::EmbeddedShader kRectShaders[] = {
 
 const bgfx::EmbeddedShader kAlphaTestShaders[] = {
         BGFX_EMBEDDED_SHADER(fs_bk2_alpha_test),
+        BGFX_EMBEDDED_SHADER_END()};
+
+const bgfx::EmbeddedShader kAlphaMaskedShadowShaders[] = {
+        BGFX_EMBEDDED_SHADER(fs_bk2_alpha_masked_shadow),
         BGFX_EMBEDDED_SHADER_END()};
 
 const float kIdentityMatrix[16] = {
@@ -213,9 +219,20 @@ public:
                         bgfx::getRendererType(),
                         "fs_bk2_alpha_test"),
                 true);
+        alpha_masked_shadow_program_ = bgfx::createProgram(
+                bgfx::createEmbeddedShader(
+                        kRectShaders,
+                        bgfx::getRendererType(),
+                        "vs_debugdraw_fill_texture"),
+                bgfx::createEmbeddedShader(
+                        kAlphaMaskedShadowShaders,
+                        bgfx::getRendererType(),
+                        "fs_bk2_alpha_masked_shadow"),
+                true);
         if (!bgfx::isValid(rect_program_) ||
             !bgfx::isValid(textured_rect_program_) ||
             !bgfx::isValid(alpha_test_program_) ||
+            !bgfx::isValid(alpha_masked_shadow_program_) ||
             !bgfx::isValid(rect_uniform_) ||
             !bgfx::isValid(texture_sampler_)) {
             last_error_ = "bgfx primitive shader initialization failed";
@@ -261,6 +278,10 @@ public:
         if (bgfx::isValid(alpha_test_program_)) {
             bgfx::destroy(alpha_test_program_);
             alpha_test_program_ = BGFX_INVALID_HANDLE;
+        }
+        if (bgfx::isValid(alpha_masked_shadow_program_)) {
+            bgfx::destroy(alpha_masked_shadow_program_);
+            alpha_masked_shadow_program_ = BGFX_INVALID_HANDLE;
         }
         if (bgfx::isValid(rect_program_)) {
             bgfx::destroy(rect_program_);
@@ -851,10 +872,13 @@ private:
                 layer_state &= ~BGFX_STATE_WRITE_Z;
                 layer_state |= BGFX_STATE_BLEND_ALPHA;
             }
-            const bgfx::ProgramHandle program = layer.alpha_tested
-                    ? alpha_test_program_
-                    : textured_rect_program_;
-            if (layer.alpha_tested) {
+            const bgfx::ProgramHandle program =
+                    layer.alpha_masked_shadow
+                    ? alpha_masked_shadow_program_
+                    : layer.alpha_tested
+                            ? alpha_test_program_
+                            : textured_rect_program_;
+            if (layer.alpha_tested || layer.alpha_masked_shadow) {
                 layer_state |= BGFX_STATE_ALPHA_REF(120);
             }
             bgfx::setState(layer_state);
@@ -1012,6 +1036,8 @@ private:
     bgfx::ProgramHandle rect_program_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle textured_rect_program_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle alpha_test_program_ = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle alpha_masked_shadow_program_ =
+            BGFX_INVALID_HANDLE;
     bgfx::UniformHandle rect_uniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle texture_sampler_ = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle terrain_vertex_buffer_ = BGFX_INVALID_HANDLE;

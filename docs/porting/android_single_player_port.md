@@ -43,11 +43,13 @@ objects out of 2,254 map records with `missing_converted_geometry=0`. Flora
 uses its original DDS material through a dedicated alpha-test fragment shader.
 It discards texels below the desktop renderer's reference value of 120 and
 keeps depth writes enabled; checked-in GLES3 and SPIR-V binaries cover both
-Android bgfx backends. Its coarse convex projected-shadow fallback remains
-disabled to avoid casting the complete crossed billboard cards. Opaque small
-props keep their projected shadows. Unit `5198` remained selectable over the
-restored vegetation and populated its original world ring, portrait, health
-card, and action grid.
+Android bgfx backends. Flora shadows reuse the projected Granny triangles and
+UVs with a second masked shader, so the ground receives translucent leaf and
+branch silhouettes rather than the complete crossed billboard cards. Opaque
+small props keep their convex projected shadows. US1.2 produced 19 masked
+shadow layers and 199,194 projected triangles. Unit `5198` remained selectable
+over the restored vegetation and populated its original world ring, portrait,
+health card, and action grid.
 The Android build packages the required 4.2 MiB original HUD subset and the TGA
 loader uses it only when the corresponding external `Complete/UI` file is
 missing. This keeps the original panel functional after a partial content sync

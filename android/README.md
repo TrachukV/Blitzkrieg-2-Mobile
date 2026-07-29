@@ -758,14 +758,18 @@ variants are checked in beside the shader source, covering the emulator and
 physical-device bgfx backends without requiring `shaderc` on the Android build
 host. This replaces the earlier alpha-blending compatibility path and prevents
 billboard draw-order artifacts and translucent foliage edges. The renderer
-still skips its coarse convex projected-shadow fallback for flora: projecting
-the complete crossed billboard cards produced large dark hulls rather than
-texture silhouettes. Non-flora props remain opaque and keep their projected
-shadows. A fresh ARM64 GLES3 emulator run reported
+does not use its coarse convex projected-shadow fallback for flora: it projects
+the original Granny triangles, preserves their UVs, applies the same alpha-test
+mask, and outputs a reduced-opacity shadow color. Crossed billboard planes
+therefore produce leaf and branch silhouettes instead of large dark hulls.
+Non-flora props remain opaque and keep their projected shadows. A fresh ARM64
+GLES3 emulator run reported
 `map_objects=2254`, `rendered_objects=2180`,
 `dynamic_rendered_objects=160`, `converted_geometry_cache=66`, and
-`missing_converted_geometry=0`; selecting unit `5198` still populated its
-world ring, portrait, health card, and action grid over the restored vegetation.
+`missing_converted_geometry=0`. The masked shadow pass contributed 19 texture
+layers and 199,194 projected triangles. Selecting unit `5198` still populated
+its world ring, portrait, health card, and action grid over the restored
+vegetation.
 
 The F10 menu
 now owns an explicit native user-pause state rather than merely
@@ -871,6 +875,9 @@ The first model-shadow layer projects every converted Granny vertex along one
 sun direction, computes a convex ground hull, and submits that hull once through
 an alpha-blended white-texture layer. Static hulls remain in the cached world
 mesh; dynamic hulls are rebuilt from the currently selected animation frame.
+Alpha-tested flora takes a more precise path: the projected mesh retains the
+original UVs and passes through a dedicated masked-shadow shader, so only the
+texture's leaf/branch silhouette darkens the ground.
 This restores the strong readable ground contact visible in the original game
 without using generic circular blobs. It is not yet the desktop engine's
 terrain-conforming shadow-map renderer, so steep terrain and self-shadowing
