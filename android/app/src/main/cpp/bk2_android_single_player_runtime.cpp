@@ -2522,6 +2522,15 @@ std::string SinglePlayerRuntimeReport() {
             [](const auto& left, const auto& right) {
                 return left.second > right.second;
             });
+    std::vector<std::pair<uint64_t, size_t> > dynamic_fallbacks(
+            g_dynamic_fallback_stats_hashes.begin(),
+            g_dynamic_fallback_stats_hashes.end());
+    std::sort(
+            dynamic_fallbacks.begin(),
+            dynamic_fallbacks.end(),
+            [](const auto& left, const auto& right) {
+                return left.second > right.second;
+            });
     std::ostringstream report;
     report << "single_player_runtime=" << (g_ready ? "ready" : "not_ready")
            << "; error=" << (g_last_error.empty() ? "<none>" : g_last_error)
@@ -2597,8 +2606,17 @@ std::string SinglePlayerRuntimeReport() {
         report << static_fallbacks[index].first
                << ":" << static_fallbacks[index].second;
     }
-    report
-           << "; presentation_snapshot="
+    report << "; dynamic_fallback_sample=";
+    for (size_t index = 0;
+         index < std::min<size_t>(dynamic_fallbacks.size(), 8);
+         ++index) {
+        if (index > 0) {
+            report << "|";
+        }
+        report << std::hex << dynamic_fallbacks[index].first
+               << std::dec << ":" << dynamic_fallbacks[index].second;
+    }
+    report << "; presentation_snapshot="
            << (g_presentation_snapshot_written ? "written" : "not_written")
            << "; " << LegacyGameRuntimeReport();
     return report.str();

@@ -524,6 +524,19 @@ missing meshes. On GER1.0 these substitutions take
 proxy; the previously reported remaining fallbacks came from the obsolete
 preview pass rather than the rendered world.
 
+The Japanese assault landing boat uses Oodle1-compressed geometry
+`92D68E1C-6B9E-4930-90A2-2B92D658005E`, which the open converter cannot decode.
+The Android index therefore uses the shipped Japanese `Ka-Tsu` amphibious model
+at `1.3x` scale as an explicit stand-in. Its dimensions and gameplay class are
+closer than the other decodable naval assets; the original descriptor and
+blocked stream remain untouched for later replacement.
+
+The Japan assault-squad officer has the same Oodle1 limitation in
+`Assault_officer/1_1_Model.xdb`. Its shipped main-squad Nambu officer model
+(record `1805`) has identical declared dimensions and is used without scaling.
+This removes the last live proxy encountered on `US1.2` while preserving the
+correct nation, role, skeleton family, and original material.
+
 Granny resources can use either numeric filenames or UUID filenames. The
 converter and index now assign the latter the same stable positive runtime ID
 and reject collisions before conversion. The current complete pass requests

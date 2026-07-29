@@ -48,6 +48,22 @@ MISSING_MODEL_FALLBACKS = {
 
 UNSUPPORTED_MODEL_FALLBACKS = {
     (
+        "units/infantry/japan/assault_officer/"
+        "1_1_model.xdb"
+    ): (
+        "units/infantry/japan/main_squad/ms_officer_nambu/"
+        "summer_jp_officer_pistol_model.xdb",
+        1.0,
+    ),
+    (
+        "units/technics/japan/ships/assaultlandingboat/"
+        "1_model.xdb"
+    ): (
+        "units/technics/japan/ships/ka-tsu/"
+        "summer_katsu_model.xdb",
+        1.3,
+    ),
+    (
         "units/technics/gb/ships/lst_lsi_gb/1_model.xdb"
     ): (
         "units/technics/gb/ships/elko/summer_whole_model.xdb",
