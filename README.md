@@ -51,10 +51,11 @@ use their original disabled artwork. The original minimap-corner Esc/F10 and
 Objectives buttons now use their shipped art, XDB placement, and live Android
 actions instead of invisible touch zones. The minimap also applies the legacy
 map-specific DDS background and AI war-fog snapshot with the original
-128-alpha darkening, and accepts tap/drag camera navigation inside its diamond.
-The APK carries the small original HUD subset as a fallback, so an incomplete
-external content sync no longer replaces that panel with a dark debug
-rectangle. Original combat textures now provide
+128-alpha darkening, accepts tap/drag camera navigation inside its diamond, and
+draws the original magenta viewport polygon from the current 3D camera. The APK
+carries the small original HUD subset as a fallback, so an incomplete external
+content sync no longer replaces that panel with a dark debug rectangle.
+Original combat textures now provide
 tracer ribbons, muzzle flashes, and animated fire/smoke on destroyed mechanized
 units. Static objects and live units now cast translucent projected silhouettes
 derived from their actual converted Granny vertices; animated infantry shadows

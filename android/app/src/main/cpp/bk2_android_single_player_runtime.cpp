@@ -2885,11 +2885,12 @@ int FindEntityNearScreenLocked(
     return best_id;
 }
 
-bool ScreenToTerrainLocked(
+bool ScreenToTerrainIntersectionLocked(
         float screen_x,
         float screen_y,
         uint32_t viewport_width,
         uint32_t viewport_height,
+        bool require_inside_map,
         float* world_x,
         float* world_y) {
     if (world_x == nullptr ||
@@ -2981,15 +2982,33 @@ bool ScreenToTerrainLocked(
             static_cast<float>(g_height_width - 1) * VIS_TILE_SIZE;
     const float max_y =
             static_cast<float>(g_height_height - 1) * VIS_TILE_SIZE;
-    if (intersection_x < 0.0f ||
-        intersection_y < 0.0f ||
-        intersection_x > max_x ||
-        intersection_y > max_y) {
+    if (require_inside_map &&
+        (intersection_x < 0.0f ||
+         intersection_y < 0.0f ||
+         intersection_x > max_x ||
+         intersection_y > max_y)) {
         return false;
     }
     *world_x = intersection_x;
     *world_y = intersection_y;
     return true;
+}
+
+bool ScreenToTerrainLocked(
+        float screen_x,
+        float screen_y,
+        uint32_t viewport_width,
+        uint32_t viewport_height,
+        float* world_x,
+        float* world_y) {
+    return ScreenToTerrainIntersectionLocked(
+            screen_x,
+            screen_y,
+            viewport_width,
+            viewport_height,
+            true,
+            world_x,
+            world_y);
 }
 
 bool LoadTextureImmediately(
@@ -4416,6 +4435,170 @@ std::vector<int32_t> MissionMinimapArgb(int width, int height) {
                                 static_cast<int32_t>(color);
                     }
                 }
+            }
+        }
+    }
+
+    const uint32_t viewport_width = RenderBackend().width();
+    const uint32_t viewport_height = RenderBackend().content_height();
+    const float maximum_world_x =
+            static_cast<float>(g_height_width - 1) * VIS_TILE_SIZE;
+    const float maximum_world_y =
+            static_cast<float>(g_height_height - 1) * VIS_TILE_SIZE;
+    if (viewport_width > 0 &&
+        viewport_height > 0 &&
+        maximum_world_x > 0.0f &&
+        maximum_world_y > 0.0f) {
+        const float screen_x[4] = {
+                0.0f,
+                static_cast<float>(viewport_width),
+                static_cast<float>(viewport_width),
+                0.0f};
+        const float screen_y[4] = {
+                0.0f,
+                0.0f,
+                static_cast<float>(viewport_height),
+                static_cast<float>(viewport_height)};
+        int frame_x[4] = {};
+        int frame_y[4] = {};
+        bool has_viewport_frame = true;
+        for (int index = 0; index < 4; ++index) {
+            float world_x = 0.0f;
+            float world_y = 0.0f;
+            if (!ScreenToTerrainIntersectionLocked(
+                        screen_x[index],
+                        screen_y[index],
+                        viewport_width,
+                        viewport_height,
+                        false,
+                        &world_x,
+                        &world_y)) {
+                has_viewport_frame = false;
+                break;
+            }
+            frame_x[index] = static_cast<int>(std::lround(
+                    world_x / maximum_world_x *
+                    static_cast<float>(width - 1)));
+            frame_y[index] = static_cast<int>(std::lround(
+                    (1.0f - world_y / maximum_world_y) *
+                    static_cast<float>(height - 1)));
+        }
+        if (has_viewport_frame) {
+            constexpr uint32_t kViewportFrameArgb = 0xffff80ffu;
+            const auto draw_line =
+                    [&pixels, width, height](
+                            int x0,
+                            int y0,
+                            int x1,
+                            int y1) {
+                        const auto out_code =
+                                [width, height](int x, int y) {
+                                    int code = 0;
+                                    if (x < 0) {
+                                        code |= 1;
+                                    } else if (x >= width) {
+                                        code |= 2;
+                                    }
+                                    if (y < 0) {
+                                        code |= 4;
+                                    } else if (y >= height) {
+                                        code |= 8;
+                                    }
+                                    return code;
+                                };
+                        bool visible = false;
+                        for (int iteration = 0;
+                             iteration < 8;
+                             ++iteration) {
+                            const int code0 = out_code(x0, y0);
+                            const int code1 = out_code(x1, y1);
+                            if ((code0 | code1) == 0) {
+                                visible = true;
+                                break;
+                            }
+                            if ((code0 & code1) != 0) {
+                                break;
+                            }
+                            const int outside =
+                                    code0 != 0 ? code0 : code1;
+                            double clipped_x = 0.0;
+                            double clipped_y = 0.0;
+                            if ((outside & 8) != 0) {
+                                clipped_y =
+                                        static_cast<double>(height - 1);
+                                clipped_x = x0 +
+                                        static_cast<double>(x1 - x0) *
+                                        (clipped_y - y0) /
+                                        static_cast<double>(y1 - y0);
+                            } else if ((outside & 4) != 0) {
+                                clipped_y = 0.0;
+                                clipped_x = x0 +
+                                        static_cast<double>(x1 - x0) *
+                                        (clipped_y - y0) /
+                                        static_cast<double>(y1 - y0);
+                            } else if ((outside & 2) != 0) {
+                                clipped_x =
+                                        static_cast<double>(width - 1);
+                                clipped_y = y0 +
+                                        static_cast<double>(y1 - y0) *
+                                        (clipped_x - x0) /
+                                        static_cast<double>(x1 - x0);
+                            } else {
+                                clipped_x = 0.0;
+                                clipped_y = y0 +
+                                        static_cast<double>(y1 - y0) *
+                                        (clipped_x - x0) /
+                                        static_cast<double>(x1 - x0);
+                            }
+                            if (outside == code0) {
+                                x0 = static_cast<int>(
+                                        std::lround(clipped_x));
+                                y0 = static_cast<int>(
+                                        std::lround(clipped_y));
+                            } else {
+                                x1 = static_cast<int>(
+                                        std::lround(clipped_x));
+                                y1 = static_cast<int>(
+                                        std::lround(clipped_y));
+                            }
+                        }
+                        if (!visible) {
+                            return;
+                        }
+                        const int delta_x = std::abs(x1 - x0);
+                        const int step_x = x0 < x1 ? 1 : -1;
+                        const int delta_y = -std::abs(y1 - y0);
+                        const int step_y = y0 < y1 ? 1 : -1;
+                        int error = delta_x + delta_y;
+                        for (;;) {
+                            if (x0 >= 0 && x0 < width &&
+                                y0 >= 0 && y0 < height) {
+                                pixels[static_cast<size_t>(
+                                        y0 * width + x0)] =
+                                        static_cast<int32_t>(
+                                                kViewportFrameArgb);
+                            }
+                            if (x0 == x1 && y0 == y1) {
+                                break;
+                            }
+                            const int doubled_error = error * 2;
+                            if (doubled_error >= delta_y) {
+                                error += delta_y;
+                                x0 += step_x;
+                            }
+                            if (doubled_error <= delta_x) {
+                                error += delta_x;
+                                y0 += step_y;
+                            }
+                        }
+                    };
+            for (int index = 0; index < 4; ++index) {
+                const int next = (index + 1) % 4;
+                draw_line(
+                        frame_x[index],
+                        frame_y[index],
+                        frame_x[next],
+                        frame_y[next]);
             }
         }
     }

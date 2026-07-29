@@ -726,10 +726,12 @@ colors only as a fallback. It applies the live
 overlay and 0-alpha visible-cell endpoint. Friendly and currently visible
 hostile units remain readable above that layer; the active selection is yellow.
 Tap or drag inside the diamond converts back to terrain coordinates and updates
-the shared camera target without changing zoom or yaw. The `US1.2` runtime
-loaded `us1_2_8x8_minimap_texture.dds` at `256x256`; a verified tap logged
-`normalized=0.504808,0.476562` and moved the target to
-`177.692,184.25,0`. The F10
+the shared camera target without changing zoom or yaw. As in desktop
+`CWindowMiniMap::SetViewport`, a magenta polygon traces the four current
+battlefield camera rays and is clipped by the minimap frame. The `US1.2`
+runtime loaded `us1_2_8x8_minimap_texture.dds` at `256x256`; verified taps
+moved both the camera and that polygon from `177.692,184.25,0` to
+`130.549,213.714,3.99608`. The F10
 menu returns to the native single-player mission list without terminating the
 app process. The center panel now follows the original battle-screen layout:
 mission/objective text is kept at the top-left, while selecting a real legacy

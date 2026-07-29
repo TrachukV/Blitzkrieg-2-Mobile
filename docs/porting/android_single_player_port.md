@@ -30,9 +30,11 @@ drawn after that layer, with the active selection highlighted in yellow.
 Touches are clipped to the original diamond; tap and one-finger drag convert
 its normalized coordinates back to terrain coordinates, update the shared
 camera target and terrain height, and leave the current zoom and yaw intact.
-On the ARM64 emulator `US1.2` loaded its shipped 256x256 minimap, and a tap
-logged `normalized=0.504808,0.476562` before moving the camera target to
-`177.692,184.25,0`.
+The desktop `pViewPortLayer` is also restored: four rays through the actual
+bgfx content viewport intersect the terrain and produce the original magenta
+camera polygon above fog and unit markers. On the ARM64 emulator `US1.2` loaded
+its shipped 256x256 minimap; two taps moved both the camera and polygon from
+`177.692,184.25,0` to `130.549,213.714,3.99608`.
 The Android build packages the required 4.2 MiB original HUD subset and the TGA
 loader uses it only when the corresponding external `Complete/UI` file is
 missing. This keeps the original panel functional after a partial content sync
