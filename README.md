@@ -44,10 +44,12 @@ supported infantry animations through bgfx, renders the live legacy fog-of-war
 grid and hides enemies the player's party cannot see, restores sea/lake
 surfaces from each map's original `seaMask` with the season-specific DDS and
 descriptor-timed waves, reconstructs terrain roads from their original
-`SRoadDesc`/`SVSOInstance` curves and seasonal DDS atlases, and uses the shipped
-mission HUD, minimap, unit portraits, and hit bars. Its original 4x3 command
-grid is rebuilt from the selected legacy unit's available actions instead of a
-fixed mobile button row; Move, Attack, Rotate, Stop, Entrench, Stand Ground,
+`SRoadDesc`/`SVSOInstance` curves and seasonal DDS atlases, carves and renders
+descriptor-driven rivers from the original `SRiverDesc` control points and
+water materials, and uses the shipped mission HUD, minimap, unit portraits, and
+hit bars. Its original 4x3 command grid is rebuilt from the selected legacy
+unit's available actions instead of a fixed mobile button row; Move, Attack,
+Rotate, Stop, Entrench, Stand Ground,
 Spyglass, Clear Mines, Place Mines, and the original two-point Build Trenches
 command reach the original simulation, while commands without a ported handler
 use their original disabled artwork. The original minimap-corner Esc/F10 and

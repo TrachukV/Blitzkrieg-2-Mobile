@@ -138,6 +138,16 @@ DDS paths, and three ready GPU texture handles. The visible starting-area road
 also confirms that the required `AI2Vis` transform is applied; using the raw
 0-to-8192 editor coordinates would place all road geometry outside the
 0-to-352 rendered world.
+Terrain rivers now use the same coordinate and descriptor path. Before terrain
+material layers are copied, the runtime applies the four-unit depth modifier
+from `RiversBuilder.cpp` to the shared heightfield and reproduces its four-tile
+ridge transition. It then emits the original eight-cell bottom ribbon and up to
+two alpha-water ribbons using the `SRiverDesc` cell counts, center opacity,
+tiling, per-point width/opacity, and seasonal `bottom.dds`, `water.dds`, and
+`water2.dds`. GB3.1 verified one 279-point river, 278 segments, 11,676
+triangles, 1,926 carved heightfield vertices, and three ready Summer DDS GPU
+handles. The desktop seeded border disturbance and `StreamSpeed` UV movement
+are not yet reproduced.
 
 ## Implemented In This Slice
 

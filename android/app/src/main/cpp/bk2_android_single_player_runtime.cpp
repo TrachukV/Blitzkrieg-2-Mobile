@@ -59,6 +59,14 @@ constexpr float kWaterAnimationStepSeconds = 1.0f / 20.0f;
 constexpr float kWaterWaveHeightScale = 0.08f;
 constexpr uint32_t kWaterVertexColor = 0xd8ffffffu;
 constexpr float kLegacyRoadHeight = 0.1f;
+constexpr float kLegacyRiverDepth = 4.0f;
+constexpr float kLegacyRiverWaterLevel = 0.1f;
+constexpr float kLegacyRiverWaterHeightBias = 0.5f;
+constexpr float kLegacyRiverWaterExpand = 0.25f;
+constexpr float kLegacyRiverRidgeTiles = 4.0f;
+constexpr float kLegacyRiverRidgeNull =
+        1.41421356237309504880f / kLegacyRiverRidgeTiles;
+constexpr int kLegacyRiverBottomCells = 8;
 constexpr const char* kInfantryTraceTexture =
         "Scene/TexAndMats/All/Units/Weapons/GunShotTraceBlue_Texture.dds";
 constexpr const char* kMechanizedTraceTexture =
@@ -124,6 +132,13 @@ size_t g_road_triangle_count = 0;
 size_t g_road_texture_count = 0;
 size_t g_road_texture_gpu_count = 0;
 bool g_road_texture_logged = false;
+size_t g_river_instance_count = 0;
+size_t g_river_point_count = 0;
+size_t g_river_triangle_count = 0;
+size_t g_river_texture_count = 0;
+size_t g_river_texture_gpu_count = 0;
+size_t g_river_carved_vertex_count = 0;
+bool g_river_texture_logged = false;
 WorldObjectMesh g_static_world_object_mesh;
 WorldObjectMesh g_world_object_mesh;
 CObj<NGfx::CTexture> g_terrain_texture;
@@ -621,6 +636,138 @@ bool BuildTerrainMesh(
     g_height_height = height;
     g_triangle_count = tile_count * 2;
     return true;
+}
+
+void CarveTerrainRivers(
+        const NDb::SMapInfo* map,
+        TerrainMesh* mesh) {
+    g_river_carved_vertex_count = 0;
+    if (map == nullptr || mesh == nullptr || mesh->vertices.empty()) {
+        return;
+    }
+
+    struct RiverCarveSegment {
+        float start_x = 0.0f;
+        float start_y = 0.0f;
+        float end_x = 0.0f;
+        float end_y = 0.0f;
+        float start_half_width = 0.0f;
+        float end_half_width = 0.0f;
+    };
+    std::vector<RiverCarveSegment> segments;
+    for (const NDb::SVSOInstance& river : map->rivers) {
+        if (river.points.size() < 2 ||
+            !river.pDescriptor ||
+            river.pDescriptor->GetTypeID() !=
+                    NDb::SRiverDesc::typeID) {
+            continue;
+        }
+        segments.reserve(
+                segments.size() + river.points.size() - 1);
+        for (size_t index = 0;
+             index + 1 < river.points.size();
+             ++index) {
+            const NDb::SVSOPoint& start = river.points[index];
+            const NDb::SVSOPoint& end = river.points[index + 1];
+            RiverCarveSegment segment{
+                    AI2Vis(start.vPos.x),
+                    AI2Vis(start.vPos.y),
+                    AI2Vis(end.vPos.x),
+                    AI2Vis(end.vPos.y),
+                    AI2Vis(start.fWidth),
+                    AI2Vis(end.fWidth)};
+            const float dx = segment.end_x - segment.start_x;
+            const float dy = segment.end_y - segment.start_y;
+            if (std::isfinite(dx) &&
+                std::isfinite(dy) &&
+                dx * dx + dy * dy > 0.000001f &&
+                segment.start_half_width > 0.0f &&
+                segment.end_half_width > 0.0f) {
+                segments.push_back(segment);
+            }
+        }
+    }
+    if (segments.empty()) {
+        return;
+    }
+
+    const float ridge_width =
+            VIS_TILE_SIZE * kLegacyRiverRidgeTiles;
+    double carved_height_sum = 0.0;
+    for (TerrainVertex& vertex : mesh->vertices) {
+        float carve_depth = 0.0f;
+        for (const RiverCarveSegment& segment : segments) {
+            const float segment_x = segment.end_x - segment.start_x;
+            const float segment_y = segment.end_y - segment.start_y;
+            const float segment_length_squared =
+                    segment_x * segment_x +
+                    segment_y * segment_y;
+            const float projection = std::clamp(
+                    ((vertex.x - segment.start_x) * segment_x +
+                     (vertex.y - segment.start_y) * segment_y) /
+                            segment_length_squared,
+                    0.0f,
+                    1.0f);
+            const float closest_x =
+                    segment.start_x + segment_x * projection;
+            const float closest_y =
+                    segment.start_y + segment_y * projection;
+            const float distance_x = vertex.x - closest_x;
+            const float distance_y = vertex.y - closest_y;
+            const float distance = std::sqrt(
+                    distance_x * distance_x +
+                    distance_y * distance_y);
+            const float half_width =
+                    segment.start_half_width +
+                    (segment.end_half_width -
+                     segment.start_half_width) *
+                            projection;
+            if (distance > half_width + ridge_width) {
+                continue;
+            }
+            float profile = 1.0f;
+            if (distance > half_width) {
+                const float ridge_position =
+                        (distance - half_width) / ridge_width;
+                if (ridge_position > kLegacyRiverRidgeNull) {
+                    const float transition = std::clamp(
+                            (ridge_position -
+                             kLegacyRiverRidgeNull) /
+                                    (1.0f -
+                                     kLegacyRiverRidgeNull),
+                            0.0f,
+                            1.0f);
+                    profile = 1.0f - transition * transition;
+                }
+            }
+            carve_depth = std::max(
+                    carve_depth,
+                    kLegacyRiverDepth * profile);
+        }
+        if (carve_depth <= 0.0001f) {
+            continue;
+        }
+        vertex.z -= carve_depth;
+        carved_height_sum += carve_depth;
+        ++g_river_carved_vertex_count;
+    }
+    if (!mesh->vertices.empty()) {
+        mesh->center_z -= static_cast<float>(
+                carved_height_sum /
+                static_cast<double>(mesh->vertices.size()));
+    }
+
+    std::ostringstream report;
+    report << "terrain_river_carve="
+           << (g_river_carved_vertex_count > 0
+                       ? "ready"
+                       : "empty")
+           << "; rivers=" << map->rivers.size()
+           << "; segments=" << segments.size()
+           << "; vertices=" << g_river_carved_vertex_count
+           << "; depth=" << kLegacyRiverDepth
+           << "; ridge_width=" << ridge_width;
+    PlatformRuntime::instance().log_info(report.str());
 }
 
 uint8_t WaterMaskAt(const STerrainInfo& info, int x, int y) {
@@ -1564,6 +1711,28 @@ size_t FindOrAddAlphaWorldObjectLayer(
     return mesh->layers.size() - 1;
 }
 
+size_t FindOrAddOpaqueWorldObjectLayer(
+        WorldObjectMesh* mesh,
+        const std::string& texture_path) {
+    if (mesh == nullptr || texture_path.empty()) {
+        return std::numeric_limits<size_t>::max();
+    }
+    for (size_t index = 0; index < mesh->layers.size(); ++index) {
+        const WorldObjectMesh::Layer& layer = mesh->layers[index];
+        if (layer.texture_path == texture_path &&
+            !layer.alpha_blended &&
+            !layer.additive_blended &&
+            !layer.alpha_tested &&
+            !layer.alpha_masked_shadow &&
+            !layer.depth_test_always) {
+            return index;
+        }
+    }
+    mesh->layers.push_back(WorldObjectMesh::Layer());
+    mesh->layers.back().texture_path = texture_path;
+    return mesh->layers.size() - 1;
+}
+
 struct RoadRenderLayer {
     size_t mesh_layer_index = std::numeric_limits<size_t>::max();
     float texture_u_min = 0.0f;
@@ -1573,7 +1742,7 @@ struct RoadRenderLayer {
     float opacity = 1.0f;
 };
 
-std::string FallbackRoadTexturePath(const NDb::SVSODesc* descriptor) {
+std::string NormalizedDescriptorPath(const NDb::SVSODesc* descriptor) {
     if (descriptor == nullptr) {
         return std::string();
     }
@@ -1591,6 +1760,10 @@ std::string FallbackRoadTexturePath(const NDb::SVSODesc* descriptor) {
             [](unsigned char value) {
                 return static_cast<char>(std::tolower(value));
             });
+    return descriptor_path;
+}
+
+const char* DescriptorSeasonFolder(const std::string& descriptor_path) {
     const char* season = nullptr;
     for (const char* candidate : {
                  "winter",
@@ -1606,6 +1779,14 @@ std::string FallbackRoadTexturePath(const NDb::SVSODesc* descriptor) {
             break;
         }
     }
+    return season;
+}
+
+std::string FallbackRoadTexturePath(const NDb::SVSODesc* descriptor) {
+    const std::string descriptor_path =
+            NormalizedDescriptorPath(descriptor);
+    const char* season =
+            DescriptorSeasonFolder(descriptor_path);
     if (season == nullptr) {
         return std::string();
     }
@@ -1983,6 +2164,463 @@ void AppendTerrainRoads(
            << "; segments=" << g_road_segment_count
            << "; triangles=" << g_road_triangle_count
            << "; textures=" << g_road_texture_count;
+    PlatformRuntime::instance().log_info(report.str());
+}
+
+std::string FallbackRiverTexturePath(
+        const NDb::SVSODesc* descriptor,
+        const char* texture_name) {
+    if (descriptor == nullptr ||
+        texture_name == nullptr ||
+        *texture_name == '\0') {
+        return std::string();
+    }
+    const char* season = DescriptorSeasonFolder(
+            NormalizedDescriptorPath(descriptor));
+    if (season == nullptr) {
+        return std::string();
+    }
+    return std::string("Terrain/Water/") + season + "/" +
+            texture_name + ".dds";
+}
+
+struct RiverRenderLayer {
+    size_t mesh_layer_index = std::numeric_limits<size_t>::max();
+    int cells = 2;
+    float width_scale = 1.0f;
+    float opacity = 1.0f;
+    float tiling_step = 0.1f;
+    bool bottom = false;
+};
+
+struct RiverPointGeometry {
+    float center_x = 0.0f;
+    float center_y = 0.0f;
+    float normal_x = 0.0f;
+    float normal_y = 1.0f;
+    float half_width = 0.0f;
+    float bottom_height = 0.0f;
+    float water_height = 0.0f;
+    float opacity = 1.0f;
+};
+
+bool ConfigureRiverRenderLayer(
+        const NDb::SVSODesc* descriptor,
+        const NDb::SMaterial* material,
+        const char* fallback_texture_name,
+        int cells,
+        float width_scale,
+        float opacity,
+        float tiling_step,
+        bool bottom,
+        WorldObjectMesh* mesh,
+        RiverRenderLayer* layer) {
+    if (descriptor == nullptr ||
+        mesh == nullptr ||
+        layer == nullptr) {
+        return false;
+    }
+    const NDb::STexture* texture =
+            material != nullptr && material->pTexture
+            ? material->pTexture.GetPtr()
+            : nullptr;
+    const std::string texture_path =
+            texture != nullptr && !texture->szDestName.empty()
+            ? std::string(texture->szDestName.c_str())
+            : FallbackRiverTexturePath(
+                      descriptor,
+                      fallback_texture_name);
+    if (texture_path.empty()) {
+        return false;
+    }
+    layer->cells = std::clamp(cells, 2, 24);
+    layer->width_scale = std::max(width_scale, 0.05f);
+    layer->opacity = std::clamp(opacity, 0.0f, 1.0f);
+    layer->tiling_step =
+            std::isfinite(tiling_step) && tiling_step > 0.0f
+            ? tiling_step
+            : 0.1f;
+    layer->bottom = bottom;
+    layer->mesh_layer_index =
+            bottom
+            ? FindOrAddOpaqueWorldObjectLayer(mesh, texture_path)
+            : FindOrAddAlphaWorldObjectLayer(mesh, texture_path);
+    return layer->mesh_layer_index !=
+            std::numeric_limits<size_t>::max();
+}
+
+std::vector<RiverPointGeometry> BuildRiverPointGeometry(
+        const NDb::SVSOInstance& river,
+        const STerrainInfo& terrain_info) {
+    std::vector<RiverPointGeometry> points;
+    points.reserve(river.points.size());
+    float previous_bottom_pre_height =
+            std::numeric_limits<float>::max();
+    for (size_t index = 0;
+         index < river.points.size();
+         ++index) {
+        const NDb::SVSOPoint& source = river.points[index];
+        RiverPointGeometry point;
+        point.center_x = AI2Vis(source.vPos.x);
+        point.center_y = AI2Vis(source.vPos.y);
+        point.half_width = AI2Vis(source.fWidth);
+        point.normal_x = source.vNorm.x;
+        point.normal_y = source.vNorm.y;
+        float normal_length = std::sqrt(
+                point.normal_x * point.normal_x +
+                point.normal_y * point.normal_y);
+        if (!std::isfinite(normal_length) ||
+            normal_length <= 0.0001f) {
+            const NDb::SVSOPoint* adjacent =
+                    index + 1 < river.points.size()
+                    ? &river.points[index + 1]
+                    : (index > 0 ? &river.points[index - 1] : nullptr);
+            if (adjacent != nullptr) {
+                const float direction_x =
+                        AI2Vis(adjacent->vPos.x - source.vPos.x);
+                const float direction_y =
+                        AI2Vis(adjacent->vPos.y - source.vPos.y);
+                normal_length = std::sqrt(
+                        direction_x * direction_x +
+                        direction_y * direction_y);
+                if (normal_length > 0.0001f) {
+                    point.normal_x = -direction_y / normal_length;
+                    point.normal_y = direction_x / normal_length;
+                    normal_length = 1.0f;
+                }
+            }
+        }
+        if (!std::isfinite(point.center_x) ||
+            !std::isfinite(point.center_y) ||
+            !std::isfinite(point.half_width) ||
+            point.half_width <= 0.001f ||
+            !std::isfinite(normal_length) ||
+            normal_length <= 0.0001f) {
+            continue;
+        }
+        point.normal_x /= normal_length;
+        point.normal_y /= normal_length;
+        point.opacity = std::clamp(source.fOpacity, 0.0f, 1.0f);
+
+        const float left_x =
+                point.center_x -
+                point.normal_x * point.half_width;
+        const float left_y =
+                point.center_y -
+                point.normal_y * point.half_width;
+        const float right_x =
+                point.center_x +
+                point.normal_x * point.half_width;
+        const float right_y =
+                point.center_y +
+                point.normal_y * point.half_width;
+        const float bottom_pre_height = std::min(
+                std::min(
+                        TerrainHeightAt(terrain_info, left_x, left_y),
+                        TerrainHeightAt(terrain_info, right_x, right_y)) -
+                        kLegacyRiverDepth,
+                previous_bottom_pre_height);
+        point.bottom_height =
+                std::max(bottom_pre_height, 0.0f);
+        point.water_height =
+                std::max(
+                        bottom_pre_height +
+                                kLegacyRiverWaterLevel,
+                        point.bottom_height + 0.04f) +
+                kLegacyRiverWaterHeightBias;
+        previous_bottom_pre_height = bottom_pre_height;
+        points.push_back(point);
+    }
+    return points;
+}
+
+void AppendRiverLayerSegment(
+        const RiverPointGeometry& current,
+        const RiverPointGeometry& next,
+        float texture_v,
+        float next_texture_v,
+        const RiverRenderLayer& river_layer,
+        WorldObjectMesh* mesh) {
+    if (mesh == nullptr ||
+        river_layer.mesh_layer_index >= mesh->layers.size()) {
+        return;
+    }
+    const uint32_t vertex_base =
+            static_cast<uint32_t>(mesh->vertices.size());
+    const auto append_row =
+            [&](const RiverPointGeometry& point, float v) {
+        for (int cell = 0; cell < river_layer.cells; ++cell) {
+            const float u =
+                    static_cast<float>(cell) /
+                    static_cast<float>(river_layer.cells - 1);
+            const float side = u * 2.0f - 1.0f;
+            const float x =
+                    point.center_x +
+                    point.normal_x *
+                            point.half_width *
+                            river_layer.width_scale *
+                            side;
+            const float y =
+                    point.center_y +
+                    point.normal_y *
+                            point.half_width *
+                            river_layer.width_scale *
+                            side;
+            float z = point.water_height;
+            float alpha_factor = 1.0f;
+            if (river_layer.bottom) {
+                z = point.bottom_height +
+                        u * (1.0f - u) * 0.1f;
+            } else if (cell == 0 ||
+                       cell + 1 == river_layer.cells) {
+                alpha_factor = 0.0f;
+            }
+            const uint32_t alpha = static_cast<uint32_t>(
+                    std::lround(
+                            std::clamp(
+                                    point.opacity *
+                                            river_layer.opacity *
+                                            alpha_factor,
+                                    0.0f,
+                                    1.0f) *
+                            255.0f));
+            mesh->vertices.push_back(TerrainVertex{
+                    x,
+                    y,
+                    z,
+                    u,
+                    v,
+                    (alpha << 24) | 0x00ffffffu});
+        }
+    };
+    append_row(current, texture_v);
+    append_row(next, next_texture_v);
+
+    WorldObjectMesh::Layer& output =
+            mesh->layers[river_layer.mesh_layer_index];
+    for (int cell = 0;
+         cell + 1 < river_layer.cells;
+         ++cell) {
+        const uint32_t current_left =
+                vertex_base + static_cast<uint32_t>(cell);
+        const uint32_t current_right = current_left + 1;
+        const uint32_t next_left =
+                vertex_base +
+                static_cast<uint32_t>(river_layer.cells + cell);
+        const uint32_t next_right = next_left + 1;
+        output.triangle_indices.push_back(current_left);
+        output.triangle_indices.push_back(next_left);
+        output.triangle_indices.push_back(current_right);
+        output.triangle_indices.push_back(current_right);
+        output.triangle_indices.push_back(next_left);
+        output.triangle_indices.push_back(next_right);
+        g_river_triangle_count += 2;
+    }
+}
+
+bool AppendRiverInstance(
+        const NDb::SVSOInstance& river,
+        const STerrainInfo& terrain_info,
+        WorldObjectMesh* mesh,
+        std::unordered_set<std::string>* texture_paths) {
+    if (mesh == nullptr ||
+        river.points.size() < 2 ||
+        !river.pDescriptor) {
+        return false;
+    }
+    const NDb::SVSODesc* base_descriptor =
+            river.pDescriptor.GetPtr();
+    if (base_descriptor == nullptr ||
+        base_descriptor->GetTypeID() != NDb::SRiverDesc::typeID) {
+        return false;
+    }
+    const NDb::SRiverDesc* descriptor =
+            static_cast<const NDb::SRiverDesc*>(
+                    base_descriptor);
+    std::vector<RiverRenderLayer> layers;
+    layers.reserve(3);
+    const auto add_layer =
+            [&](const NDb::SMaterial* material,
+                const char* fallback_texture_name,
+                int cells,
+                float width_scale,
+                float opacity,
+                float tiling_step,
+                bool bottom) {
+        RiverRenderLayer layer;
+        if (!ConfigureRiverRenderLayer(
+                    descriptor,
+                    material,
+                    fallback_texture_name,
+                    cells,
+                    width_scale,
+                    opacity,
+                    tiling_step,
+                    bottom,
+                    mesh,
+                    &layer)) {
+            return;
+        }
+        if (texture_paths != nullptr) {
+            texture_paths->insert(
+                    mesh->layers[layer.mesh_layer_index].texture_path);
+        }
+        layers.push_back(layer);
+    };
+    add_layer(
+            descriptor->pBottomMaterial.GetPtr(),
+            "bottom",
+            kLegacyRiverBottomCells,
+            1.0f,
+            1.0f,
+            0.1f,
+            true);
+    for (size_t layer_index = 0;
+         layer_index < descriptor->waterLayers.size() &&
+         layer_index < 2;
+         ++layer_index) {
+        const NDb::SVSOLayerCenterDesc& source =
+                descriptor->waterLayers[layer_index];
+        const NDb::SMaterial* material =
+                source.materials.empty()
+                ? nullptr
+                : source.materials.front().GetPtr();
+        add_layer(
+                material,
+                layer_index == 0 ? "water" : "water2",
+                source.nNumCells,
+                layer_index == 0
+                        ? 1.0f + kLegacyRiverWaterExpand
+                        : 1.0f - kLegacyRiverWaterExpand,
+                source.fCenterOpacity,
+                source.fTilingStep,
+                false);
+    }
+    if (layers.empty()) {
+        return false;
+    }
+
+    const std::vector<RiverPointGeometry> points =
+            BuildRiverPointGeometry(river, terrain_info);
+    if (points.size() < 2) {
+        return false;
+    }
+    std::vector<float> texture_v(layers.size(), 0.0f);
+    for (size_t point_index = 0;
+         point_index + 1 < points.size();
+         ++point_index) {
+        const RiverPointGeometry& current = points[point_index];
+        const RiverPointGeometry& next = points[point_index + 1];
+        const float dx = next.center_x - current.center_x;
+        const float dy = next.center_y - current.center_y;
+        const float segment_length = std::sqrt(dx * dx + dy * dy);
+        if (!std::isfinite(segment_length) ||
+            segment_length <= 0.001f) {
+            continue;
+        }
+        for (size_t layer_index = 0;
+             layer_index < layers.size();
+             ++layer_index) {
+            const RiverRenderLayer& layer = layers[layer_index];
+            const float next_v =
+                    texture_v[layer_index] +
+                    (layer.bottom
+                             ? segment_length /
+                                       std::max(
+                                               next.half_width * 2.0f,
+                                               0.001f)
+                             : layer.tiling_step);
+            AppendRiverLayerSegment(
+                    current,
+                    next,
+                    texture_v[layer_index],
+                    next_v,
+                    layer,
+                    mesh);
+            texture_v[layer_index] = next_v;
+        }
+    }
+    g_river_point_count += points.size();
+    return true;
+}
+
+void AppendTerrainRivers(
+        const NDb::SMapInfo* map,
+        const STerrainInfo& terrain_info,
+        WorldObjectMesh* mesh) {
+    g_river_instance_count = 0;
+    g_river_point_count = 0;
+    g_river_triangle_count = 0;
+    g_river_texture_count = 0;
+    g_river_texture_gpu_count = 0;
+    g_river_texture_logged = false;
+    if (map == nullptr || mesh == nullptr) {
+        return;
+    }
+    std::unordered_set<std::string> texture_paths;
+    bool first_descriptor_logged = false;
+    for (const NDb::SVSOInstance& river : map->rivers) {
+        if (!first_descriptor_logged) {
+            const NDb::SVSODesc* descriptor =
+                    river.pDescriptor
+                    ? river.pDescriptor.GetPtr()
+                    : nullptr;
+            std::ostringstream descriptor_report;
+            descriptor_report
+                    << "terrain_river_descriptor="
+                    << (descriptor == nullptr
+                                ? "<unavailable>"
+                                : descriptor->GetDBID().ToString().c_str())
+                    << "; type="
+                    << (descriptor == nullptr
+                                ? -1
+                                : descriptor->GetTypeID())
+                    << "; expected_type="
+                    << NDb::SRiverDesc::typeID
+                    << "; points=" << river.points.size()
+                    << "; bottom_texture="
+                    << FallbackRiverTexturePath(
+                               descriptor,
+                               "bottom")
+                    << "; water_texture="
+                    << FallbackRiverTexturePath(
+                               descriptor,
+                               "water")
+                    << "; water2_texture="
+                    << FallbackRiverTexturePath(
+                               descriptor,
+                               "water2");
+            if (descriptor != nullptr &&
+                descriptor->GetTypeID() ==
+                        NDb::SRiverDesc::typeID) {
+                const NDb::SRiverDesc* river_descriptor =
+                        static_cast<const NDb::SRiverDesc*>(
+                                descriptor);
+                descriptor_report
+                        << "; water_layers="
+                        << river_descriptor->waterLayers.size();
+            }
+            PlatformRuntime::instance().log_info(
+                    descriptor_report.str());
+            first_descriptor_logged = true;
+        }
+        if (AppendRiverInstance(
+                    river,
+                    terrain_info,
+                    mesh,
+                    &texture_paths)) {
+            ++g_river_instance_count;
+        }
+    }
+    g_river_texture_count = texture_paths.size();
+    std::ostringstream report;
+    report << "terrain_rivers="
+           << (g_river_instance_count > 0 ? "ready" : "empty")
+           << "; descriptors=" << map->rivers.size()
+           << "; rendered=" << g_river_instance_count
+           << "; points=" << g_river_point_count
+           << "; triangles=" << g_river_triangle_count
+           << "; textures=" << g_river_texture_count;
     PlatformRuntime::instance().log_info(report.str());
 }
 
@@ -3510,6 +4148,7 @@ void BuildPresentationStaticWorldMesh(
             true,
             true,
             mesh);
+    AppendTerrainRivers(map, terrain_info, mesh);
     AppendTerrainRoads(map, terrain_info, mesh);
 }
 
@@ -4360,6 +4999,8 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
     }
     size_t road_texture_layers = 0;
     size_t road_texture_ready = 0;
+    size_t river_texture_layers = 0;
+    size_t river_texture_ready = 0;
     for (WorldObjectMesh::Layer& layer : mesh->layers) {
         layer.texture_handle =
                 ModelTextureHandle(layer.texture_path);
@@ -4367,6 +5008,12 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
             ++road_texture_layers;
             if (layer.texture_handle != UINT16_MAX) {
                 ++road_texture_ready;
+            }
+        }
+        if (layer.texture_path.find("Terrain/Water/") == 0) {
+            ++river_texture_layers;
+            if (layer.texture_handle != UINT16_MAX) {
+                ++river_texture_ready;
             }
         }
         if (layer.alpha_blended &&
@@ -4432,6 +5079,18 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
                    << "; total=" << road_texture_layers;
             PlatformRuntime::instance().log_info(report.str());
             g_road_texture_logged = true;
+        }
+    }
+    if (river_texture_layers > 0) {
+        g_river_texture_gpu_count = river_texture_ready;
+        if (!g_river_texture_logged &&
+            river_texture_ready == river_texture_layers) {
+            std::ostringstream report;
+            report << "terrain_river_textures_gpu=ready"
+                   << "; ready=" << river_texture_ready
+                   << "; total=" << river_texture_layers;
+            PlatformRuntime::instance().log_info(report.str());
+            g_river_texture_logged = true;
         }
     }
 }
@@ -4620,6 +5279,7 @@ bool InitializeSinglePlayerRuntime() {
     if (!BuildTerrainMesh(terrain_info, &mesh, &g_last_error)) {
         return false;
     }
+    CarveTerrainRivers(map, &mesh);
     BuildTerrainLayers(map, terrain_info, &mesh);
     WaterMesh water_mesh;
     BuildWaterMesh(map, terrain_info, &water_mesh);
@@ -4769,6 +5429,13 @@ void ShutdownSinglePlayerRuntime() {
     g_road_texture_count = 0;
     g_road_texture_gpu_count = 0;
     g_road_texture_logged = false;
+    g_river_instance_count = 0;
+    g_river_point_count = 0;
+    g_river_triangle_count = 0;
+    g_river_texture_count = 0;
+    g_river_texture_gpu_count = 0;
+    g_river_carved_vertex_count = 0;
+    g_river_texture_logged = false;
     g_converted_geometry_instance_count = 0;
     g_converted_geometry_fallback_count = 0;
     g_animated_geometry_part_count = 0;
@@ -5552,6 +6219,18 @@ std::string SinglePlayerRuntimeReport() {
            << g_water_wave_amplitude
            << "; water_wave_period="
            << g_water_wave_period
+           << "; terrain_river_instances="
+           << g_river_instance_count
+           << "; terrain_river_points="
+           << g_river_point_count
+           << "; terrain_river_triangles="
+           << g_river_triangle_count
+           << "; terrain_river_textures="
+           << g_river_texture_count
+           << "; terrain_river_textures_gpu="
+           << g_river_texture_gpu_count
+           << "; terrain_river_carved_vertices="
+           << g_river_carved_vertex_count
            << "; terrain_road_instances="
            << g_road_instance_count
            << "; terrain_road_segments="

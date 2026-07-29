@@ -534,6 +534,18 @@ and all three referenced Asia road DDS files received valid GPU handles. The
 road running through the starting friendly formation is visible above the
 terrain and below units, vegetation, shadows, and legacy fog of war.
 
+Terrain rivers now follow the original `RiversBuilder.cpp` path far enough to
+restore both the terrain modifier and the visible water. The runtime converts
+each `SRiverDesc`/`SVSOInstance` control point and width with `AI2Vis`, carves
+the heightfield by the desktop four-unit river depth with its four-tile ridge
+transition, and rebuilds the eight-cell bottom plus two descriptor-sized
+alpha-water ribbons. The original per-point opacity, center opacity, tiling,
+season, and `bottom.dds`, `water.dds`, and `water2.dds` assets are preserved.
+On ARM64 GB3.1 the one 279-point river produced 11,676 triangles, carved 1,926
+terrain vertices, and loaded all three Summer DDS files into valid GPU handles.
+The small seeded edge disturbance and stream-speed UV animation from the
+desktop renderer remain follow-up work.
+
 The Android content step now decodes the shipped Granny format-6/Oodle0
 geometry into a small native `BK2MSH1` cache. The complete current pass yields
 2,510 renderable geometry files (1,126,692 vertices and 731,200 triangles);
