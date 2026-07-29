@@ -78,6 +78,9 @@ size_t g_animated_geometry_part_count = 0;
 size_t g_move_animation_instance_count = 0;
 size_t g_attack_animation_instance_count = 0;
 size_t g_death_animation_instance_count = 0;
+size_t g_lying_idle_animation_instance_count = 0;
+size_t g_lying_move_animation_instance_count = 0;
+size_t g_lying_attack_animation_instance_count = 0;
 size_t g_combat_effect_render_count = 0;
 size_t g_active_combat_effect_count = 0;
 size_t g_active_unit_indicator_count = 0;
@@ -87,6 +90,9 @@ enum class ConvertedAnimationVariant {
     Move,
     Attack,
     Death,
+    LyingIdle,
+    LyingMove,
+    LyingAttack,
 };
 
 struct ConvertedGeometryVertex {
@@ -133,6 +139,12 @@ std::unordered_map<int, ConvertedGeometry> g_attack_converted_geometries;
 std::unordered_set<int> g_missing_attack_converted_geometries;
 std::unordered_map<int, ConvertedGeometry> g_death_converted_geometries;
 std::unordered_set<int> g_missing_death_converted_geometries;
+std::unordered_map<int, ConvertedGeometry> g_lying_idle_converted_geometries;
+std::unordered_set<int> g_missing_lying_idle_converted_geometries;
+std::unordered_map<int, ConvertedGeometry> g_lying_move_converted_geometries;
+std::unordered_set<int> g_missing_lying_move_converted_geometries;
+std::unordered_map<int, ConvertedGeometry> g_lying_attack_converted_geometries;
+std::unordered_set<int> g_missing_lying_attack_converted_geometries;
 std::unordered_map<int32_t, float> g_death_animation_start_seconds;
 std::unordered_map<uint64_t, GeometryBinding> g_stats_geometry_index;
 std::unordered_map<
@@ -908,6 +920,21 @@ const ConvertedGeometry* LoadConvertedGeometry(
         converted_geometries = &g_death_converted_geometries;
         missing_converted_geometries = &g_missing_death_converted_geometries;
         filename_suffix = ".death.bk2mesh";
+    } else if (animation_variant == ConvertedAnimationVariant::LyingIdle) {
+        converted_geometries = &g_lying_idle_converted_geometries;
+        missing_converted_geometries =
+                &g_missing_lying_idle_converted_geometries;
+        filename_suffix = ".lying.bk2mesh";
+    } else if (animation_variant == ConvertedAnimationVariant::LyingMove) {
+        converted_geometries = &g_lying_move_converted_geometries;
+        missing_converted_geometries =
+                &g_missing_lying_move_converted_geometries;
+        filename_suffix = ".lying.move.bk2mesh";
+    } else if (animation_variant == ConvertedAnimationVariant::LyingAttack) {
+        converted_geometries = &g_lying_attack_converted_geometries;
+        missing_converted_geometries =
+                &g_missing_lying_attack_converted_geometries;
+        filename_suffix = ".lying.attack.bk2mesh";
     }
     const auto loaded = converted_geometries->find(record_id);
     if (loaded != converted_geometries->end()) {
@@ -1228,6 +1255,18 @@ bool AppendConvertedGeometry(
         } else if (animation_variant == ConvertedAnimationVariant::Death) {
             instance_count = &g_death_animation_instance_count;
             diagnostic = "death_animation_runtime=active; geometry=";
+        } else if (animation_variant ==
+                   ConvertedAnimationVariant::LyingIdle) {
+            instance_count = &g_lying_idle_animation_instance_count;
+            diagnostic = "lying_idle_animation_runtime=active; geometry=";
+        } else if (animation_variant ==
+                   ConvertedAnimationVariant::LyingMove) {
+            instance_count = &g_lying_move_animation_instance_count;
+            diagnostic = "lying_move_animation_runtime=active; geometry=";
+        } else if (animation_variant ==
+                   ConvertedAnimationVariant::LyingAttack) {
+            instance_count = &g_lying_attack_animation_instance_count;
+            diagnostic = "lying_attack_animation_runtime=active; geometry=";
         }
         ++*instance_count;
         if (*instance_count == 1) {
@@ -1513,6 +1552,14 @@ void AppendEntityModel(
     if ((entity.flags & BK2_PRESENTATION_ENTITY_INFANTRY) != 0) {
         if ((entity.flags & BK2_PRESENTATION_ENTITY_DEAD) != 0) {
             animation_variant = ConvertedAnimationVariant::Death;
+        } else if ((entity.flags & BK2_PRESENTATION_ENTITY_LYING) != 0 &&
+                   (entity.flags & BK2_PRESENTATION_ENTITY_ATTACKING) != 0) {
+            animation_variant = ConvertedAnimationVariant::LyingAttack;
+        } else if ((entity.flags & BK2_PRESENTATION_ENTITY_LYING) != 0 &&
+                   (entity.flags & BK2_PRESENTATION_ENTITY_MOVING) != 0) {
+            animation_variant = ConvertedAnimationVariant::LyingMove;
+        } else if ((entity.flags & BK2_PRESENTATION_ENTITY_LYING) != 0) {
+            animation_variant = ConvertedAnimationVariant::LyingIdle;
         } else if ((entity.flags & BK2_PRESENTATION_ENTITY_ATTACKING) != 0) {
             animation_variant = ConvertedAnimationVariant::Attack;
         } else if ((entity.flags & BK2_PRESENTATION_ENTITY_MOVING) != 0) {
@@ -2576,6 +2623,9 @@ void ShutdownSinglePlayerRuntime() {
     g_move_animation_instance_count = 0;
     g_attack_animation_instance_count = 0;
     g_death_animation_instance_count = 0;
+    g_lying_idle_animation_instance_count = 0;
+    g_lying_move_animation_instance_count = 0;
+    g_lying_attack_animation_instance_count = 0;
     g_combat_effect_render_count = 0;
     g_active_combat_effect_count = 0;
     g_active_unit_indicator_count = 0;
@@ -2587,6 +2637,12 @@ void ShutdownSinglePlayerRuntime() {
     g_missing_attack_converted_geometries.clear();
     g_death_converted_geometries.clear();
     g_missing_death_converted_geometries.clear();
+    g_lying_idle_converted_geometries.clear();
+    g_missing_lying_idle_converted_geometries.clear();
+    g_lying_move_converted_geometries.clear();
+    g_missing_lying_move_converted_geometries.clear();
+    g_lying_attack_converted_geometries.clear();
+    g_missing_lying_attack_converted_geometries.clear();
     g_death_animation_start_seconds.clear();
     g_stats_geometry_index.clear();
     g_stats_geometry_variants.clear();
@@ -2829,6 +2885,18 @@ std::string SinglePlayerRuntimeReport() {
            << g_death_converted_geometries.size()
            << "; missing_death_geometry="
            << g_missing_death_converted_geometries.size()
+           << "; lying_idle_geometry_cache="
+           << g_lying_idle_converted_geometries.size()
+           << "; missing_lying_idle_geometry="
+           << g_missing_lying_idle_converted_geometries.size()
+           << "; lying_move_geometry_cache="
+           << g_lying_move_converted_geometries.size()
+           << "; missing_lying_move_geometry="
+           << g_missing_lying_move_converted_geometries.size()
+           << "; lying_attack_geometry_cache="
+           << g_lying_attack_converted_geometries.size()
+           << "; missing_lying_attack_geometry="
+           << g_missing_lying_attack_converted_geometries.size()
            << "; stats_geometry_index="
            << g_stats_geometry_index.size()
            << "; model_texture_layers="
@@ -2846,6 +2914,12 @@ std::string SinglePlayerRuntimeReport() {
            << g_attack_animation_instance_count
            << "; death_animation_instances="
            << g_death_animation_instance_count
+           << "; lying_idle_animation_instances="
+           << g_lying_idle_animation_instance_count
+           << "; lying_move_animation_instances="
+           << g_lying_move_animation_instance_count
+           << "; lying_attack_animation_instances="
+           << g_lying_attack_animation_instance_count
            << "; combat_effect_renders="
            << g_combat_effect_render_count
            << "; active_combat_effects_rendered="

@@ -14,6 +14,7 @@
 #include "AILogic/AIMap.h"
 #include "AILogic/AIUnit.h"
 #include "AILogic/NewUpdater.h"
+#include "AILogic/Soldier.h"
 #include "AILogic/Statistics.h"
 #include "AILogic/UnitStates.h"
 #include "AILogic/UnitsIterators.h"
@@ -709,6 +710,10 @@ void PublishPresentationEntities() {
         }
         if (unit->IsFormation()) {
             flags |= BK2_PRESENTATION_ENTITY_FORMATION;
+        }
+        const CSoldier* soldier = dynamic_cast<const CSoldier*>(unit);
+        if (soldier != nullptr && soldier->IsLying()) {
+            flags |= BK2_PRESENTATION_ENTITY_LYING;
         }
         IUnitState* state = unit->GetState();
         const EUnitStateNames state_name =
@@ -1478,6 +1483,38 @@ void HandleLegacyInputEvent(const char* event_name) {
                         target->IsInfantry());
             }
             target->Die(false, target->GetHitPoints() + 1.0f);
+        }
+    } else if (std::strcmp(event_name, "debug_toggle_lying") == 0) {
+        CSoldier* soldier = nullptr;
+        if (g_selected_unit_id >= 0) {
+            soldier = dynamic_cast<CSoldier*>(
+                    CAIUnit::GetUnitByUniqueID(g_selected_unit_id));
+        }
+        if (soldier == nullptr) {
+            for (CGlobalIter iter(0, ANY_PARTY);
+                 !iter.IsFinished();
+                 iter.Iterate()) {
+                CSoldier* candidate = dynamic_cast<CSoldier*>(*iter);
+                if (candidate != nullptr &&
+                    candidate->IsAlive() &&
+                    candidate->GetPlayer() == 0) {
+                    soldier = candidate;
+                    break;
+                }
+            }
+        }
+        if (soldier != nullptr) {
+            if (soldier->IsLying()) {
+                soldier->StandUp();
+            } else {
+                soldier->LieDownForce();
+            }
+            PublishPresentationEntities();
+            PlatformRuntime::instance().log_info(
+                    std::string("debug_toggle_lying=") +
+                    std::to_string(soldier->GetUniqueIdQU()) +
+                    "; lying=" +
+                    (soldier->IsLying() ? "true" : "false"));
         }
 #endif
     }

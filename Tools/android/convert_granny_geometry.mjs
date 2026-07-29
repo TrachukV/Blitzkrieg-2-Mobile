@@ -37,6 +37,9 @@ function usage() {
       "[--move-animation <Data/bin/Animations/resource>] " +
       "[--attack-animation <Data/bin/Animations/resource>] " +
       "[--death-animation <Data/bin/Animations/resource>] " +
+      "[--lying-idle-animation <Data/bin/Animations/resource>] " +
+      "[--lying-move-animation <Data/bin/Animations/resource>] " +
+      "[--lying-attack-animation <Data/bin/Animations/resource>] " +
       "[--animation-frames <count>] " +
       "[--skip-unsupported] " +
       "[--all | <resource-id> ...]\n",
@@ -50,6 +53,9 @@ function parseArguments(argv) {
   let moveAnimation = "";
   let attackAnimation = "";
   let deathAnimation = "";
+  let lyingIdleAnimation = "";
+  let lyingMoveAnimation = "";
+  let lyingAttackAnimation = "";
   let animationFrames = DEFAULT_ANIMATION_FRAME_COUNT;
   let all = false;
   let skipUnsupported = false;
@@ -68,6 +74,12 @@ function parseArguments(argv) {
       attackAnimation = argv[++index] ?? "";
     } else if (argument === "--death-animation") {
       deathAnimation = argv[++index] ?? "";
+    } else if (argument === "--lying-idle-animation") {
+      lyingIdleAnimation = argv[++index] ?? "";
+    } else if (argument === "--lying-move-animation") {
+      lyingMoveAnimation = argv[++index] ?? "";
+    } else if (argument === "--lying-attack-animation") {
+      lyingAttackAnimation = argv[++index] ?? "";
     } else if (argument === "--animation-frames") {
       animationFrames = Number.parseInt(argv[++index] ?? "", 10);
     } else if (argument === "--all") {
@@ -99,6 +111,15 @@ function parseArguments(argv) {
     moveAnimation: moveAnimation ? resolve(moveAnimation) : "",
     attackAnimation: attackAnimation ? resolve(attackAnimation) : "",
     deathAnimation: deathAnimation ? resolve(deathAnimation) : "",
+    lyingIdleAnimation: lyingIdleAnimation
+      ? resolve(lyingIdleAnimation)
+      : "",
+    lyingMoveAnimation: lyingMoveAnimation
+      ? resolve(lyingMoveAnimation)
+      : "",
+    lyingAttackAnimation: lyingAttackAnimation
+      ? resolve(lyingAttackAnimation)
+      : "",
     animationFrames,
     all,
     skipUnsupported,
@@ -379,6 +400,9 @@ async function convertOne(
   moveAnimation,
   attackAnimation,
   deathAnimation,
+  lyingIdleAnimation,
+  lyingMoveAnimation,
+  lyingAttackAnimation,
 ) {
   const source = join(options.input, id);
   const runtimeId = runtimeGeometryId(id);
@@ -420,6 +444,24 @@ async function convertOne(
     options.animationFrames,
     join(options.output, `${runtimeId}.death.bk2mesh`),
   );
+  const lyingIdle = await writeAnimationVariant(
+    parsed,
+    lyingIdleAnimation,
+    options.animationFrames,
+    join(options.output, `${runtimeId}.lying.bk2mesh`),
+  );
+  const lyingMove = await writeAnimationVariant(
+    parsed,
+    lyingMoveAnimation,
+    options.animationFrames,
+    join(options.output, `${runtimeId}.lying.move.bk2mesh`),
+  );
+  const lyingAttack = await writeAnimationVariant(
+    parsed,
+    lyingAttackAnimation,
+    options.animationFrames,
+    join(options.output, `${runtimeId}.lying.attack.bk2mesh`),
+  );
   return {
     id,
     runtimeId,
@@ -428,6 +470,9 @@ async function convertOne(
     moveOutputBytes: move.outputBytes,
     attackOutputBytes: attack.outputBytes,
     deathOutputBytes: death.outputBytes,
+    lyingIdleOutputBytes: lyingIdle.outputBytes,
+    lyingMoveOutputBytes: lyingMove.outputBytes,
+    lyingAttackOutputBytes: lyingAttack.outputBytes,
     meshes: primary.meshes.length,
     vertices: primary.meshes.reduce(
       (sum, mesh) => sum + mesh.vertexCount,
@@ -441,6 +486,9 @@ async function convertOne(
     moveAnimatedMeshes: move.animatedMeshes,
     attackAnimatedMeshes: attack.animatedMeshes,
     deathAnimatedMeshes: death.animatedMeshes,
+    lyingIdleAnimatedMeshes: lyingIdle.animatedMeshes,
+    lyingMoveAnimatedMeshes: lyingMove.animatedMeshes,
+    lyingAttackAnimatedMeshes: lyingAttack.animatedMeshes,
   };
 }
 
@@ -486,6 +534,33 @@ async function main() {
       throw new Error("death animation resource has no animation");
     }
   }
+  let lyingIdleAnimation = null;
+  if (options.lyingIdleAnimation) {
+    const animationBytes = await readFile(options.lyingIdleAnimation);
+    lyingIdleAnimation =
+      parseAnimated(toArrayBuffer(animationBytes)).animations[0] ?? null;
+    if (lyingIdleAnimation === null) {
+      throw new Error("lying idle animation resource has no animation");
+    }
+  }
+  let lyingMoveAnimation = null;
+  if (options.lyingMoveAnimation) {
+    const animationBytes = await readFile(options.lyingMoveAnimation);
+    lyingMoveAnimation =
+      parseAnimated(toArrayBuffer(animationBytes)).animations[0] ?? null;
+    if (lyingMoveAnimation === null) {
+      throw new Error("lying move animation resource has no animation");
+    }
+  }
+  let lyingAttackAnimation = null;
+  if (options.lyingAttackAnimation) {
+    const animationBytes = await readFile(options.lyingAttackAnimation);
+    lyingAttackAnimation =
+      parseAnimated(toArrayBuffer(animationBytes)).animations[0] ?? null;
+    if (lyingAttackAnimation === null) {
+      throw new Error("lying attack animation resource has no animation");
+    }
+  }
   const ids = await resourceIds(options);
   let converted = 0;
   let skipped = 0;
@@ -497,13 +572,22 @@ async function main() {
   let moveOutputBytes = 0;
   let attackOutputBytes = 0;
   let deathOutputBytes = 0;
+  let lyingIdleOutputBytes = 0;
+  let lyingMoveOutputBytes = 0;
+  let lyingAttackOutputBytes = 0;
   let animatedMeshes = 0;
   let moveAnimatedMeshes = 0;
   let attackAnimatedMeshes = 0;
   let deathAnimatedMeshes = 0;
+  let lyingIdleAnimatedMeshes = 0;
+  let lyingMoveAnimatedMeshes = 0;
+  let lyingAttackAnimatedMeshes = 0;
   let moveCacheFiles = 0;
   let attackCacheFiles = 0;
   let deathCacheFiles = 0;
+  let lyingIdleCacheFiles = 0;
+  let lyingMoveCacheFiles = 0;
+  let lyingAttackCacheFiles = 0;
   for (const id of ids) {
     try {
       const result = await convertOne(
@@ -513,6 +597,9 @@ async function main() {
         moveAnimation,
         attackAnimation,
         deathAnimation,
+        lyingIdleAnimation,
+        lyingMoveAnimation,
+        lyingAttackAnimation,
       );
       ++converted;
       vertices += result.vertices;
@@ -521,13 +608,22 @@ async function main() {
       moveOutputBytes += result.moveOutputBytes;
       attackOutputBytes += result.attackOutputBytes;
       deathOutputBytes += result.deathOutputBytes;
+      lyingIdleOutputBytes += result.lyingIdleOutputBytes;
+      lyingMoveOutputBytes += result.lyingMoveOutputBytes;
+      lyingAttackOutputBytes += result.lyingAttackOutputBytes;
       animatedMeshes += result.animatedMeshes;
       moveAnimatedMeshes += result.moveAnimatedMeshes;
       attackAnimatedMeshes += result.attackAnimatedMeshes;
       deathAnimatedMeshes += result.deathAnimatedMeshes;
+      lyingIdleAnimatedMeshes += result.lyingIdleAnimatedMeshes;
+      lyingMoveAnimatedMeshes += result.lyingMoveAnimatedMeshes;
+      lyingAttackAnimatedMeshes += result.lyingAttackAnimatedMeshes;
       moveCacheFiles += result.moveOutputBytes > 0 ? 1 : 0;
       attackCacheFiles += result.attackOutputBytes > 0 ? 1 : 0;
       deathCacheFiles += result.deathOutputBytes > 0 ? 1 : 0;
+      lyingIdleCacheFiles += result.lyingIdleOutputBytes > 0 ? 1 : 0;
+      lyingMoveCacheFiles += result.lyingMoveOutputBytes > 0 ? 1 : 0;
+      lyingAttackCacheFiles += result.lyingAttackOutputBytes > 0 ? 1 : 0;
       if (!options.all) {
         process.stdout.write(
           `geometry=${result.id}; runtime_id=${result.runtimeId}; ` +
@@ -536,11 +632,17 @@ async function main() {
             `move_animated_meshes=${result.moveAnimatedMeshes}; ` +
             `attack_animated_meshes=${result.attackAnimatedMeshes}; ` +
             `death_animated_meshes=${result.deathAnimatedMeshes}; ` +
+            `lying_idle_animated_meshes=${result.lyingIdleAnimatedMeshes}; ` +
+            `lying_move_animated_meshes=${result.lyingMoveAnimatedMeshes}; ` +
+            `lying_attack_animated_meshes=${result.lyingAttackAnimatedMeshes}; ` +
             `vertices=${result.vertices}; triangles=${result.triangles}; ` +
             `output=${basename(join(options.output, `${result.runtimeId}.bk2mesh`))}; ` +
             `move_output=${result.moveOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.move.bk2mesh`)) : "<none>"}; ` +
             `attack_output=${result.attackOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.attack.bk2mesh`)) : "<none>"}; ` +
-            `death_output=${result.deathOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.death.bk2mesh`)) : "<none>"}\n`,
+            `death_output=${result.deathOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.death.bk2mesh`)) : "<none>"}; ` +
+            `lying_idle_output=${result.lyingIdleOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.lying.bk2mesh`)) : "<none>"}; ` +
+            `lying_move_output=${result.lyingMoveOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.lying.move.bk2mesh`)) : "<none>"}; ` +
+            `lying_attack_output=${result.lyingAttackOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.lying.attack.bk2mesh`)) : "<none>"}\n`,
         );
       }
     } catch (error) {
@@ -568,9 +670,18 @@ async function main() {
       `attack_cache_files=${attackCacheFiles}; ` +
       `death_animated_meshes=${deathAnimatedMeshes}; ` +
       `death_cache_files=${deathCacheFiles}; ` +
+      `lying_idle_animated_meshes=${lyingIdleAnimatedMeshes}; ` +
+      `lying_idle_cache_files=${lyingIdleCacheFiles}; ` +
+      `lying_move_animated_meshes=${lyingMoveAnimatedMeshes}; ` +
+      `lying_move_cache_files=${lyingMoveCacheFiles}; ` +
+      `lying_attack_animated_meshes=${lyingAttackAnimatedMeshes}; ` +
+      `lying_attack_cache_files=${lyingAttackCacheFiles}; ` +
       `output_bytes=${outputBytes}; move_output_bytes=${moveOutputBytes}; ` +
       `attack_output_bytes=${attackOutputBytes}; ` +
-      `death_output_bytes=${deathOutputBytes}\n`,
+      `death_output_bytes=${deathOutputBytes}; ` +
+      `lying_idle_output_bytes=${lyingIdleOutputBytes}; ` +
+      `lying_move_output_bytes=${lyingMoveOutputBytes}; ` +
+      `lying_attack_output_bytes=${lyingAttackOutputBytes}\n`,
   );
   if (failed > 0) {
     process.exitCode = 1;

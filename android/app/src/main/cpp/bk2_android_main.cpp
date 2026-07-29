@@ -272,6 +272,10 @@ void PollInput(android_app* app) {
                 bk2::android::HandleLegacyInputEvent(
                         "debug_kill_attack_target");
                 break;
+            case AKEYCODE_L:
+                bk2::android::HandleLegacyInputEvent(
+                        "debug_toggle_lying");
+                break;
 #endif
             default:
                 break;

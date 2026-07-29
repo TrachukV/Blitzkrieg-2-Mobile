@@ -41,6 +41,9 @@ if [[ "${BK2_SKIP_GEOMETRY_CONVERSION:-0}" != "1" ]]; then
             --move-animation "${DATA_SOURCE}/Data/bin/Animations/3967" \
             --attack-animation "${DATA_SOURCE}/Data/bin/Animations/3972" \
             --death-animation "${DATA_SOURCE}/Data/bin/Animations/3961" \
+            --lying-idle-animation "${DATA_SOURCE}/Data/bin/Animations/3968" \
+            --lying-move-animation "${DATA_SOURCE}/Data/bin/Animations/3984" \
+            --lying-attack-animation "${DATA_SOURCE}/Data/bin/Animations/3970" \
             --skip-unsupported \
             --all
         python3 build_geometry_index.py \

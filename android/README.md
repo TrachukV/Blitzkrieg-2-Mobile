@@ -303,6 +303,9 @@ python3 tools/android/prepare_data_android.py \
     --move-animation ../../Versions/Current/Data/bin/Animations/3967 \
     --attack-animation ../../Versions/Current/Data/bin/Animations/3972 \
     --death-animation ../../Versions/Current/Data/bin/Animations/3961 \
+    --lying-idle-animation ../../Versions/Current/Data/bin/Animations/3968 \
+    --lying-move-animation ../../Versions/Current/Data/bin/Animations/3984 \
+    --lying-attack-animation ../../Versions/Current/Data/bin/Animations/3970 \
     --skip-unsupported \
     --all
 )
@@ -493,10 +496,13 @@ preserves Granny triangle material groups and can carry pre-skinned animation
 frames. The converter samples the shipped RIFLE idle animation through the
 mesh's real bone bindings and vertex weights; compatible infantry instances
 advance those frames in the live mission. Additional caches are emitted only
-for the same skinned meshes using the shipped RIFLE move, shoot, and death
-clips: the current pass creates 259 files per action (32,913,536 bytes each). The
-presentation bridge marks infantry from the original AI movement and attacking
-states. Android's headless runtime also forwards `CStatistics::UnitDead`
+for the same skinned meshes using the shipped RIFLE move, shoot, death,
+lying-idle, crawl, and lying-shoot clips: the current pass creates 259 files per
+action (32,913,536 bytes each). The presentation bridge marks infantry from the
+original AI movement, attacking, and `CSoldier::IsLying()` states. The renderer
+selects standing or prone action caches from those live states and falls back to
+the base idle cache when a variant is unavailable. Android's headless runtime
+also forwards `CStatistics::UnitDead`
 directly because the old desktop world client that consumed
 `SAIDeadUnitUpdate` is not linked. The renderer plays each death clip once,
 clamps on its last frame, keeps the corpse for ten seconds, and falls back to
@@ -665,16 +671,17 @@ mission ID loaded by the native runtime instead of assuming the first USA map.
 This is a playable runtime milestone, not a complete visual port. Terrain now
 uses original game materials and the first runtime model path uses original
 Granny geometry and DDS materials. Compatible rifle infantry now uses original
-bone weights plus idle/move/shoot/death animation frames selected from live AI
-state. Real `SAIInfantryShotUpdate` and `SAIMechShotUpdate` events now produce
+bone weights plus standing idle/move/shoot/death and prone
+idle/crawl/shoot animation frames selected from live AI state. Real
+`SAIInfantryShotUpdate` and `SAIMechShotUpdate` events now produce
 short-lived colored muzzle flashes and moving tracer ribbons at the source and
 destination coordinates supplied by the legacy AI simulation. Multi-mesh
 Granny models preserve all of their model mesh bindings;
 global `InitialPlacement` is intentionally not reapplied because shipped
-infantry geometry already contains the correct root placement. Stance animation
-selection, GPU/runtime skinning, projectile/explosion asset effects, complete
-briefing HUD behavior, and the original chapter-map/statistics/progression UI
-remain unfinished.
+infantry geometry already contains the correct root placement. Standing-to-prone
+and prone-to-standing transition clips, GPU/runtime skinning,
+projectile/explosion asset effects, complete briefing HUD behavior, and the
+original chapter-map/statistics/progression UI remain unfinished.
 
 The video transcode manifest now writes Android-canonical runtime paths. A Bink
 ref such as `Movies\Nival.bik` maps to `DataAndroid/Movies/Nival.mp4`, not to a

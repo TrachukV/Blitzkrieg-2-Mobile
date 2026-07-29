@@ -37,7 +37,9 @@ int main(int argc, char** argv) {
             7.0f);
     bk2::presentation::PublishWorld({}, {});
     bk2::presentation::PublishEntities(
-            {{42, 2, BK2_PRESENTATION_ENTITY_ALIVE,
+            {{42, 2,
+              BK2_PRESENTATION_ENTITY_ALIVE |
+                      BK2_PRESENTATION_ENTITY_LYING,
               8.0f, 9.0f, 10.0f, 1.25f, 75.0f,
               100.0f, 0x123456789abcdef0ull, 116, 1069, 1.0f}});
 
@@ -64,6 +66,7 @@ int main(int argc, char** argv) {
     if (bk2_presentation_copy_entities(&entity, 1) != 1 ||
         entity.id != 42 ||
         entity.player != 2 ||
+        (entity.flags & BK2_PRESENTATION_ENTITY_LYING) == 0 ||
         entity.rpg_stats_path_hash != 0x123456789abcdef0ull ||
         entity.rpg_stats_record_id != 116 ||
         entity.geometry_record_id != 1069 ||
