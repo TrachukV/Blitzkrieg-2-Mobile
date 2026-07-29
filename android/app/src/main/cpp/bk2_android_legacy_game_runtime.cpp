@@ -14,6 +14,7 @@
 #include "AILogic/AIMap.h"
 #include "AILogic/AIUnit.h"
 #include "AILogic/NewUpdater.h"
+#include "AILogic/UnitStates.h"
 #include "AILogic/UnitsIterators.h"
 #include "B2_M1_Terrain/DBTerrain.h"
 #include "B2_M1_World/MissionObjectiveStates.h"
@@ -554,6 +555,19 @@ void PublishPresentationEntities() {
         }
         if (unit->IsFormation()) {
             flags |= BK2_PRESENTATION_ENTITY_FORMATION;
+        }
+        IUnitState* state = unit->GetState();
+        const EUnitStateNames state_name =
+                state == nullptr ? EUSN_ERROR : state->GetName();
+        if (state_name == EUSN_MOVE ||
+            state_name == EUSN_MOVE_BY_FORMATION ||
+            state_name == EUSN_MOVE_TO_GRID ||
+            state_name == EUSN_MOVE_TO_RESUPPLY_CELL ||
+            state_name == EUSN_PATROL ||
+            state_name == EUSN_PLANE_PATROL ||
+            (unit->GetUniqueIdQU() == g_selected_unit_id &&
+             g_android_move_active)) {
+            flags |= BK2_PRESENTATION_ENTITY_MOVING;
         }
         const CVec3& center = unit->GetCenter();
         const NDb::SUnitBaseRPGStats* stats = unit->GetStats();

@@ -38,6 +38,7 @@ if [[ "${BK2_SKIP_GEOMETRY_CONVERSION:-0}" != "1" ]]; then
             --input "${GEOMETRY_SOURCE}" \
             --output "${CONVERTED_GEOMETRY}" \
             --idle-animation "${DATA_SOURCE}/Data/bin/Animations/3977" \
+            --move-animation "${DATA_SOURCE}/Data/bin/Animations/3967" \
             --skip-unsupported \
             --all
         python3 build_geometry_index.py \
