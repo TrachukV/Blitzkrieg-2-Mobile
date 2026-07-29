@@ -54,6 +54,9 @@ tracer ribbons, muzzle flashes, and animated fire/smoke on destroyed mechanized
 units. Static objects and live units now cast translucent projected silhouettes
 derived from their actual converted Granny vertices; animated infantry shadows
 follow the current frame instead of using fixed circles. The battlefield camera
+and terrain projection use the render-surface height minus the actual 112dp
+mission HUD inset, so units remain visible and touch picking stays aligned in
+the playable area above the original bottom panel. The battlefield camera
 now reads the original mission's 26-degree horizontal FOV, 45-degree default
 pitch/yaw, and 150/170/200 distance limits from the loaded legacy
 `ClientGameConsts`, then applies the shipped local-player camera anchor and any

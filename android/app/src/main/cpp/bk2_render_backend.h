@@ -90,11 +90,13 @@ public:
     virtual bool set_world_object_mesh(const WorldObjectMesh& mesh) = 0;
     virtual void clear_world_object_mesh() = 0;
     virtual void set_terrain_camera(const TerrainCamera& camera) = 0;
+    virtual void set_bottom_inset(uint32_t pixels) = 0;
     virtual void render_frame() = 0;
 
     virtual bool is_ready() const = 0;
     virtual uint32_t width() const = 0;
     virtual uint32_t height() const = 0;
+    virtual uint32_t content_height() const = 0;
     virtual uint64_t frame_count() const = 0;
     virtual uint64_t submitted_primitives() const = 0;
     virtual const std::string& renderer_name() const = 0;

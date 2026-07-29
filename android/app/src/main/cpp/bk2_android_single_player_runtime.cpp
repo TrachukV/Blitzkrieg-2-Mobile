@@ -4301,6 +4301,15 @@ Java_com_nival_blitzkrieg2_NativeBridge_performSelectedUnitAction(
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_setMissionHudHeightPixels(
+        JNIEnv*,
+        jclass,
+        jint height) {
+    bk2::android::RenderBackend().set_bottom_inset(
+            static_cast<uint32_t>(std::max(height, 0)));
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_nival_blitzkrieg2_NativeBridge_setMissionPaused(
         JNIEnv*,
         jclass,

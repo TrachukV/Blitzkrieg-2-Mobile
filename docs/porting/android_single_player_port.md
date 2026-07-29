@@ -20,6 +20,13 @@ missing. This keeps the original panel functional after a partial content sync
 without replacing the full external content layout. The view also restores the
 desktop mission's black backdrop beneath the TGA layers instead of exposing the
 full-screen Android render surface through the center panel.
+The Java HUD reports its actual 112dp height to the renderer. The bgfx terrain
+view, camera projection, touch picking, drag selection, and gesture bounds all
+use the remaining content height instead of projecting the battlefield behind
+the panel. On the ARM64 emulator this produces a `2856x944` playable view over a
+`2856x1280` surface with a 336-pixel bottom inset. A tap at `(1240,390)` then
+selected legacy unit `5198` and immediately populated its original HUD card,
+confirming that rendering and touch projection remain aligned.
 Double-tapping a selected unit expands the selection to up to twelve nearby
 units with the same legacy stats/type. The renderer marks every selected
 `CAIUnit`, the HUD shows a health card for every member, and commands are sent

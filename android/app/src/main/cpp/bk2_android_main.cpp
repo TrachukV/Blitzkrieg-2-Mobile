@@ -116,7 +116,7 @@ void QueueTouchSelectionOverlay() {
     const float viewport_width = static_cast<float>(
             bk2::android::RenderBackend().width());
     const float viewport_height = static_cast<float>(
-            bk2::android::RenderBackend().height());
+            bk2::android::RenderBackend().content_height());
     const float left = std::clamp(
             std::min(g_touch_camera.start_x, g_touch_camera.center_x),
             0.0f,
@@ -195,20 +195,23 @@ void PollInput(android_app* app) {
                         GameActivityPointerAxes_getX(&event.pointers[0]);
                 const float y =
                         GameActivityPointerAxes_getY(&event.pointers[0]);
+                const float content_height = static_cast<float>(
+                        bk2::android::RenderBackend().content_height());
                 if (g_touch_camera.selecting) {
                     bk2::android::HandleSinglePlayerSelectionRect(
                             g_touch_camera.start_x,
                             g_touch_camera.start_y,
                             x,
-                            y,
+                            std::min(y, content_height - 1.0f),
                             bk2::android::RenderBackend().width(),
-                            bk2::android::RenderBackend().height());
-                } else if (!g_touch_camera.moved) {
+                            bk2::android::RenderBackend().content_height());
+                } else if (!g_touch_camera.moved &&
+                           y < content_height) {
                     bk2::android::HandleSinglePlayerTap(
                             x,
                             y,
                             bk2::android::RenderBackend().width(),
-                            bk2::android::RenderBackend().height());
+                            bk2::android::RenderBackend().content_height());
                 }
             }
             ResetTouchCameraState();
@@ -220,6 +223,11 @@ void PollInput(android_app* app) {
                     GameActivityPointerAxes_getX(&event.pointers[0]);
             const float y =
                     GameActivityPointerAxes_getY(&event.pointers[0]);
+            if (y >= static_cast<float>(
+                        bk2::android::RenderBackend().content_height())) {
+                ResetTouchCameraState();
+                continue;
+            }
             if (!g_touch_camera.tracking ||
                 g_touch_camera.pointer_count != 1 ||
                 action == AMOTION_EVENT_ACTION_DOWN) {
@@ -287,6 +295,12 @@ void PollInput(android_app* app) {
                 GameActivityPointerAxes_getX(&event.pointers[1]);
         const float y1 =
                 GameActivityPointerAxes_getY(&event.pointers[1]);
+        const float content_height = static_cast<float>(
+                bk2::android::RenderBackend().content_height());
+        if (y0 >= content_height || y1 >= content_height) {
+            ResetTouchCameraState();
+            continue;
+        }
         const float center_x = (x0 + x1) * 0.5f;
         const float center_y = (y0 + y1) * 0.5f;
         const float distance = std::hypot(x1 - x0, y1 - y0);

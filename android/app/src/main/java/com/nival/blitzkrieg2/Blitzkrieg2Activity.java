@@ -145,6 +145,7 @@ public final class Blitzkrieg2Activity extends GameActivity {
         File dataRoot = new File(getFilesDir(), "DataAndroid");
         hudDataRoot = dataRoot;
         int hudHeight = dp(112);
+        NativeBridge.setMissionHudHeightPixels(hudHeight);
         FrameLayout hud = new FrameLayout(this);
         originalHud = new OriginalMissionHudView(this, dataRoot);
         hud.addView(

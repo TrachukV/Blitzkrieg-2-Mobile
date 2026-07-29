@@ -705,7 +705,14 @@ decoder falls back to those APK assets if an external sync omitted
 `Complete/UI`; the Gradle build fails if the required originals are absent.
 The HUD view paints the desktop mission's black UI backdrop before compositing
 the semitransparent TGA layers, so the 3D battlefield no longer leaks through
-the center panel.
+the center panel. The HUD also reports its actual 112dp height to native code.
+The bgfx terrain view and camera projection stop at that boundary, while touch
+picking, drag selection, pan, and pinch use the same playable content height.
+On the ARM64 emulator the resulting diagnostic was a `2856x944` battlefield
+over the `2856x1280` render surface with a 336-pixel bottom inset. Tapping
+`(1240,390)` selected legacy unit `5198`, produced the matching world marker,
+and populated the original portrait, health card, and command grid, verifying
+that projection and input remain aligned after the inset.
 The detailed Android objective summary is hidden during normal battlefield play
 and toggled by the Objectives touch zone instead of remaining as a permanent
 debug overlay. The minimap is generated from the live terrain-type map and

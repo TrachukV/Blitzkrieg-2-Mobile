@@ -9,6 +9,7 @@
 #include <sys/system_properties.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <sstream>
@@ -220,6 +221,7 @@ public:
         }
         upload_terrain_mesh();
         upload_world_object_mesh();
+        applied_bottom_inset_ = clamped_requested_bottom_inset();
         configure_view();
         PlatformRuntime::instance().log_info(
                 std::string("bgfx renderer initialized: ") + renderer_name_);
@@ -261,6 +263,7 @@ public:
         }
         width_ = 0;
         height_ = 0;
+        applied_bottom_inset_ = 0;
         renderer_name_.clear();
     }
 
@@ -273,6 +276,7 @@ public:
         width_ = width;
         height_ = height;
         bgfx::reset(width_, height_, BGFX_RESET_VSYNC);
+        applied_bottom_inset_ = clamped_requested_bottom_inset();
         configure_view();
     }
 
@@ -353,10 +357,17 @@ public:
         terrain_camera_ = camera;
     }
 
+    void set_bottom_inset(uint32_t pixels) override {
+        requested_bottom_inset_.store(
+                pixels,
+                std::memory_order_release);
+    }
+
     void render_frame() override {
         if (!ready_) {
             return;
         }
+        apply_requested_bottom_inset();
         submit_terrain();
         submit_world_objects();
         submit_rects();
@@ -379,6 +390,14 @@ public:
         return height_;
     }
 
+    uint32_t content_height() const override {
+        const uint32_t inset = std::min(
+                requested_bottom_inset_.load(
+                        std::memory_order_acquire),
+                height_ > 1 ? height_ - 1 : 0);
+        return std::max(height_ - inset, 1u);
+    }
+
     uint64_t frame_count() const override {
         return frame_count_;
     }
@@ -396,13 +415,43 @@ public:
     }
 
 private:
+    uint32_t clamped_requested_bottom_inset() const {
+        return std::min(
+                requested_bottom_inset_.load(
+                        std::memory_order_acquire),
+                height_ > 1 ? height_ - 1 : 0);
+    }
+
+    uint32_t rendered_content_height() const {
+        return std::max(height_ - applied_bottom_inset_, 1u);
+    }
+
+    void apply_requested_bottom_inset() {
+        const uint32_t requested =
+                clamped_requested_bottom_inset();
+        if (requested == applied_bottom_inset_) {
+            return;
+        }
+        applied_bottom_inset_ = requested;
+        configure_view();
+        PlatformRuntime::instance().log_info(
+                std::string("render_viewport=mission; size=") +
+                std::to_string(width_) + "x" +
+                std::to_string(rendered_content_height()) +
+                "; bottom_inset=" +
+                std::to_string(applied_bottom_inset_));
+    }
+
     void configure_view() {
         bgfx::setViewRect(
                 kTerrainView,
                 0,
                 0,
                 static_cast<uint16_t>(std::min(width_, 65535u)),
-                static_cast<uint16_t>(std::min(height_, 65535u)));
+                static_cast<uint16_t>(
+                        std::min(
+                                rendered_content_height(),
+                                65535u)));
         bgfx::setViewClear(
                 kTerrainView,
                 BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
@@ -622,7 +671,7 @@ private:
         bx::mtxLookAt(view, eye, target, up);
         const float aspect =
                 static_cast<float>(width_) /
-                static_cast<float>(height_);
+                static_cast<float>(rendered_content_height());
         const float horizontal_half_fov =
                 bx::toRad(terrain_camera_.horizontal_fov_degrees * 0.5f);
         const float vertical_fov_degrees =
@@ -925,6 +974,8 @@ private:
     ANativeWindow* window_ = nullptr;
     uint32_t width_ = 0;
     uint32_t height_ = 0;
+    std::atomic<uint32_t> requested_bottom_inset_{0};
+    uint32_t applied_bottom_inset_ = 0;
     uint64_t frame_count_ = 0;
     uint64_t submitted_primitives_ = 0;
     bool ready_ = false;
@@ -973,6 +1024,9 @@ std::string RenderBackendDiagnosticReport() {
            << "; renderer=" << backend.renderer_name()
            << "; width=" << backend.width()
            << "; height=" << backend.height()
+           << "; content_height=" << backend.content_height()
+           << "; bottom_inset="
+           << backend.height() - backend.content_height()
            << "; frames=" << backend.frame_count()
            << "; primitives=" << backend.submitted_primitives();
     if (!backend.last_error().empty()) {

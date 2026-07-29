@@ -31,6 +31,7 @@ final class NativeBridge {
     static native boolean setActiveSelectedUnit(int unitId);
     static native boolean stopSelectedUnit();
     static native boolean performSelectedUnitAction(int userAction);
+    static native void setMissionHudHeightPixels(int height);
     static native void setMissionPaused(boolean paused);
     static native boolean isMissionPaused();
     static native int[] getMissionMinimapArgb(int width, int height);
