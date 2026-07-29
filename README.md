@@ -58,10 +58,12 @@ content sync no longer replaces that panel with a dark debug rectangle.
 The map renderer now includes general `SObjectRPGStats` records in addition to
 buildings, fences, entrenchments, squads, and mechanized units. This restores
 the original mission's vegetation and small props through their converted
-Granny geometry and DDS materials; flora uses a transparent compatibility path
-and omits the port's coarse full-card projected-shadow fallback. On USA US1.2
-the rendered static-object count increased from 215 to 2,180 of 2,254 map
-records with zero missing converted geometries.
+Granny geometry and DDS materials. Flora now uses the desktop
+`AM_ALPHA_TEST` behavior with its original reference value of 120, writes depth
+only for surviving texels, and omits the port's coarse full-card
+projected-shadow fallback. On USA US1.2 the rendered static-object count
+increased from 215 to 2,180 of 2,254 map records with zero missing converted
+geometries.
 Original combat textures now provide
 tracer ribbons, muzzle flashes, and animated fire/smoke on destroyed mechanized
 units. Static objects and live units now cast translucent projected silhouettes

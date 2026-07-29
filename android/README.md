@@ -751,12 +751,17 @@ restoring them raises the runtime's rendered map-object count from 215 to 2,180
 of 2,254, while `missing_converted_geometry` remains zero. This returns the
 original palms, bushes, reeds, crates, and other small props through the same
 converted Granny geometry and DDS material cache. Shipped flora materials use
-the desktop `AM_ALPHA_TEST` mode, but the current shared bgfx texture shader has
-no alpha-test branch, so Android enables alpha blending as a compatibility
-path. It also skips the port's coarse convex projected-shadow fallback for
-flora: projecting the complete crossed billboard cards produced large dark
-hulls rather than texture silhouettes. Non-flora props remain opaque and keep
-their projected shadows. A fresh ARM64 emulator run reported
+the desktop `AM_ALPHA_TEST` mode. Android now submits them through a dedicated
+fragment shader that discards texels below the original engine's reference
+value of 120 while preserving depth writes. Precompiled GLES3 and SPIR-V
+variants are checked in beside the shader source, covering the emulator and
+physical-device bgfx backends without requiring `shaderc` on the Android build
+host. This replaces the earlier alpha-blending compatibility path and prevents
+billboard draw-order artifacts and translucent foliage edges. The renderer
+still skips its coarse convex projected-shadow fallback for flora: projecting
+the complete crossed billboard cards produced large dark hulls rather than
+texture silhouettes. Non-flora props remain opaque and keep their projected
+shadows. A fresh ARM64 GLES3 emulator run reported
 `map_objects=2254`, `rendered_objects=2180`,
 `dynamic_rendered_objects=160`, `converted_geometry_cache=66`, and
 `missing_converted_geometry=0`; selecting unit `5198` still populated its

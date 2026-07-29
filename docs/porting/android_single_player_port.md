@@ -40,13 +40,14 @@ records. USA US1.2 contains 1,965 such vegetation and small-prop records, which
 were previously omitted even though their converted Granny geometry was
 available. The verified runtime count increased from 215 to 2,180 rendered
 objects out of 2,254 map records with `missing_converted_geometry=0`. Flora
-uses its original DDS material through an alpha-blended compatibility path
-because the current shared bgfx shader does not yet implement desktop
-`AM_ALPHA_TEST`; its coarse convex projected-shadow fallback is disabled to
-avoid casting the complete crossed billboard cards. Opaque small props keep
-their projected shadows. Unit `5198` remained selectable over the restored
-vegetation and populated its original world ring, portrait, health card, and
-action grid.
+uses its original DDS material through a dedicated alpha-test fragment shader.
+It discards texels below the desktop renderer's reference value of 120 and
+keeps depth writes enabled; checked-in GLES3 and SPIR-V binaries cover both
+Android bgfx backends. Its coarse convex projected-shadow fallback remains
+disabled to avoid casting the complete crossed billboard cards. Opaque small
+props keep their projected shadows. Unit `5198` remained selectable over the
+restored vegetation and populated its original world ring, portrait, health
+card, and action grid.
 The Android build packages the required 4.2 MiB original HUD subset and the TGA
 loader uses it only when the corresponding external `Complete/UI` file is
 missing. This keeps the original panel functional after a partial content sync

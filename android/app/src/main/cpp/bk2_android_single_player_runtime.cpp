@@ -1476,6 +1476,7 @@ bool AppendConvertedGeometry(
         ConvertedAnimationVariant animation_variant,
         float animation_time_seconds,
         bool alpha_blended,
+        bool alpha_tested,
         bool cast_projected_shadow,
         int frame_index) {
     if (mesh == nullptr) {
@@ -1594,6 +1595,9 @@ bool AppendConvertedGeometry(
             if (layer != nullptr && alpha_blended) {
                 layer->alpha_blended = true;
             }
+            if (layer != nullptr && alpha_tested) {
+                layer->alpha_tested = true;
+            }
             std::vector<uint32_t>* output = layer == nullptr
                     ? &mesh->triangle_indices
                     : &layer->triangle_indices;
@@ -1630,6 +1634,9 @@ bool AppendConvertedGeometry(
                     FindOrAddWorldObjectLayer(mesh, texture_path);
             if (layer != nullptr && alpha_blended) {
                 layer->alpha_blended = true;
+            }
+            if (layer != nullptr && alpha_tested) {
+                layer->alpha_tested = true;
             }
             AppendPartIndices(
                     layer == nullptr
@@ -1829,6 +1836,7 @@ void AppendEntityModel(
                 abgr,
                 animation_variant,
                 animation_time_seconds,
+                false,
                 false,
                 true,
                 -1)) {
@@ -2232,6 +2240,7 @@ void AppendMapObjects(
                     ObjectColor(object.nPlayer, scenario_objects),
                     ConvertedAnimationVariant::Base,
                     0.0f,
+                    false,
                     flora,
                     !flora,
                     object.nFrameIndex)) {
