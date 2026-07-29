@@ -80,6 +80,7 @@ size_t g_attack_animation_instance_count = 0;
 size_t g_death_animation_instance_count = 0;
 size_t g_combat_effect_render_count = 0;
 size_t g_active_combat_effect_count = 0;
+size_t g_active_unit_indicator_count = 0;
 
 enum class ConvertedAnimationVariant {
     Base,
@@ -1436,6 +1437,71 @@ void AppendOrientedBox(
     }
 }
 
+void AppendUnitIndicator(
+        WorldObjectMesh* mesh,
+        const Bk2PresentationEntity& entity,
+        uint32_t abgr) {
+    if (mesh == nullptr) {
+        return;
+    }
+    constexpr int kSegmentCount = 32;
+    const float selection_scale =
+            std::isfinite(entity.visual_scale)
+            ? std::clamp(entity.visual_scale, 0.6f, 2.5f)
+            : 1.0f;
+    const float base_radius =
+            (entity.flags & BK2_PRESENTATION_ENTITY_MECHANIZED) != 0
+            ? 3.0f
+            : (entity.flags & BK2_PRESENTATION_ENTITY_FORMATION) != 0
+                    ? 2.5f
+                    : 1.25f;
+    const float outer_radius = base_radius * selection_scale;
+    const float inner_radius = outer_radius * 0.78f;
+    const float indicator_z = entity.z + 0.12f;
+    const uint32_t base =
+            static_cast<uint32_t>(mesh->vertices.size());
+    mesh->vertices.reserve(
+            mesh->vertices.size() +
+            static_cast<size_t>(kSegmentCount + 1) * 2);
+    mesh->triangle_indices.reserve(
+            mesh->triangle_indices.size() +
+            static_cast<size_t>(kSegmentCount) * 6);
+    for (int segment = 0; segment <= kSegmentCount; ++segment) {
+        const float angle =
+                static_cast<float>(segment) *
+                2.0f * 3.14159265358979323846f /
+                static_cast<float>(kSegmentCount);
+        const float cosine = std::cos(angle);
+        const float sine = std::sin(angle);
+        mesh->vertices.push_back(TerrainVertex{
+                entity.x + cosine * outer_radius,
+                entity.y + sine * outer_radius,
+                indicator_z,
+                0.0f,
+                0.0f,
+                abgr});
+        mesh->vertices.push_back(TerrainVertex{
+                entity.x + cosine * inner_radius,
+                entity.y + sine * inner_radius,
+                indicator_z,
+                0.0f,
+                0.0f,
+                abgr});
+    }
+    for (int segment = 0; segment < kSegmentCount; ++segment) {
+        const uint32_t outer = base + static_cast<uint32_t>(segment * 2);
+        const uint32_t inner = outer + 1;
+        const uint32_t next_outer = outer + 2;
+        const uint32_t next_inner = outer + 3;
+        mesh->triangle_indices.push_back(outer);
+        mesh->triangle_indices.push_back(next_outer);
+        mesh->triangle_indices.push_back(inner);
+        mesh->triangle_indices.push_back(inner);
+        mesh->triangle_indices.push_back(next_outer);
+        mesh->triangle_indices.push_back(next_inner);
+    }
+}
+
 void AppendEntityModel(
         WorldObjectMesh* mesh,
         const Bk2PresentationEntity& entity,
@@ -1818,6 +1884,7 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
     combined.triangle_indices.reserve(
             combined.triangle_indices.size() + entities.size() * 108);
     g_dynamic_rendered_object_count = 0;
+    g_active_unit_indicator_count = 0;
     std::unordered_set<int32_t> visible_corpse_ids;
     for (const Bk2PresentationEntity& entity : entities) {
         const bool dead =
@@ -1841,6 +1908,14 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
                 (entity.flags & BK2_PRESENTATION_ENTITY_SELECTED) != 0;
         const bool targeted =
                 (entity.flags & BK2_PRESENTATION_ENTITY_TARGETED) != 0;
+        if (selected || targeted) {
+            AppendUnitIndicator(
+                    &combined,
+                    entity,
+                    selected ? ArgbToAbgr(0xffffe066u)
+                             : ArgbToAbgr(0xffff6a36u));
+            ++g_active_unit_indicator_count;
+        }
         AppendEntityModel(
                 &combined,
                 entity,
@@ -2503,6 +2578,7 @@ void ShutdownSinglePlayerRuntime() {
     g_death_animation_instance_count = 0;
     g_combat_effect_render_count = 0;
     g_active_combat_effect_count = 0;
+    g_active_unit_indicator_count = 0;
     g_converted_geometries.clear();
     g_missing_converted_geometries.clear();
     g_move_converted_geometries.clear();
@@ -2769,6 +2845,8 @@ std::string SinglePlayerRuntimeReport() {
            << g_combat_effect_render_count
            << "; active_combat_effects_rendered="
            << g_active_combat_effect_count
+           << "; active_unit_indicators="
+           << g_active_unit_indicator_count
            << "; static_fallback_types="
            << g_static_fallback_stats_paths.size()
            << "; dynamic_fallback_types="
