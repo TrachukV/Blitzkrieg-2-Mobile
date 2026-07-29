@@ -47,7 +47,9 @@ grid is rebuilt from the selected legacy unit's available actions instead of a
 fixed mobile button row; Move, Attack, Rotate, Stop, Entrench, Stand Ground,
 Spyglass, Clear Mines, Place Mines, and the original two-point Build Trenches
 command reach the original simulation, while commands without a ported handler
-use their original disabled artwork. The APK carries the small original HUD
+use their original disabled artwork. The original minimap-corner Esc/F10 and
+Objectives buttons now use their shipped art, XDB placement, and live Android
+actions instead of invisible touch zones. The APK carries the small original HUD
 subset as a fallback, so an incomplete external content sync no longer replaces
 that panel with a dark debug rectangle. Original combat textures now provide
 tracer ribbons, muzzle flashes, and animated fire/smoke on destroyed mechanized

@@ -14,7 +14,13 @@ val requiredOriginalHudFiles = listOf(
     originalHudRoot.resolve("Buttons/Icons/Tank.tga"),
     originalHudRoot.resolve("Buttons/HitBars/GreenUnitBar.tga"),
     originalHudRoot.resolve("Buttons/HitBars/YellowUnitBar.tga"),
-    originalHudRoot.resolve("Buttons/HitBars/RedUnitBar.tga")
+    originalHudRoot.resolve("Buttons/HitBars/RedUnitBar.tga"),
+    originalHudRoot.resolve(
+        "New_mission/Panels2/EscMenuBtn_003.tga"
+    ),
+    originalHudRoot.resolve(
+        "New_mission/Panels2/ObjectivesBtn_002.tga"
+    )
 )
 val stageOriginalHudAssets by tasks.registering(Sync::class) {
     into(generatedOriginalHudAssets)
@@ -50,6 +56,13 @@ val stageOriginalHudAssets by tasks.registering(Sync::class) {
     from(originalHudRoot.resolve("New_mission/ActionButtons")) {
         include("**/*.tga")
         into("Complete/UI/New_mission/ActionButtons")
+    }
+    from(originalHudRoot.resolve("New_mission/Panels2")) {
+        include(
+            "EscMenuBtn_003.tga",
+            "ObjectivesBtn_002.tga"
+        )
+        into("Complete/UI/New_mission/Panels2")
     }
     from(originalHudRoot.resolve("Buttons/Icons")) {
         include("**/*.tga")

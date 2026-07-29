@@ -14,6 +14,12 @@ Mines consume the next valid terrain tap as their forced point. Build Trenches
 collects a start and end point and emits the same `ENTRENCH_BEGIN` /
 `ENTRENCH_END` command pair as the desktop client. Visible actions whose mobile
 interaction is not implemented remain disabled instead of pretending to work.
+The minimap-corner Esc/F10 and Objectives controls use the shipped
+`EscMenuBtn_003.tga` and `ObjectivesBtn_002.tga` art at the original
+descriptor coordinates `(7,92)` and `(193,92)`. They open the native mission
+menu and objective summary instead of leaving invisible touch targets beside
+the command grid. Mission play also enters sticky immersive mode so the Android
+navigation handle does not cover the center panel.
 The Android build packages the required 4.2 MiB original HUD subset and the TGA
 loader uses it only when the corresponding external `Complete/UI` file is
 missing. This keeps the original panel functional after a partial content sync
