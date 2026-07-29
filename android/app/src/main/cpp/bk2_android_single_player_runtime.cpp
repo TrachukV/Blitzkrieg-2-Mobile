@@ -58,6 +58,7 @@ constexpr float kLegacyWaterHeight = 0.1f;
 constexpr float kWaterAnimationStepSeconds = 1.0f / 20.0f;
 constexpr float kWaterWaveHeightScale = 0.08f;
 constexpr uint32_t kWaterVertexColor = 0xd8ffffffu;
+constexpr float kLegacyRoadHeight = 0.1f;
 constexpr const char* kInfantryTraceTexture =
         "Scene/TexAndMats/All/Units/Weapons/GunShotTraceBlue_Texture.dds";
 constexpr const char* kMechanizedTraceTexture =
@@ -117,6 +118,12 @@ float g_water_texture_tile_count = 6.0f;
 float g_water_last_update_seconds = -1.0f;
 bool g_water_waves_enabled = true;
 bool g_water_texture_logged = false;
+size_t g_road_instance_count = 0;
+size_t g_road_segment_count = 0;
+size_t g_road_triangle_count = 0;
+size_t g_road_texture_count = 0;
+size_t g_road_texture_gpu_count = 0;
+bool g_road_texture_logged = false;
 WorldObjectMesh g_static_world_object_mesh;
 WorldObjectMesh g_world_object_mesh;
 CObj<NGfx::CTexture> g_terrain_texture;
@@ -1531,6 +1538,452 @@ WorldObjectMesh::Layer* FindOrAddWorldObjectLayer(
     mesh->layers.back().texture_path = texture_path;
     mesh->layers.back().alpha_masked_shadow = alpha_masked_shadow;
     return &mesh->layers.back();
+}
+
+size_t FindOrAddAlphaWorldObjectLayer(
+        WorldObjectMesh* mesh,
+        const std::string& texture_path) {
+    if (mesh == nullptr || texture_path.empty()) {
+        return std::numeric_limits<size_t>::max();
+    }
+    for (size_t index = 0; index < mesh->layers.size(); ++index) {
+        const WorldObjectMesh::Layer& layer = mesh->layers[index];
+        if (layer.texture_path == texture_path &&
+            layer.alpha_blended &&
+            !layer.additive_blended &&
+            !layer.alpha_tested &&
+            !layer.alpha_masked_shadow &&
+            !layer.depth_test_always) {
+            return index;
+        }
+    }
+    mesh->layers.push_back(WorldObjectMesh::Layer());
+    WorldObjectMesh::Layer& layer = mesh->layers.back();
+    layer.texture_path = texture_path;
+    layer.alpha_blended = true;
+    return mesh->layers.size() - 1;
+}
+
+struct RoadRenderLayer {
+    size_t mesh_layer_index = std::numeric_limits<size_t>::max();
+    float texture_u_min = 0.0f;
+    float texture_u_max = 1.0f;
+    float width_min = -1.0f;
+    float width_max = 1.0f;
+    float opacity = 1.0f;
+};
+
+std::string FallbackRoadTexturePath(const NDb::SVSODesc* descriptor) {
+    if (descriptor == nullptr) {
+        return std::string();
+    }
+    std::string descriptor_path =
+            descriptor->GetDBID().ToString().c_str();
+    std::replace(
+            descriptor_path.begin(),
+            descriptor_path.end(),
+            '\\',
+            '/');
+    std::transform(
+            descriptor_path.begin(),
+            descriptor_path.end(),
+            descriptor_path.begin(),
+            [](unsigned char value) {
+                return static_cast<char>(std::tolower(value));
+            });
+    const char* season = nullptr;
+    for (const char* candidate : {
+                 "winter",
+                 "spring",
+                 "summer",
+                 "autumn",
+                 "africa",
+                 "asia"}) {
+        if (descriptor_path.find(
+                    std::string("/") + candidate + "/") !=
+                std::string::npos) {
+            season = candidate;
+            break;
+        }
+    }
+    if (season == nullptr) {
+        return std::string();
+    }
+
+    const auto has_name =
+            [&](const char* value) {
+        return descriptor_path.find(value) != std::string::npos;
+    };
+    const char* texture_name = nullptr;
+    if (has_name("railroadembankment")) {
+        texture_name = "railroadembankment.dds";
+    } else if (has_name("railroadgravel") ||
+               has_name("/railroad_roaddesc")) {
+        texture_name = "railroadgravel.dds";
+    } else if (has_name("railroadtown")) {
+        texture_name = "railroadtown.dds";
+    } else if (has_name("townasphalt")) {
+        texture_name = "townasphalt.dds";
+    } else if (
+            has_name("usedasphalt") ||
+            has_name("useasphalt") ||
+            has_name("used_aspahlt")) {
+        texture_name = "useasphalt.dds";
+    } else if (has_name("roadgroundsnow")) {
+        texture_name = "roadgroundsnow.dds";
+    } else if (has_name("roadground")) {
+        texture_name = "roadground.dds";
+    } else if (has_name("roadpaved")) {
+        texture_name = "roadpaved .dds";
+    } else if (has_name("track_roaddesc")) {
+        texture_name = std::strcmp(season, "africa") == 0
+                ? "road_track.dds"
+                : "roadtrack.dds";
+    } else if (has_name("path_roaddesc")) {
+        texture_name = std::strcmp(season, "africa") == 0
+                ? "road_path.dds"
+                : "roadpath.dds";
+    }
+    if (texture_name == nullptr) {
+        return std::string();
+    }
+    return std::string("Terrain/roads/") + season + "/" +
+            texture_name;
+}
+
+bool ConfigureRoadRenderLayer(
+        const NDb::SVSOLayerBaseDesc& layer_desc,
+        const NDb::SMaterial* material,
+        int from_pixel,
+        int to_pixel,
+        const std::string& fallback_texture_path,
+        WorldObjectMesh* mesh,
+        RoadRenderLayer* layer) {
+    if (material == nullptr ||
+        layer == nullptr ||
+        mesh == nullptr) {
+        return false;
+    }
+    const NDb::STexture* texture = material->pTexture
+            ? material->pTexture.GetPtr()
+            : nullptr;
+    const std::string texture_path =
+            texture != nullptr && !texture->szDestName.empty()
+            ? std::string(texture->szDestName.c_str())
+            : fallback_texture_path;
+    if (texture_path.empty()) {
+        return false;
+    }
+    const float texture_width =
+            static_cast<float>(
+                    texture == nullptr
+                    ? 128
+                    : std::max(texture->nWidth, 1));
+    layer->texture_u_min =
+            static_cast<float>(from_pixel) / texture_width;
+    layer->texture_u_max =
+            static_cast<float>(to_pixel) / texture_width;
+    layer->opacity = std::clamp(
+            layer_desc.fCenterOpacity,
+            0.0f,
+            1.0f);
+    layer->mesh_layer_index = FindOrAddAlphaWorldObjectLayer(
+            mesh,
+            texture_path);
+    return layer->mesh_layer_index !=
+            std::numeric_limits<size_t>::max();
+}
+
+void AppendRoadLayerSegment(
+        const NDb::SVSOPoint& current,
+        const NDb::SVSOPoint& next,
+        const STerrainInfo& terrain_info,
+        float texture_v,
+        float next_texture_v,
+        const RoadRenderLayer& road_layer,
+        WorldObjectMesh* mesh) {
+    if (mesh == nullptr ||
+        road_layer.mesh_layer_index >= mesh->layers.size()) {
+        return;
+    }
+    const auto road_position =
+            [&](const NDb::SVSOPoint& point, float width) {
+        const float center_x = AI2Vis(point.vPos.x);
+        const float center_y = AI2Vis(point.vPos.y);
+        const float half_width = AI2Vis(point.fWidth);
+        const float x =
+                center_x + point.vNorm.x * half_width * width;
+        const float y =
+                center_y + point.vNorm.y * half_width * width;
+        const float z = std::max(
+                TerrainHeightAt(terrain_info, x, y),
+                0.0f) + kLegacyRoadHeight;
+        return TerrainVertex{x, y, z, 0.0f, 0.0f, 0xffffffffu};
+    };
+    TerrainVertex current_left =
+            road_position(current, road_layer.width_min);
+    TerrainVertex current_right =
+            road_position(current, road_layer.width_max);
+    TerrainVertex next_left =
+            road_position(next, road_layer.width_min);
+    TerrainVertex next_right =
+            road_position(next, road_layer.width_max);
+    const auto road_color =
+            [&](float point_opacity) {
+        const uint32_t alpha = static_cast<uint32_t>(
+                std::lround(
+                        std::clamp(
+                                point_opacity * road_layer.opacity,
+                                0.0f,
+                                1.0f) *
+                        255.0f));
+        return (alpha << 24) | 0x00ffffffu;
+    };
+    current_left.u = road_layer.texture_u_min;
+    current_right.u = road_layer.texture_u_max;
+    next_left.u = road_layer.texture_u_min;
+    next_right.u = road_layer.texture_u_max;
+    current_left.v = current_right.v = texture_v;
+    next_left.v = next_right.v = next_texture_v;
+    current_left.abgr = current_right.abgr =
+            road_color(current.fOpacity);
+    next_left.abgr = next_right.abgr =
+            road_color(next.fOpacity);
+
+    const uint32_t vertex_base =
+            static_cast<uint32_t>(mesh->vertices.size());
+    mesh->vertices.push_back(current_left);
+    mesh->vertices.push_back(current_right);
+    mesh->vertices.push_back(next_left);
+    mesh->vertices.push_back(next_right);
+    WorldObjectMesh::Layer& output =
+            mesh->layers[road_layer.mesh_layer_index];
+    output.triangle_indices.push_back(vertex_base);
+    output.triangle_indices.push_back(vertex_base + 2);
+    output.triangle_indices.push_back(vertex_base + 1);
+    output.triangle_indices.push_back(vertex_base + 1);
+    output.triangle_indices.push_back(vertex_base + 2);
+    output.triangle_indices.push_back(vertex_base + 3);
+    g_road_triangle_count += 2;
+}
+
+bool AppendRoadInstance(
+        const NDb::SVSOInstance& road,
+        const STerrainInfo& terrain_info,
+        WorldObjectMesh* mesh,
+        std::unordered_set<std::string>* texture_paths) {
+    if (mesh == nullptr ||
+        road.points.size() < 2 ||
+        !road.pDescriptor) {
+        return false;
+    }
+    const NDb::SVSODesc* base_desc = road.pDescriptor.GetPtr();
+    if (base_desc == nullptr ||
+        base_desc->GetTypeID() != NDb::SRoadDesc::typeID) {
+        return false;
+    }
+    const NDb::SRoadDesc* descriptor =
+            static_cast<const NDb::SRoadDesc*>(base_desc);
+    const std::string fallback_texture_path =
+            FallbackRoadTexturePath(descriptor);
+    std::vector<RoadRenderLayer> layers;
+    layers.reserve(3);
+    const auto add_layer =
+            [&](const NDb::SVSOLayerBaseDesc& layer_desc,
+                const NDb::SMaterial* material,
+                int from_pixel,
+                int to_pixel) {
+        RoadRenderLayer layer;
+        if (!ConfigureRoadRenderLayer(
+                    layer_desc,
+                    material,
+                    from_pixel,
+                    to_pixel,
+                    fallback_texture_path,
+                    mesh,
+                    &layer)) {
+            return;
+        }
+        if (texture_paths != nullptr) {
+            texture_paths->insert(
+                    mesh->layers[layer.mesh_layer_index].texture_path);
+        }
+        layers.push_back(layer);
+    };
+    if (!descriptor->center.materials.empty()) {
+        add_layer(
+                descriptor->center,
+                descriptor->center.materials.front().GetPtr(),
+                descriptor->center.nUseFromPixel,
+                descriptor->center.nUseToPixel);
+    }
+    add_layer(
+            descriptor->leftBorder,
+            descriptor->leftBorder.pMaterial.GetPtr(),
+            descriptor->leftBorder.nUseFromPixel,
+            descriptor->leftBorder.nUseToPixel);
+    add_layer(
+            descriptor->rightBorder,
+            descriptor->rightBorder.pMaterial.GetPtr(),
+            descriptor->rightBorder.nUseFromPixel,
+            descriptor->rightBorder.nUseToPixel);
+    if (layers.empty()) {
+        return false;
+    }
+
+    float global_u_min = std::numeric_limits<float>::max();
+    float global_u_max = std::numeric_limits<float>::lowest();
+    for (const RoadRenderLayer& layer : layers) {
+        global_u_min = std::min(
+                global_u_min,
+                std::min(layer.texture_u_min, layer.texture_u_max));
+        global_u_max = std::max(
+                global_u_max,
+                std::max(layer.texture_u_min, layer.texture_u_max));
+    }
+    const float global_u_range = global_u_max - global_u_min;
+    if (!std::isfinite(global_u_range) || global_u_range <= 0.0001f) {
+        return false;
+    }
+    for (RoadRenderLayer& layer : layers) {
+        layer.width_min =
+                (layer.texture_u_min - global_u_min) /
+                        global_u_range * 2.0f -
+                1.0f;
+        layer.width_max =
+                (layer.texture_u_max - global_u_min) /
+                        global_u_range * 2.0f -
+                1.0f;
+    }
+
+    bool appended = false;
+    float texture_v = 0.0f;
+    for (size_t point_index = 0;
+         point_index + 1 < road.points.size();
+         ++point_index) {
+        const NDb::SVSOPoint& current = road.points[point_index];
+        const NDb::SVSOPoint& next = road.points[point_index + 1];
+        if (!std::isfinite(current.vPos.x) ||
+            !std::isfinite(current.vPos.y) ||
+            !std::isfinite(next.vPos.x) ||
+            !std::isfinite(next.vPos.y) ||
+            current.fWidth <= 0.0f ||
+            next.fWidth <= 0.0f) {
+            continue;
+        }
+        const float dx = AI2Vis(next.vPos.x - current.vPos.x);
+        const float dy = AI2Vis(next.vPos.y - current.vPos.y);
+        const float segment_length = std::sqrt(dx * dx + dy * dy);
+        if (!std::isfinite(segment_length) ||
+            segment_length <= 0.001f) {
+            continue;
+        }
+        const float next_texture_v =
+                texture_v +
+                segment_length /
+                        std::max(AI2Vis(next.fWidth) * 2.0f, 0.001f) *
+                        global_u_range;
+        for (const RoadRenderLayer& layer : layers) {
+            AppendRoadLayerSegment(
+                    current,
+                    next,
+                    terrain_info,
+                    texture_v,
+                    next_texture_v,
+                    layer,
+                    mesh);
+        }
+        texture_v = next_texture_v;
+        ++g_road_segment_count;
+        appended = true;
+    }
+    return appended;
+}
+
+void AppendTerrainRoads(
+        const NDb::SMapInfo* map,
+        const STerrainInfo& terrain_info,
+        WorldObjectMesh* mesh) {
+    g_road_instance_count = 0;
+    g_road_segment_count = 0;
+    g_road_triangle_count = 0;
+    g_road_texture_count = 0;
+    g_road_texture_gpu_count = 0;
+    g_road_texture_logged = false;
+    if (map == nullptr || mesh == nullptr) {
+        return;
+    }
+    std::unordered_set<std::string> texture_paths;
+    bool first_descriptor_logged = false;
+    for (const NDb::SVSOInstance& road : map->roads) {
+        if (!first_descriptor_logged) {
+            const NDb::SVSODesc* descriptor =
+                    road.pDescriptor
+                    ? road.pDescriptor.GetPtr()
+                    : nullptr;
+            std::ostringstream descriptor_report;
+            descriptor_report
+                    << "terrain_road_descriptor="
+                    << (descriptor == nullptr
+                                ? "<unavailable>"
+                                : descriptor->GetDBID().ToString().c_str())
+                    << "; type="
+                    << (descriptor == nullptr
+                                ? -1
+                                : descriptor->GetTypeID())
+                    << "; expected_type="
+                    << NDb::SRoadDesc::typeID
+                    << "; points=" << road.points.size()
+                    << "; fallback_texture="
+                    << (descriptor == nullptr
+                                ? "<unavailable>"
+                                : FallbackRoadTexturePath(descriptor));
+            if (descriptor != nullptr &&
+                descriptor->GetTypeID() ==
+                        NDb::SRoadDesc::typeID) {
+                const NDb::SRoadDesc* road_descriptor =
+                        static_cast<const NDb::SRoadDesc*>(descriptor);
+                descriptor_report
+                        << "; center_materials="
+                        << road_descriptor->center.materials.size();
+                if (!road_descriptor->center.materials.empty() &&
+                    road_descriptor->center.materials.front()) {
+                    const NDb::SMaterial* material =
+                            road_descriptor->center.materials.front().GetPtr();
+                    descriptor_report
+                            << "; material="
+                            << (material == nullptr
+                                        ? "<unavailable>"
+                                        : material->GetDBID().ToString().c_str())
+                            << "; texture="
+                            << (material == nullptr ||
+                                        !material->pTexture
+                                        ? "<unavailable>"
+                                        : material->pTexture->szDestName.c_str());
+                }
+            }
+            PlatformRuntime::instance().log_info(
+                    descriptor_report.str());
+            first_descriptor_logged = true;
+        }
+        if (AppendRoadInstance(
+                    road,
+                    terrain_info,
+                    mesh,
+                    &texture_paths)) {
+            ++g_road_instance_count;
+        }
+    }
+    g_road_texture_count = texture_paths.size();
+    std::ostringstream report;
+    report << "terrain_roads="
+           << (g_road_instance_count > 0 ? "ready" : "empty")
+           << "; descriptors=" << map->roads.size()
+           << "; rendered=" << g_road_instance_count
+           << "; segments=" << g_road_segment_count
+           << "; triangles=" << g_road_triangle_count
+           << "; textures=" << g_road_texture_count;
+    PlatformRuntime::instance().log_info(report.str());
 }
 
 void AppendPartIndices(
@@ -3057,6 +3510,7 @@ void BuildPresentationStaticWorldMesh(
             true,
             true,
             mesh);
+    AppendTerrainRoads(map, terrain_info, mesh);
 }
 
 std::vector<Bk2PresentationVertex> PresentationVertices(
@@ -3904,9 +4358,17 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
     if (mesh == nullptr) {
         return;
     }
+    size_t road_texture_layers = 0;
+    size_t road_texture_ready = 0;
     for (WorldObjectMesh::Layer& layer : mesh->layers) {
         layer.texture_handle =
                 ModelTextureHandle(layer.texture_path);
+        if (layer.texture_path.find("Terrain/roads/") == 0) {
+            ++road_texture_layers;
+            if (layer.texture_handle != UINT16_MAX) {
+                ++road_texture_ready;
+            }
+        }
         if (layer.alpha_blended &&
             (layer.texture_path == kInfantryTraceTexture ||
              layer.texture_path == kMechanizedTraceTexture) &&
@@ -3958,6 +4420,18 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
                              : "ready") +
                     "; path=" + layer.texture_path);
             g_destruction_effect_texture_logged = true;
+        }
+    }
+    if (road_texture_layers > 0) {
+        g_road_texture_gpu_count = road_texture_ready;
+        if (!g_road_texture_logged &&
+            road_texture_ready == road_texture_layers) {
+            std::ostringstream report;
+            report << "terrain_road_textures_gpu=ready"
+                   << "; ready=" << road_texture_ready
+                   << "; total=" << road_texture_layers;
+            PlatformRuntime::instance().log_info(report.str());
+            g_road_texture_logged = true;
         }
     }
 }
@@ -4289,6 +4763,12 @@ void ShutdownSinglePlayerRuntime() {
     g_water_last_update_seconds = -1.0f;
     g_water_waves_enabled = true;
     g_water_texture_logged = false;
+    g_road_instance_count = 0;
+    g_road_segment_count = 0;
+    g_road_triangle_count = 0;
+    g_road_texture_count = 0;
+    g_road_texture_gpu_count = 0;
+    g_road_texture_logged = false;
     g_converted_geometry_instance_count = 0;
     g_converted_geometry_fallback_count = 0;
     g_animated_geometry_part_count = 0;
@@ -5072,6 +5552,16 @@ std::string SinglePlayerRuntimeReport() {
            << g_water_wave_amplitude
            << "; water_wave_period="
            << g_water_wave_period
+           << "; terrain_road_instances="
+           << g_road_instance_count
+           << "; terrain_road_segments="
+           << g_road_segment_count
+           << "; terrain_road_triangles="
+           << g_road_triangle_count
+           << "; terrain_road_textures="
+           << g_road_texture_count
+           << "; terrain_road_textures_gpu="
+           << g_road_texture_gpu_count
            << "; texture_gpu="
            << ((g_terrain_layer_texture_count > 0 ||
                 g_terrain_mesh.texture_handle != UINT16_MAX)

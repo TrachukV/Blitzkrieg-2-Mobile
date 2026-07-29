@@ -520,6 +520,20 @@ coastline nodes, 5,532 triangles, and a ready Asia DDS GPU handle. Two
 one-second-apart captures of a static 600x300 lake crop measured PSNR 31.76 dB,
 confirming the surface changed between frames without a camera move.
 
+Roads are no longer baked into the coarse terrain fallback. The runtime reads
+each map's `STerrain::roads`, converts the `SVSOInstance` centerline positions
+and widths from legacy AI coordinates with `AI2Vis`, reconstructs the
+left/center/right atlas spans from `SRoadDesc`, projects every ribbon endpoint
+onto the current heightfield at the desktop `z+0.1` offset, and submits the
+result as alpha-blended world layers. Some binary road materials do not expose
+their `pTexture` through the current Android DB bridge, so the fallback resolver
+maps the original seasonal road descriptor names to the shipped
+`Terrain/roads/<season>/*.dds` files; it does not introduce replacement art.
+On ARM64 US1.2 all 12 descriptors rendered as 524 segments and 1,048 triangles,
+and all three referenced Asia road DDS files received valid GPU handles. The
+road running through the starting friendly formation is visible above the
+terrain and below units, vegetation, shadows, and legacy fog of war.
+
 The Android content step now decodes the shipped Granny format-6/Oodle0
 geometry into a small native `BK2MSH1` cache. The complete current pass yields
 2,510 renderable geometry files (1,126,692 vertices and 731,200 triangles);

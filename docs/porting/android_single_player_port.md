@@ -124,6 +124,20 @@ tiling values. The backend updates only the water vertex buffer at 20 Hz and
 submits it between terrain and world objects. A US1.2 ARM64 run loaded the Asia
 water DDS and reported 2,575 mask nodes, 3,021 rendered nodes, and 5,532
 triangles with no runtime error.
+Terrain roads now follow the original `RoadsBuilder.cpp` data path without
+linking the old D3D scene renderer. The Android runtime walks
+`STerrain::roads`, converts every `SVSOPoint` position and half-width from AI
+to visual coordinates, derives layer widths and U ranges from the center and
+optional border spans in `SRoadDesc`, advances V by segment length, preserves
+per-point and descriptor opacity, and samples the heightfield for the four
+ribbon corners at `z+0.1`. The current binary DB view can resolve the
+`SMaterial` resource while leaving its `pTexture` unloaded, so a descriptor-name
+fallback selects the corresponding shipped seasonal road DDS. US1.2 verified
+12 rendered road instances, 524 segments, 1,048 triangles, three distinct Asia
+DDS paths, and three ready GPU texture handles. The visible starting-area road
+also confirms that the required `AI2Vis` transform is applied; using the raw
+0-to-8192 editor coordinates would place all road geometry outside the
+0-to-352 rendered world.
 
 ## Implemented In This Slice
 
