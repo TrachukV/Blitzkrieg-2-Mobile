@@ -76,6 +76,8 @@ size_t g_animated_geometry_part_count = 0;
 size_t g_move_animation_instance_count = 0;
 size_t g_attack_animation_instance_count = 0;
 size_t g_death_animation_instance_count = 0;
+size_t g_combat_effect_render_count = 0;
+size_t g_active_combat_effect_count = 0;
 
 enum class ConvertedAnimationVariant {
     Base,
@@ -1521,6 +1523,127 @@ void AppendEntityModel(
     }
 }
 
+void AppendCombatEffectRibbon(
+        WorldObjectMesh* mesh,
+        const AndroidCombatEffect& effect) {
+    if (mesh == nullptr || effect.lifetime_millis == 0) {
+        return;
+    }
+    const float delta_x =
+            effect.destination_x - effect.source_x;
+    const float delta_y =
+            effect.destination_y - effect.source_y;
+    const float delta_z =
+            effect.destination_z - effect.source_z;
+    const float distance =
+            std::sqrt(delta_x * delta_x + delta_y * delta_y);
+    if (!std::isfinite(distance) || distance < 0.01f) {
+        return;
+    }
+
+    const float progress = std::min(
+            static_cast<float>(effect.age_millis) /
+                    static_cast<float>(effect.lifetime_millis),
+            1.0f);
+    const float maximum_streak =
+            effect.type == AndroidCombatEffectType::InfantryShot
+            ? 10.0f
+            : 18.0f;
+    const float streak_length = std::min(distance, maximum_streak);
+    const float streak_end = std::min(
+            distance,
+            std::max(streak_length, progress * distance));
+    const float streak_start =
+            std::max(0.0f, streak_end - streak_length);
+    const float inverse_distance = 1.0f / distance;
+    const float direction_x = delta_x * inverse_distance;
+    const float direction_y = delta_y * inverse_distance;
+    const float perpendicular_x = -direction_y;
+    const float perpendicular_y = direction_x;
+    const float width =
+            effect.type == AndroidCombatEffectType::InfantryShot
+            ? 0.08f
+            : 0.16f;
+    const float start_ratio = streak_start * inverse_distance;
+    const float end_ratio = streak_end * inverse_distance;
+    const float source_height =
+            effect.type == AndroidCombatEffectType::InfantryShot
+            ? 1.25f
+            : 1.75f;
+    const float start_x =
+            effect.source_x + direction_x * streak_start;
+    const float start_y =
+            effect.source_y + direction_y * streak_start;
+    const float start_z =
+            effect.source_z + source_height + delta_z * start_ratio;
+    const float end_x =
+            effect.source_x + direction_x * streak_end;
+    const float end_y =
+            effect.source_y + direction_y * streak_end;
+    const float end_z =
+            effect.source_z + source_height + delta_z * end_ratio;
+    const uint32_t color =
+            effect.type == AndroidCombatEffectType::InfantryShot
+            ? ArgbToAbgr(0xffffdf69u)
+            : ArgbToAbgr(0xffff9d35u);
+
+    const uint32_t ribbon_base =
+            static_cast<uint32_t>(mesh->vertices.size());
+    mesh->vertices.push_back(TerrainVertex{
+            start_x + perpendicular_x * width,
+            start_y + perpendicular_y * width,
+            start_z,
+            0.0f,
+            0.0f,
+            color});
+    mesh->vertices.push_back(TerrainVertex{
+            start_x - perpendicular_x * width,
+            start_y - perpendicular_y * width,
+            start_z,
+            0.0f,
+            1.0f,
+            color});
+    mesh->vertices.push_back(TerrainVertex{
+            end_x - perpendicular_x * width,
+            end_y - perpendicular_y * width,
+            end_z,
+            1.0f,
+            1.0f,
+            color});
+    mesh->vertices.push_back(TerrainVertex{
+            end_x + perpendicular_x * width,
+            end_y + perpendicular_y * width,
+            end_z,
+            1.0f,
+            0.0f,
+            color});
+    const uint32_t ribbon_indices[] = {0, 2, 1, 0, 3, 2};
+    for (uint32_t index : ribbon_indices) {
+        mesh->triangle_indices.push_back(ribbon_base + index);
+    }
+
+    if (effect.age_millis <= 80u) {
+        const float flash_size =
+                effect.type == AndroidCombatEffectType::InfantryShot
+                ? 0.38f
+                : 0.7f;
+        AppendObjectMarker(
+                mesh,
+                effect.source_x + direction_x * flash_size,
+                effect.source_y + direction_y * flash_size,
+                effect.source_z + source_height,
+                flash_size,
+                flash_size * 1.7f,
+                color);
+    }
+    ++g_combat_effect_render_count;
+    if (g_combat_effect_render_count == 1) {
+        PlatformRuntime::instance().log_info(
+                std::string("combat_effect_render=active; source=") +
+                std::to_string(effect.source_unit_id));
+    }
+}
+
 void AppendMapObjects(
         const vector<NDb::SMapObjectInfo>& objects,
         const STerrainInfo& terrain_info,
@@ -1661,9 +1784,13 @@ void PublishPresentationMeshes(
 bool RefreshDynamicWorldMeshLocked(bool force) {
     const Bk2PresentationSnapshotInfo info =
             bk2_presentation_snapshot_info();
+    const std::vector<AndroidCombatEffect> combat_effects =
+            CopyActiveAndroidCombatEffects();
     if (!force &&
         info.generation == g_rendered_presentation_generation &&
-        g_animated_geometry_part_count == 0) {
+        g_animated_geometry_part_count == 0 &&
+        combat_effects.empty() &&
+        g_active_combat_effect_count == 0) {
         return true;
     }
     std::vector<Bk2PresentationEntity> entities(info.entity_count);
@@ -1723,6 +1850,17 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         } else {
             ++death;
         }
+    }
+    const size_t previous_active_combat_effect_count =
+            g_active_combat_effect_count;
+    for (const AndroidCombatEffect& effect : combat_effects) {
+        AppendCombatEffectRibbon(&combined, effect);
+    }
+    g_active_combat_effect_count = combat_effects.size();
+    if (previous_active_combat_effect_count > 0 &&
+        g_active_combat_effect_count == 0) {
+        PlatformRuntime::instance().log_info(
+                "combat_effect_render=cleared");
     }
     g_world_object_mesh = std::move(combined);
     RefreshWorldObjectTextureHandles(&g_world_object_mesh);
@@ -2340,6 +2478,8 @@ void ShutdownSinglePlayerRuntime() {
     g_move_animation_instance_count = 0;
     g_attack_animation_instance_count = 0;
     g_death_animation_instance_count = 0;
+    g_combat_effect_render_count = 0;
+    g_active_combat_effect_count = 0;
     g_converted_geometries.clear();
     g_missing_converted_geometries.clear();
     g_move_converted_geometries.clear();
@@ -2592,6 +2732,10 @@ std::string SinglePlayerRuntimeReport() {
            << g_attack_animation_instance_count
            << "; death_animation_instances="
            << g_death_animation_instance_count
+           << "; combat_effect_renders="
+           << g_combat_effect_render_count
+           << "; active_combat_effects_rendered="
+           << g_active_combat_effect_count
            << "; static_fallback_types="
            << g_static_fallback_stats_paths.size()
            << "; dynamic_fallback_types="

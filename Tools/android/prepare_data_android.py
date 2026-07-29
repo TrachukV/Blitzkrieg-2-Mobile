@@ -74,6 +74,7 @@ REQUIRED_DB_PAYLOAD_DIRS = [
     Path("Data/Test"),
     Path("Data/Sounds"),
     Path("Data/SoundAndMusic"),
+    Path("Data/Weapons"),
 ]
 
 

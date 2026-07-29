@@ -260,6 +260,14 @@ void PollInput(android_app* app) {
             case AKEYCODE_V:
                 bk2::android::HandleLegacyInputEvent("local_win");
                 break;
+            case AKEYCODE_F:
+                bk2::android::HandleLegacyInputEvent(
+                        "debug_force_combat");
+                break;
+            case AKEYCODE_T:
+                bk2::android::HandleLegacyInputEvent(
+                        "debug_combat_effect");
+                break;
             case AKEYCODE_K:
                 bk2::android::HandleLegacyInputEvent(
                         "debug_kill_attack_target");

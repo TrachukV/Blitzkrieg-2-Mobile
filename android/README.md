@@ -283,7 +283,8 @@ python3 tools/android/validate_transcoded_videos.py \
 git sparse-checkout add \
   Versions/Current/Data/Scenario \
   Versions/Current/Data/Consts \
-  Versions/Current/Data/Other/Text
+  Versions/Current/Data/Other/Text \
+  Versions/Current/Data/Weapons
 
 python3 tools/android/prepare_data_android.py \
   --output DataAndroid \
@@ -583,12 +584,19 @@ Touch controls currently implemented:
 - pinch to zoom;
 - rotate with a two-finger twist.
 
-Debug APKs also accept keyboard `K` after an attack target is selected. It
-kills a hostile infantry member through the real `CAIUnit::Die` path so the
-death presentation bridge can be smoke-tested. Keyboard `V` sends the same
-`local_win` event used by mission Lua, allowing campaign autosave and
-continuation to be tested without completing a full battle. Both shortcuts are
-absent from release builds.
+Debug APKs also accept keyboard `F` to select the closest valid player/enemy
+pair and issue the real legacy attack command. Keyboard `T` emits a debug-only
+combat-effect payload between that pair to smoke-test the tracer renderer
+without pretending that an AI shot occurred. Keyboard `K` then kills a hostile
+infantry member through the real `CAIUnit::Die` path so the death presentation
+bridge can be smoke-tested. Keyboard `V` sends the same `local_win` event used
+by mission Lua, allowing campaign autosave and continuation to be tested without
+completing a full battle. All four shortcuts are absent from release builds.
+
+`Data/Weapons` is required runtime DB payload. Without it, mine descriptors keep
+an unresolved `pWeapon`; the original `CMineStaticObject::Detonate` path then
+dereferences that null resource when a unit crosses a mine. The staging
+validator treats a missing or empty Weapons directory as a blocker.
 
 The in-game Android HUD now uses the shipped `MissionMain.tga` panel,
 `MiniMap/foreground.tga`, and original Move, Attack, Stop, Objectives, and F10
@@ -644,11 +652,15 @@ This is a playable runtime milestone, not a complete visual port. Terrain now
 uses original game materials and the first runtime model path uses original
 Granny geometry and DDS materials. Compatible rifle infantry now uses original
 bone weights plus idle/move/shoot/death animation frames selected from live AI
-state. Multi-mesh Granny models preserve all of their model mesh bindings;
+state. Real `SAIInfantryShotUpdate` and `SAIMechShotUpdate` events now produce
+short-lived colored muzzle flashes and moving tracer ribbons at the source and
+destination coordinates supplied by the legacy AI simulation. Multi-mesh
+Granny models preserve all of their model mesh bindings;
 global `InitialPlacement` is intentionally not reapplied because shipped
 infantry geometry already contains the correct root placement. Stance animation
-selection, GPU/runtime skinning, combat effects, complete briefing HUD behavior,
-and the complete campaign-selection/progression UI remain unfinished.
+selection, GPU/runtime skinning, projectile/explosion asset effects, complete
+briefing HUD behavior, and the complete campaign-selection/progression UI remain
+unfinished.
 
 The video transcode manifest now writes Android-canonical runtime paths. A Bink
 ref such as `Movies\Nival.bik` maps to `DataAndroid/Movies/Nival.mp4`, not to a

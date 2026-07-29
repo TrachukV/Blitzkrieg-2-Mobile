@@ -98,6 +98,14 @@ uint64_t g_player_move_command_count = 0;
 uint64_t g_player_attack_command_count = 0;
 uint64_t g_client_update_count = 0;
 uint64_t g_objective_update_count = 0;
+struct TimedCombatEffect {
+    AndroidCombatEffect effect;
+    uint64_t created_millis = 0;
+    uint64_t expires_millis = 0;
+};
+std::vector<TimedCombatEffect> g_combat_effects;
+uint64_t g_infantry_shot_effect_count = 0;
+uint64_t g_mechanized_shot_effect_count = 0;
 struct PresentationCorpse {
     Bk2PresentationEntity entity{};
     uint64_t expires_millis = 0;
@@ -536,6 +544,57 @@ void CapturePresentationCorpse(
             std::to_string(unit_id));
 }
 
+void CaptureCombatEffect(
+        int32_t source_unit_id,
+        const CVec3& destination,
+        AndroidCombatEffectType type) {
+    CAIUnit* source = CAIUnit::GetUnitByUniqueID(source_unit_id);
+    if (source == nullptr) {
+        return;
+    }
+    const CVec3& source_center = source->GetCenter();
+    TimedCombatEffect timed;
+    timed.effect.type = type;
+    timed.effect.source_unit_id = source_unit_id;
+    timed.effect.source_x = AI2Vis(source_center.x);
+    timed.effect.source_y = AI2Vis(source_center.y);
+    timed.effect.source_z = AI2Vis(source->GetVisZ());
+    timed.effect.destination_x = AI2Vis(destination.x);
+    timed.effect.destination_y = AI2Vis(destination.y);
+    timed.effect.destination_z = AI2Vis(destination.z);
+    timed.effect.lifetime_millis =
+            type == AndroidCombatEffectType::InfantryShot ? 180u : 260u;
+    timed.created_millis = g_timer_millis;
+    timed.expires_millis =
+            g_timer_millis + timed.effect.lifetime_millis;
+    g_combat_effects.push_back(timed);
+
+    uint64_t* counter =
+            type == AndroidCombatEffectType::InfantryShot
+            ? &g_infantry_shot_effect_count
+            : &g_mechanized_shot_effect_count;
+    ++*counter;
+    if (*counter == 1) {
+        PlatformRuntime::instance().log_info(
+                std::string("combat_effect=") +
+                (type == AndroidCombatEffectType::InfantryShot
+                         ? "infantry_shot"
+                         : "mechanized_shot") +
+                "; source=" + std::to_string(source_unit_id));
+    }
+}
+
+void PruneExpiredCombatEffects() {
+    g_combat_effects.erase(
+            std::remove_if(
+                    g_combat_effects.begin(),
+                    g_combat_effects.end(),
+                    [](const TimedCombatEffect& effect) {
+                        return effect.expires_millis <= g_timer_millis;
+                    }),
+            g_combat_effects.end());
+}
+
 void DrainLegacyClientUpdates() {
     if (g_ai_logic == nullptr) {
         return;
@@ -555,6 +614,24 @@ void DrainLegacyClientUpdates() {
                                       placement.center.x,
                                       placement.center.y,
                                       placement.z));
+            continue;
+        }
+        SAIInfantryShotUpdate* infantry_shot =
+                dynamic_cast<SAIInfantryShotUpdate*>(update.GetPtr());
+        if (infantry_shot != nullptr) {
+            CaptureCombatEffect(
+                    infantry_shot->info.nObjUniqueID,
+                    infantry_shot->info.vDestPos,
+                    AndroidCombatEffectType::InfantryShot);
+            continue;
+        }
+        SAIMechShotUpdate* mechanized_shot =
+                dynamic_cast<SAIMechShotUpdate*>(update.GetPtr());
+        if (mechanized_shot != nullptr) {
+            CaptureCombatEffect(
+                    mechanized_shot->info.nObjUniqueID,
+                    mechanized_shot->info.vDestPos,
+                    AndroidCombatEffectType::MechanizedShot);
             continue;
         }
         SAIFeedbackUpdate* feedback =
@@ -917,6 +994,9 @@ void ResetReportState() {
     g_missing_squad_payload_refs.clear();
     g_client_update_count = 0;
     g_objective_update_count = 0;
+    g_combat_effects.clear();
+    g_infantry_shot_effect_count = 0;
+    g_mechanized_shot_effect_count = 0;
     g_last_presentation_entities.clear();
     g_presentation_corpses.clear();
     g_presentation_death_count = 0;
@@ -1059,6 +1139,7 @@ void TickLegacyGameRuntime(uint32_t elapsed_millis) {
         advanced = true;
     }
     DrainLegacyClientUpdates();
+    PruneExpiredCombatEffects();
     FinalizePendingMissionOutcome();
     if (g_mission_outcome.load() != kLegacyMissionRunning) {
         CountAIUnits();
@@ -1214,6 +1295,71 @@ void HandleLegacyInputEvent(const char* event_name) {
     } else if (std::strcmp(event_name, "local_loose") == 0) {
         g_pending_mission_outcome.store(kLegacyMissionLost);
 #if !defined(NDEBUG)
+    } else if (std::strcmp(event_name, "debug_force_combat") == 0) {
+        CAIUnit* attacker = nullptr;
+        CAIUnit* target = nullptr;
+        float best_distance_squared =
+                std::numeric_limits<float>::max();
+        for (CGlobalIter attacker_iter(0, ANY_PARTY);
+             !attacker_iter.IsFinished();
+             attacker_iter.Iterate()) {
+            CAIUnit* candidate = *attacker_iter;
+            if (candidate == nullptr ||
+                !candidate->IsAlive() ||
+                !candidate->IsSelectable() ||
+                candidate->GetPlayer() != 0) {
+                continue;
+            }
+            for (CGlobalIter target_iter(0, ANY_PARTY);
+                 !target_iter.IsFinished();
+                 target_iter.Iterate()) {
+                CAIUnit* enemy = *target_iter;
+                if (enemy == nullptr ||
+                    !enemy->IsAlive() ||
+                    enemy->GetPlayer() == candidate->GetPlayer()) {
+                    continue;
+                }
+                const CVec2 delta =
+                        enemy->GetCenterPlain() -
+                        candidate->GetCenterPlain();
+                const float distance_squared =
+                        delta.x * delta.x + delta.y * delta.y;
+                if (distance_squared < best_distance_squared) {
+                    best_distance_squared = distance_squared;
+                    attacker = candidate;
+                    target = enemy;
+                }
+            }
+        }
+        if (attacker != nullptr && target != nullptr &&
+            SelectLegacyUnit(attacker->GetUniqueIdQU(), 0) &&
+            AttackSelectedLegacyUnit(target->GetUniqueIdQU())) {
+            PlatformRuntime::instance().log_info(
+                    std::string("debug_force_combat=") +
+                    std::to_string(attacker->GetUniqueIdQU()) +
+                    "; target=" +
+                    std::to_string(target->GetUniqueIdQU()));
+        }
+    } else if (std::strcmp(event_name, "debug_combat_effect") == 0 &&
+               g_selected_unit_id >= 0 &&
+               g_attack_target_unit_id >= 0) {
+        CAIUnit* attacker =
+                CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+        CAIUnit* target =
+                CAIUnit::GetUnitByUniqueID(g_attack_target_unit_id);
+        if (attacker != nullptr && target != nullptr) {
+            CaptureCombatEffect(
+                    attacker->GetUniqueIdQU(),
+                    target->GetCenter(),
+                    attacker->IsMech()
+                            ? AndroidCombatEffectType::MechanizedShot
+                            : AndroidCombatEffectType::InfantryShot);
+            PlatformRuntime::instance().log_info(
+                    std::string("debug_combat_effect=") +
+                    std::to_string(attacker->GetUniqueIdQU()) +
+                    "; target=" +
+                    std::to_string(target->GetUniqueIdQU()));
+        }
     } else if (std::strcmp(event_name, "debug_kill_attack_target") == 0 &&
                g_attack_target_unit_id >= 0) {
         CAIUnit* target =
@@ -1250,6 +1396,21 @@ const char* LegacyMissionOutcome() {
     return MissionOutcomeName(g_mission_outcome.load());
 }
 
+std::vector<AndroidCombatEffect> CopyActiveAndroidCombatEffects() {
+    std::vector<AndroidCombatEffect> result;
+    result.reserve(g_combat_effects.size());
+    for (const TimedCombatEffect& timed : g_combat_effects) {
+        AndroidCombatEffect effect = timed.effect;
+        effect.age_millis = static_cast<uint32_t>(
+                std::min(
+                        g_timer_millis - timed.created_millis,
+                        static_cast<uint64_t>(
+                                effect.lifetime_millis)));
+        result.push_back(effect);
+    }
+    return result;
+}
+
 void ShutdownLegacyGameRuntime() {
     if (g_ai_logic != nullptr) {
         g_ai_logic->Suspend();
@@ -1278,6 +1439,9 @@ void ShutdownLegacyGameRuntime() {
     g_last_presentation_entities.clear();
     g_presentation_corpses.clear();
     g_presentation_death_count = 0;
+    g_combat_effects.clear();
+    g_infantry_shot_effect_count = 0;
+    g_mechanized_shot_effect_count = 0;
     g_mission_outcome.store(kLegacyMissionRunning);
     g_pending_mission_outcome.store(kLegacyMissionRunning);
     g_android_move_active = false;
@@ -1313,6 +1477,11 @@ std::string LegacyGameRuntimeReport() {
            << "; player_attack_commands=" << g_player_attack_command_count
            << "; client_updates=" << g_client_update_count
            << "; objective_updates=" << g_objective_update_count
+           << "; infantry_shot_effects="
+           << g_infantry_shot_effect_count
+           << "; mechanized_shot_effects="
+           << g_mechanized_shot_effect_count
+           << "; active_combat_effects=" << g_combat_effects.size()
            << "; presented_deaths=" << g_presentation_death_count
            << "; active_corpses=" << g_presentation_corpses.size()
            << "; normalized_rpg_stats=" << g_normalized_rpg_stats_count
