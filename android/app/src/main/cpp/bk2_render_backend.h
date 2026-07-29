@@ -17,10 +17,18 @@ struct TerrainVertex {
     uint32_t abgr = 0xffffffffu;
 };
 
+struct TerrainLayer {
+    std::vector<uint32_t> triangle_indices;
+    int terrain_type_index = -1;
+    uint16_t texture_handle = UINT16_MAX;
+    uint32_t fallback_argb = 0xff61764fu;
+};
+
 struct TerrainMesh {
     std::vector<TerrainVertex> vertices;
     std::vector<uint32_t> triangle_indices;
     std::vector<uint32_t> line_indices;
+    std::vector<TerrainLayer> layers;
     float center_x = 0.0f;
     float center_y = 0.0f;
     float center_z = 0.0f;

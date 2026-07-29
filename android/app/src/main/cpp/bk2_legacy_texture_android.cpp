@@ -338,7 +338,9 @@ public:
               usage_(REGULAR),
               wrap_(CLAMP),
               frame_mru_(0),
-              uploaded_levels_(0) {
+              uploaded_levels_(0),
+              force_opaque_(false),
+              force_base_level_only_(false) {
 #if defined(BK2_BGFX_RENDERER_ENABLED)
         texture_handle_ = BGFX_INVALID_HANDLE;
 #endif
@@ -360,7 +362,9 @@ public:
               usage_(usage),
               wrap_(wrap),
               frame_mru_(0),
-              uploaded_levels_(0) {
+              uploaded_levels_(0),
+              force_opaque_(false),
+              force_base_level_only_(false) {
 #if defined(BK2_BGFX_RENDERER_ENABLED)
         texture_handle_ = BGFX_INVALID_HANDLE;
 #endif
@@ -437,6 +441,16 @@ public:
         DestroyGpuTexture();
     }
 
+    void ConfigureTerrainSampling() {
+        if (force_opaque_ && force_base_level_only_) {
+            return;
+        }
+        force_opaque_ = true;
+        force_base_level_only_ = true;
+        DestroyGpuTexture();
+        UploadLevel(0);
+    }
+
     uint8_t* MutableLevelBytes(int level) {
         if (level < 0 || level >= static_cast<int>(levels_.size())) {
             return 0;
@@ -456,6 +470,9 @@ public:
 
     void UploadLevel(int level) {
         if (level < 0 || level >= static_cast<int>(levels_.size())) {
+            return;
+        }
+        if (force_base_level_only_ && level != 0) {
             return;
         }
         if (!CanUploadAsRgba8(pixel_id_)) {
@@ -612,19 +629,24 @@ private:
         rgba->assign(static_cast<size_t>(src.width) * src.height * 4, 0);
         if (IsDxtFormat(pixel_id_)) {
             DecodeDxtLevelToRgba8(src, rgba);
-            return;
+        } else {
+            for (int y = 0; y < src.height; ++y) {
+                const uint8_t* row =
+                        &src.bytes[static_cast<size_t>(y) * src.stride];
+                for (int x = 0; x < src.width; ++x) {
+                    const SPixel8888 pixel = ReadPixelAs8888(row, x);
+                    const size_t offset =
+                            (static_cast<size_t>(y) * src.width + x) * 4;
+                    (*rgba)[offset + 0] = static_cast<uint8_t>(pixel.r);
+                    (*rgba)[offset + 1] = static_cast<uint8_t>(pixel.g);
+                    (*rgba)[offset + 2] = static_cast<uint8_t>(pixel.b);
+                    (*rgba)[offset + 3] = static_cast<uint8_t>(pixel.a);
+                }
+            }
         }
-        for (int y = 0; y < src.height; ++y) {
-            const uint8_t* row =
-                    &src.bytes[static_cast<size_t>(y) * src.stride];
-            for (int x = 0; x < src.width; ++x) {
-                const SPixel8888 pixel = ReadPixelAs8888(row, x);
-                const size_t offset =
-                        (static_cast<size_t>(y) * src.width + x) * 4;
-                (*rgba)[offset + 0] = static_cast<uint8_t>(pixel.r);
-                (*rgba)[offset + 1] = static_cast<uint8_t>(pixel.g);
-                (*rgba)[offset + 2] = static_cast<uint8_t>(pixel.b);
-                (*rgba)[offset + 3] = static_cast<uint8_t>(pixel.a);
+        if (force_opaque_) {
+            for (size_t offset = 3; offset < rgba->size(); offset += 4) {
+                (*rgba)[offset] = 0xff;
             }
         }
     }
@@ -711,7 +733,7 @@ private:
         texture_handle_ = bgfx::createTexture2D(
                 static_cast<uint16_t>(size_x_),
                 static_cast<uint16_t>(size_y_),
-                mip_levels_ > 1,
+                mip_levels_ > 1 && !force_base_level_only_,
                 1,
                 bgfx::TextureFormat::RGBA8,
                 flags);
@@ -741,6 +763,8 @@ private:
     EWrap wrap_;
     int frame_mru_;
     int uploaded_levels_;
+    bool force_opaque_;
+    bool force_base_level_only_;
     std::vector<SAndroidTextureLevel> levels_;
 #if defined(BK2_BGFX_RENDERER_ENABLED)
     bgfx::TextureHandle texture_handle_;
@@ -1576,6 +1600,12 @@ NGfx::CTexture* LegacyTextureSmokeTexture() {
 void EnsureLegacyTextureUploaded(NGfx::CTexture* texture, int level) {
     if (IsValid(texture) && !texture->HasGpuHandle()) {
         texture->UploadLevel(level);
+    }
+}
+
+void ConfigureLegacyTerrainTexture(NGfx::CTexture* texture) {
+    if (IsValid(texture)) {
+        texture->ConfigureTerrainSampling();
     }
 }
 

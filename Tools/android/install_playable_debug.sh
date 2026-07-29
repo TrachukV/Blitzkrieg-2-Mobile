@@ -33,12 +33,18 @@ if "${ADB_BIN}" shell run-as "${PACKAGE}" \
    "${ADB_BIN}" shell run-as "${PACKAGE}" \
         test -r files/DataAndroid/Data/index.bin &&
    "${ADB_BIN}" shell run-as "${PACKAGE}" \
-        test -d files/DataAndroid/Data/Scenario; then
+        test -d files/DataAndroid/Data/Scenario &&
+   "${ADB_BIN}" shell run-as "${PACKAGE}" \
+        test -r files/DataAndroid/Data/Terrain/TGTerraSet/Sets/Asia_TGTerraSet.xdb &&
+   "${ADB_BIN}" shell run-as "${PACKAGE}" \
+        test -r files/DataAndroid/Data/Scene/TexAndMats/All/Terrain/Sets/Asia/Grass_Texture.dds; then
     echo "Game data is already staged in app-private storage."
 else
     if [[ ! -r "${DATA_SOURCE}/Data/types.xml" ||
           ! -r "${DATA_SOURCE}/Data/index.bin" ||
-          ! -d "${DATA_SOURCE}/Data/Scenario" ]]; then
+          ! -d "${DATA_SOURCE}/Data/Scenario" ||
+          ! -r "${DATA_SOURCE}/Data/Terrain/TGTerraSet/Sets/Asia_TGTerraSet.xdb" ||
+          ! -r "${DATA_SOURCE}/Data/Scene/TexAndMats/All/Terrain/Sets/Asia/Grass_Texture.dds" ]]; then
         echo "Incomplete DataAndroid source: ${DATA_SOURCE}" >&2
         exit 1
     fi

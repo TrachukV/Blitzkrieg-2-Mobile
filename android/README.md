@@ -424,6 +424,14 @@ lists 75 map descriptors that have an adjacent readable `map.b2m` and hides 42
 incomplete descriptors. The first USA campaign mission has been verified on the
 ARM64 Android emulator with the real `map.b2m`, a `193x193` heightfield, 73,728
 terrain triangles, Lua mission scripts, and 198 live legacy AI units.
+The terrain renderer now reads `tileTerraMap`, resolves all 19 materials from
+the mission's `TGTerraSet`, and uploads the shipped 512x512 DXT3 DDS textures.
+It no longer stretches the minimap across the heightfield or draws the
+diagnostic radar grid. Terrain textures use an opaque, base-level Android GPU
+upload because their legacy DXT3 alpha and mip chain were authored for the
+original multi-layer terrain shader and otherwise produced black distant
+terrain in the current bgfx path. The current renderer assigns one dominant
+material per tile; the original soft terrain-mask blending is still pending.
 
 The Android VFS resolves legacy asset paths case-insensitively while preserving
 the actual on-disk spelling. This is required for content such as GB3.1 whose
@@ -469,8 +477,9 @@ are shown as small groups and mechanized units use oriented low-poly hull,
 turret, and barrel geometry. The camera starts focused on the player's
 formation.
 
-This is a playable runtime milestone, not a complete visual port. Units and
-buildings still use temporary generated geometry. Original Granny models,
+This is a playable runtime milestone, not a complete visual port. Terrain now
+uses original game materials, but units and buildings still use temporary
+generated geometry. Original Granny models,
 skeletons, animations, combat presentation, briefing/game HUD, and the
 complete campaign-selection/progression UI remain unfinished.
 

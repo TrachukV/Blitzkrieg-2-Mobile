@@ -55,6 +55,10 @@ WorldObjectMesh g_static_world_object_mesh;
 WorldObjectMesh g_world_object_mesh;
 CObj<NGfx::CTexture> g_terrain_texture;
 std::string g_terrain_texture_path;
+std::vector<CObj<NGfx::CTexture> > g_terrain_layer_textures;
+std::vector<std::string> g_terrain_layer_texture_paths;
+size_t g_terrain_layer_count = 0;
+size_t g_terrain_layer_texture_count = 0;
 
 struct MissionLaunchOverride {
     bool present = false;
@@ -315,10 +319,9 @@ bool BuildTerrainMesh(
                             static_cast<float>(y) * VIS_TILE_SIZE,
                             z,
                             static_cast<float>(x) /
-                                    static_cast<float>(width - 1),
-                            1.0f -
-                                    static_cast<float>(y) /
-                                            static_cast<float>(height - 1),
+                                    static_cast<float>(DEF_PATCH_SIZE),
+                            static_cast<float>(y) /
+                                    static_cast<float>(DEF_PATCH_SIZE),
                             0xffffffffu});
             min_height = std::min(min_height, z);
             max_height = std::max(max_height, z);
@@ -374,6 +377,69 @@ bool BuildTerrainMesh(
     g_height_height = height;
     g_triangle_count = tile_count * 2;
     return true;
+}
+
+bool BuildTerrainLayers(
+        const NDb::SMapInfo* map,
+        const STerrainInfo& info,
+        TerrainMesh* mesh) {
+    if (map == nullptr || mesh == nullptr || !map->pTerraSet) {
+        return false;
+    }
+    const NDb::STGTerraSet* terra_set = map->pTerraSet.GetPtr();
+    if (terra_set == nullptr || terra_set->terraTypes.empty() ||
+        info.tileTerraMap.GetSizeX() <= 0 ||
+        info.tileTerraMap.GetSizeY() <= 0) {
+        return false;
+    }
+
+    mesh->layers.clear();
+    mesh->layers.resize(terra_set->terraTypes.size());
+    for (size_t index = 0; index < mesh->layers.size(); ++index) {
+        TerrainLayer& layer = mesh->layers[index];
+        layer.terrain_type_index = static_cast<int>(index);
+        const NDb::STGTerraType* type = terra_set->terraTypes[index].GetPtr();
+        if (type != nullptr) {
+            layer.fallback_argb = static_cast<uint32_t>(type->nColor);
+        }
+    }
+
+    const int width = HeightWidth(info);
+    const int height = HeightHeight(info);
+    for (int y = 0; y < height - 1; ++y) {
+        for (int x = 0; x < width - 1; ++x) {
+            const int map_x = std::min(x, info.tileTerraMap.GetSizeX() - 1);
+            const int map_y = std::min(y, info.tileTerraMap.GetSizeY() - 1);
+            const int type_index = info.tileTerraMap[map_y][map_x];
+            if (type_index < 0 ||
+                type_index >= static_cast<int>(mesh->layers.size())) {
+                continue;
+            }
+            const uint32_t top_left = static_cast<uint32_t>(y * width + x);
+            const uint32_t top_right = top_left + 1;
+            const uint32_t bottom_left =
+                    top_left + static_cast<uint32_t>(width);
+            const uint32_t bottom_right = bottom_left + 1;
+            TerrainLayer& layer = mesh->layers[type_index];
+            layer.triangle_indices.push_back(top_left);
+            layer.triangle_indices.push_back(bottom_left);
+            layer.triangle_indices.push_back(top_right);
+            layer.triangle_indices.push_back(top_right);
+            layer.triangle_indices.push_back(bottom_left);
+            layer.triangle_indices.push_back(bottom_right);
+        }
+    }
+
+    mesh->layers.erase(
+            std::remove_if(
+                    mesh->layers.begin(),
+                    mesh->layers.end(),
+                    [](const TerrainLayer& layer) {
+                        return layer.triangle_indices.empty();
+                    }),
+            mesh->layers.end());
+    g_terrain_layer_count = mesh->layers.size();
+    return !mesh->layers.empty();
 }
 
 float TerrainHeightAt(
@@ -1071,12 +1137,16 @@ bool ScreenToTerrainLocked(
     return true;
 }
 
-bool LoadTerrainTexture(const NDb::SMapInfo* map) {
-    if (map == nullptr || !map->pMiniMap || !map->pMiniMap->pTexture) {
+bool LoadTextureImmediately(
+        const NDb::STexture* texture_desc,
+        CObj<NGfx::CTexture>* texture) {
+    if (texture_desc == nullptr || texture == nullptr) {
         return false;
     }
-
-    const NDb::STexture* texture_desc = map->pMiniMap->pTexture;
+    NDb::STexture* mutable_desc =
+            const_cast<NDb::STexture*>(texture_desc);
+    const bool was_instant_load = mutable_desc->bInstantLoad;
+    mutable_desc->bInstantLoad = true;
     CObj<NGScene::CFileTexture> texture_node =
             new NGScene::CFileTexture();
     GUID uid;
@@ -1084,13 +1154,68 @@ bool LoadTerrainTexture(const NDb::SMapInfo* map) {
     texture_node->SetKey(NGScene::GetKey(texture_desc), uid);
     CDGPtr<NGScene::CFileTexture> texture_ref(texture_node.GetPtr());
     texture_ref.Refresh();
-    g_terrain_texture = texture_ref->GetValue();
-    if (!IsValid(g_terrain_texture)) {
+    *texture = texture_ref->GetValue();
+    mutable_desc->bInstantLoad = was_instant_load;
+    return IsValid(*texture);
+}
+
+bool LoadTerrainTexture(const NDb::SMapInfo* map) {
+    if (map == nullptr || !map->pMiniMap || !map->pMiniMap->pTexture) {
+        return false;
+    }
+
+    const NDb::STexture* texture_desc = map->pMiniMap->pTexture;
+    if (!LoadTextureImmediately(texture_desc, &g_terrain_texture)) {
         return false;
     }
 
     g_terrain_texture_path = texture_desc->szDestName.c_str();
     return true;
+}
+
+size_t LoadTerrainLayerTextures(
+        const NDb::SMapInfo* map,
+        TerrainMesh* mesh) {
+    g_terrain_layer_textures.clear();
+    g_terrain_layer_texture_paths.clear();
+    g_terrain_layer_texture_count = 0;
+    if (map == nullptr || mesh == nullptr || !map->pTerraSet) {
+        return 0;
+    }
+    const NDb::STGTerraSet* terra_set = map->pTerraSet.GetPtr();
+    if (terra_set == nullptr) {
+        return 0;
+    }
+
+    g_terrain_layer_textures.resize(mesh->layers.size());
+    g_terrain_layer_texture_paths.resize(mesh->layers.size());
+    for (size_t layer_index = 0;
+         layer_index < mesh->layers.size();
+         ++layer_index) {
+        TerrainLayer& layer = mesh->layers[layer_index];
+        if (layer.terrain_type_index < 0 ||
+            layer.terrain_type_index >=
+                    static_cast<int>(terra_set->terraTypes.size())) {
+            continue;
+        }
+        const NDb::STGTerraType* type =
+                terra_set->terraTypes[layer.terrain_type_index].GetPtr();
+        if (type == nullptr || !type->pMaterial ||
+            !type->pMaterial->pTexture) {
+            continue;
+        }
+        const NDb::STexture* texture_desc = type->pMaterial->pTexture;
+        CObj<NGfx::CTexture> texture;
+        if (!LoadTextureImmediately(texture_desc, &texture)) {
+            continue;
+        }
+        ConfigureLegacyTerrainTexture(texture);
+        g_terrain_layer_textures[layer_index] = texture;
+        g_terrain_layer_texture_paths[layer_index] =
+                texture_desc->szDestName.c_str();
+        ++g_terrain_layer_texture_count;
+    }
+    return g_terrain_layer_texture_count;
 }
 
 bool RefreshRenderResourcesLocked() {
@@ -1102,6 +1227,18 @@ bool RefreshRenderResourcesLocked() {
         EnsureLegacyTextureUploaded(g_terrain_texture, 0);
         g_terrain_mesh.texture_handle =
                 LegacyTextureHandleIndex(g_terrain_texture);
+    }
+    for (size_t index = 0;
+         index < g_terrain_mesh.layers.size();
+         ++index) {
+        g_terrain_mesh.layers[index].texture_handle = UINT16_MAX;
+        if (index >= g_terrain_layer_textures.size() ||
+            !IsValid(g_terrain_layer_textures[index])) {
+            continue;
+        }
+        EnsureLegacyTextureUploaded(g_terrain_layer_textures[index], 0);
+        g_terrain_mesh.layers[index].texture_handle =
+                LegacyTextureHandleIndex(g_terrain_layer_textures[index]);
     }
     if (!RenderBackend().set_terrain_mesh(g_terrain_mesh)) {
         return false;
@@ -1153,11 +1290,14 @@ bool InitializeSinglePlayerRuntime() {
     if (!BuildTerrainMesh(terrain_info, &mesh, &g_last_error)) {
         return false;
     }
+    BuildTerrainLayers(map, terrain_info, &mesh);
     WorldObjectMesh world_object_mesh;
     BuildWorldObjectMesh(map, terrain_info, &world_object_mesh);
     WorldObjectMesh presentation_world_mesh;
     BuildPresentationStaticWorldMesh(map, terrain_info, &presentation_world_mesh);
-    LoadTerrainTexture(map);
+    if (LoadTerrainLayerTextures(map, &mesh) == 0) {
+        LoadTerrainTexture(map);
+    }
 
     g_camera.target_x = mesh.center_x;
     g_camera.target_y = mesh.center_y;
@@ -1239,6 +1379,8 @@ void ShutdownSinglePlayerRuntime() {
     RenderBackend().clear_terrain_mesh();
     RenderBackend().clear_world_object_mesh();
     g_terrain_texture = 0;
+    g_terrain_layer_textures.clear();
+    g_terrain_layer_texture_paths.clear();
     g_terrain_mesh = TerrainMesh();
     g_static_world_object_mesh = WorldObjectMesh();
     g_world_object_mesh = WorldObjectMesh();
@@ -1247,6 +1389,8 @@ void ShutdownSinglePlayerRuntime() {
     g_mission_id.clear();
     g_map_path.clear();
     g_terrain_texture_path.clear();
+    g_terrain_layer_count = 0;
+    g_terrain_layer_texture_count = 0;
     g_height_width = 0;
     g_height_height = 0;
     g_triangle_count = 0;
@@ -1399,6 +1543,10 @@ bool IsSinglePlayerRuntimeReady() {
 
 std::string SinglePlayerRuntimeReport() {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    size_t terrain_layer_triangles = 0;
+    for (const TerrainLayer& layer : g_terrain_mesh.layers) {
+        terrain_layer_triangles += layer.triangle_indices.size() / 3;
+    }
     std::ostringstream report;
     report << "single_player_runtime=" << (g_ready ? "ready" : "not_ready")
            << "; error=" << (g_last_error.empty() ? "<none>" : g_last_error)
@@ -1410,10 +1558,18 @@ std::string SinglePlayerRuntimeReport() {
            << (g_terrain_texture_path.empty()
                        ? "<none>"
                        : g_terrain_texture_path)
+           << "; terrain_layers=" << g_terrain_layer_count
+           << "; terrain_layer_textures=" << g_terrain_layer_texture_count
+           << "; terrain_layer_triangles=" << terrain_layer_triangles
+           << "; terrain_unassigned_triangles="
+           << (g_triangle_count > terrain_layer_triangles
+                       ? g_triangle_count - terrain_layer_triangles
+                       : 0)
            << "; texture_gpu="
-           << (g_terrain_mesh.texture_handle == UINT16_MAX
-                       ? "not_ready"
-                       : "ready")
+           << ((g_terrain_layer_texture_count > 0 ||
+                g_terrain_mesh.texture_handle != UINT16_MAX)
+                       ? "ready"
+                       : "not_ready")
            << "; map_objects=" << g_map_object_count
            << "; scenario_objects=" << g_scenario_object_count
            << "; rendered_objects=" << g_rendered_object_count

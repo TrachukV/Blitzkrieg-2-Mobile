@@ -420,6 +420,13 @@ private:
     }
 
     void destroy_terrain_buffers() {
+        for (bgfx::IndexBufferHandle handle :
+             terrain_layer_index_buffers_) {
+            if (bgfx::isValid(handle)) {
+                bgfx::destroy(handle);
+            }
+        }
+        terrain_layer_index_buffers_.clear();
         if (bgfx::isValid(terrain_line_index_buffer_)) {
             bgfx::destroy(terrain_line_index_buffer_);
             terrain_line_index_buffer_ = BGFX_INVALID_HANDLE;
@@ -474,6 +481,17 @@ private:
                                     terrain_mesh_.line_indices.size() *
                                     sizeof(uint32_t))),
                     BGFX_BUFFER_INDEX32);
+        }
+        terrain_layer_index_buffers_.reserve(terrain_mesh_.layers.size());
+        for (const TerrainLayer& layer : terrain_mesh_.layers) {
+            bgfx::IndexBufferHandle handle = bgfx::createIndexBuffer(
+                    bgfx::copy(
+                            layer.triangle_indices.data(),
+                            static_cast<uint32_t>(
+                                    layer.triangle_indices.size() *
+                                    sizeof(uint32_t))),
+                    BGFX_BUFFER_INDEX32);
+            terrain_layer_index_buffers_.push_back(handle);
         }
         if (!bgfx::isValid(terrain_vertex_buffer_) ||
             !bgfx::isValid(terrain_index_buffer_)) {
@@ -566,29 +584,69 @@ private:
                 bgfx::getCaps()->homogeneousDepth);
         bgfx::setViewTransform(kTerrainView, view, projection);
 
-        bgfx::setTransform(kIdentityMatrix);
-        bgfx::setVertexBuffer(0, terrain_vertex_buffer_);
-        bgfx::setIndexBuffer(terrain_index_buffer_);
-        bgfx::setState(
+        const uint64_t terrain_state =
                 BGFX_STATE_WRITE_RGB |
                 BGFX_STATE_WRITE_A |
                 BGFX_STATE_WRITE_Z |
                 BGFX_STATE_DEPTH_TEST_LESS |
-                BGFX_STATE_MSAA);
-        if (terrain_mesh_.texture_handle != UINT16_MAX &&
-            bgfx::isValid(textured_rect_program_) &&
-            bgfx::isValid(texture_sampler_)) {
-            const bgfx::TextureHandle texture = {
-                    terrain_mesh_.texture_handle};
-            bgfx::setTexture(0, texture_sampler_, texture);
-            bgfx::submit(kTerrainView, textured_rect_program_);
+                BGFX_STATE_MSAA;
+        const bool has_layers =
+                !terrain_mesh_.layers.empty() &&
+                terrain_layer_index_buffers_.size() ==
+                        terrain_mesh_.layers.size();
+        if (has_layers) {
+            for (size_t index = 0;
+                 index < terrain_mesh_.layers.size();
+                 ++index) {
+                const TerrainLayer& layer = terrain_mesh_.layers[index];
+                const bgfx::IndexBufferHandle index_buffer =
+                        terrain_layer_index_buffers_[index];
+                if (!bgfx::isValid(index_buffer)) {
+                    continue;
+                }
+                bgfx::setTransform(kIdentityMatrix);
+                bgfx::setVertexBuffer(0, terrain_vertex_buffer_);
+                bgfx::setIndexBuffer(index_buffer);
+                bgfx::setState(terrain_state);
+                const bgfx::TextureHandle texture = {
+                        layer.texture_handle};
+                if (layer.texture_handle != UINT16_MAX &&
+                    bgfx::isValid(texture) &&
+                    bgfx::isValid(textured_rect_program_) &&
+                    bgfx::isValid(texture_sampler_)) {
+                    bgfx::setTexture(0, texture_sampler_, texture);
+                    bgfx::submit(
+                            kTerrainView,
+                            textured_rect_program_);
+                } else {
+                    set_fill_color(layer.fallback_argb);
+                    bgfx::submit(kTerrainView, rect_program_);
+                }
+                ++submitted_primitives_;
+            }
         } else {
-            set_fill_color(0xff61764fu);
-            bgfx::submit(kTerrainView, rect_program_);
+            bgfx::setTransform(kIdentityMatrix);
+            bgfx::setVertexBuffer(0, terrain_vertex_buffer_);
+            bgfx::setIndexBuffer(terrain_index_buffer_);
+            bgfx::setState(terrain_state);
+            if (terrain_mesh_.texture_handle != UINT16_MAX &&
+                bgfx::isValid(textured_rect_program_) &&
+                bgfx::isValid(texture_sampler_)) {
+                const bgfx::TextureHandle texture = {
+                        terrain_mesh_.texture_handle};
+                bgfx::setTexture(0, texture_sampler_, texture);
+                bgfx::submit(
+                        kTerrainView,
+                        textured_rect_program_);
+            } else {
+                set_fill_color(0xff61764fu);
+                bgfx::submit(kTerrainView, rect_program_);
+            }
+            ++submitted_primitives_;
         }
-        ++submitted_primitives_;
 
-        if (bgfx::isValid(terrain_line_index_buffer_)) {
+        if (!has_layers &&
+            bgfx::isValid(terrain_line_index_buffer_)) {
             bgfx::setTransform(kIdentityMatrix);
             set_fill_color(0x906f8560u);
             bgfx::setVertexBuffer(0, terrain_vertex_buffer_);
@@ -779,6 +837,8 @@ private:
     bgfx::VertexBufferHandle terrain_vertex_buffer_ = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle terrain_index_buffer_ = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle terrain_line_index_buffer_ = BGFX_INVALID_HANDLE;
+    std::vector<bgfx::IndexBufferHandle>
+            terrain_layer_index_buffers_;
     bgfx::VertexBufferHandle world_object_vertex_buffer_ =
             BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle world_object_index_buffer_ =
