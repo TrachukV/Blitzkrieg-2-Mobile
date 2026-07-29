@@ -101,7 +101,7 @@ def reference_path(data_root: Path, owner: Path, href: str) -> Path | None:
             )
             if resolved is not None:
                 return resolved
-        return data_root / relative
+        return data_root / candidates[-1]
     direct = owner.parent / value
     if direct.exists():
         return direct
@@ -138,6 +138,27 @@ def href_child_path(
 def model_path(data_root: Path, vis_path: Path) -> Path | None:
     vis = parse_root(vis_path)
     if vis is None:
+        stem = vis_path.stem
+        if stem.lower().endswith("_visobj"):
+            stem = stem[:-len("_visobj")]
+        for season in SEASON_PRIORITY:
+            season_name = season.removeprefix("SEASON_").lower()
+            for file_name in (
+                f"{season_name}_{stem}_model.xdb",
+                f"{stem}_{season_name}_model.xdb",
+            ):
+                try:
+                    relative = (vis_path.parent / file_name).relative_to(
+                        data_root
+                    )
+                except ValueError:
+                    continue
+                resolved = resolve_relative_path(
+                    str(data_root),
+                    relative.as_posix(),
+                )
+                if resolved is not None:
+                    return resolved
         return None
     models = child(vis, "Models")
     if models is None:
@@ -359,6 +380,58 @@ def build_index(
                     textures,
                     geometry_scale,
                 )
+        bridge_bindings: dict[int, tuple[int, list[int], list[str], float]] = {}
+        for frame_index, element_name in ((0, "End"), (1, "Center")):
+            element = child(stats, element_name)
+            visual_objects = (
+                child(element, "VisualObjects")
+                if element is not None
+                else None
+            )
+            if visual_objects is None:
+                continue
+            for visual_object in visual_objects:
+                vis_path = reference_path(
+                    data_root,
+                    stats_path,
+                    visual_object.attrib.get("href", ""),
+                )
+                binding = (
+                    binding_from_vis_path(data_root, vis_path)
+                    if vis_path is not None
+                    else None
+                )
+                if binding is not None:
+                    bridge_bindings[frame_index] = binding
+                    break
+        for frame_index, binding in bridge_bindings.items():
+            (
+                geometry_record_id,
+                material_quantities,
+                textures,
+                geometry_scale,
+            ) = binding
+            result[(path_hash, frame_index)] = (
+                int(record),
+                geometry_record_id,
+                material_quantities,
+                textures,
+                geometry_scale,
+            )
+        if 1 in bridge_bindings:
+            (
+                geometry_record_id,
+                material_quantities,
+                textures,
+                geometry_scale,
+            ) = bridge_bindings[1]
+            result[(path_hash, -1)] = (
+                int(record),
+                geometry_record_id,
+                material_quantities,
+                textures,
+                geometry_scale,
+            )
         fence_frame_index = 0
         for group_name in (
             "CenterSegments",
