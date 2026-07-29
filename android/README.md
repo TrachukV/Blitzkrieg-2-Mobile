@@ -698,19 +698,29 @@ shown in the released game, so Android no longer draws them over the original
 panel. Their transparent touch zones remain active at the right edge until the
 released icon art or a descriptor-driven legacy HUD path replaces them. A
 compact Android TGA decoder reads the real assets directly from staged
-`Complete/UI`. The detailed Android objective summary is hidden during normal
-battlefield play and toggled by the Objectives touch zone instead of remaining
-as a permanent debug overlay. The minimap is
-generated from the live terrain-type map and presentation entities, then
-clipped into the original diamond frame. The F10 menu returns to the native
-single-player mission list without terminating the app process. The center
-panel now follows the original battle-screen layout: mission/objective text is
-kept at the top-left, while selecting a real legacy AI unit populates the
-center with the shipped preview frame, Soldier or Tank portrait, icon
-background, and live green/yellow/red HP bar. No card is drawn when the
-selection is empty. This was exercised on the ARM64 emulator with infantry unit
-`5236`; the native touch path selected that unit and the HUD immediately
-rendered its original infantry art and current/max RPG-stat HP. The F10 menu
+`Complete/UI`. `stageOriginalHudAssets` also packages the 4.2 MiB subset needed
+for the mission panel, diamond minimap frame, selected-unit cards, hit bars,
+and the action grid. Runtime file content remains the primary source, but the
+decoder falls back to those APK assets if an external sync omitted
+`Complete/UI`; the Gradle build fails if the required originals are absent.
+The HUD view paints the desktop mission's black UI backdrop before compositing
+the semitransparent TGA layers, so the 3D battlefield no longer leaks through
+the center panel.
+The detailed Android objective summary is hidden during normal battlefield play
+and toggled by the Objectives touch zone instead of remaining as a permanent
+debug overlay. The minimap is generated from the live terrain-type map and
+presentation entities, then clipped into the original diamond frame. The F10
+menu returns to the native single-player mission list without terminating the
+app process. The center panel now follows the original battle-screen layout:
+mission/objective text is kept at the top-left, while selecting a real legacy
+AI unit populates the center with the shipped preview frame, Soldier or Tank
+portrait, icon background, and live green/yellow/red HP bar. No card is drawn
+when the selection is empty. This was exercised on the ARM64 emulator with
+infantry unit `5236`; the native touch path selected that unit and the HUD
+immediately rendered its original infantry art and current/max RPG-stat HP. A
+second emulator pass removed external `Complete/UI` entirely and verified the
+same panel, minimap, portrait, health card, and original action icons from the
+bundled fallback. The F10 menu
 now owns an explicit native user-pause state rather than merely
 covering a still-running battle. It resets pending touch-command mode, pauses
 the mixer/output, stops legacy ticks and animation time, and shows the large

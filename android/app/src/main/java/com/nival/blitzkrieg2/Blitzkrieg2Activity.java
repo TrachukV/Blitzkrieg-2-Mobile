@@ -462,10 +462,15 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 ? spec.iconPath
                 : spec.disabledIconPath();
         android.graphics.Bitmap bitmap =
-                TgaDecoder.decode(new File(hudDataRoot, iconPath));
+                TgaDecoder.decode(
+                        this,
+                        new File(hudDataRoot, iconPath),
+                        iconPath);
         if (bitmap == null && !enabled) {
             bitmap = TgaDecoder.decode(
-                    new File(hudDataRoot, spec.iconPath));
+                    this,
+                    new File(hudDataRoot, spec.iconPath),
+                    spec.iconPath);
         }
         if (bitmap != null) {
             button.setImageDrawable(
@@ -650,7 +655,10 @@ public final class Blitzkrieg2Activity extends GameActivity {
         button.setBackgroundColor(Color.TRANSPARENT);
         button.setScaleType(ImageButton.ScaleType.FIT_CENTER);
         android.graphics.Bitmap bitmap =
-                TgaDecoder.decode(new File(dataRoot, relativePath));
+                TgaDecoder.decode(
+                        this,
+                        new File(dataRoot, relativePath),
+                        relativePath);
         if (bitmap != null) {
             button.setImageDrawable(
                     new BitmapDrawable(getResources(), bitmap));

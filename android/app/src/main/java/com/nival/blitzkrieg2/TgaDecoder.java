@@ -1,10 +1,13 @@
 package com.nival.blitzkrieg2;
 
+import android.content.Context;
 import android.graphics.Bitmap;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 
 final class TgaDecoder {
     private TgaDecoder() {
@@ -29,6 +32,37 @@ final class TgaDecoder {
                 offset += count;
             }
             return decode(data);
+        } catch (IOException ignored) {
+            return null;
+        }
+    }
+
+    static Bitmap decode(
+            Context context,
+            File file,
+            String bundledAssetPath) {
+        Bitmap bitmap = decode(file);
+        if (bitmap != null ||
+                context == null ||
+                bundledAssetPath == null ||
+                bundledAssetPath.isEmpty()) {
+            return bitmap;
+        }
+        try (InputStream input =
+                     context.getAssets().open(bundledAssetPath)) {
+            ByteArrayOutputStream output =
+                    new ByteArrayOutputStream();
+            byte[] buffer = new byte[16 * 1024];
+            while (true) {
+                int count = input.read(buffer);
+                if (count < 0) {
+                    break;
+                }
+                if (count > 0) {
+                    output.write(buffer, 0, count);
+                }
+            }
+            return decode(output.toByteArray());
         } catch (IOException ignored) {
             return null;
         }

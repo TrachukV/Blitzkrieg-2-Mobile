@@ -14,6 +14,12 @@ Mines consume the next valid terrain tap as their forced point. Build Trenches
 collects a start and end point and emits the same `ENTRENCH_BEGIN` /
 `ENTRENCH_END` command pair as the desktop client. Visible actions whose mobile
 interaction is not implemented remain disabled instead of pretending to work.
+The Android build packages the required 4.2 MiB original HUD subset and the TGA
+loader uses it only when the corresponding external `Complete/UI` file is
+missing. This keeps the original panel functional after a partial content sync
+without replacing the full external content layout. The view also restores the
+desktop mission's black backdrop beneath the TGA layers instead of exposing the
+full-screen Android render surface through the center panel.
 Double-tapping a selected unit expands the selection to up to twelve nearby
 units with the same legacy stats/type. The renderer marks every selected
 `CAIUnit`, the HUD shows a health card for every member, and commands are sent

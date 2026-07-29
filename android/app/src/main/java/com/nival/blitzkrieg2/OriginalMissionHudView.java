@@ -68,38 +68,42 @@ final class OriginalMissionHudView extends View {
     OriginalMissionHudView(Context context, File dataRoot) {
         super(context);
         setClickable(true);
-        panel = TgaDecoder.decode(
-                new File(dataRoot, "Complete/UI/Panels/MissionMain.tga"));
-        minimapFrame = TgaDecoder.decode(
-                new File(dataRoot, "Complete/UI/MiniMap/foreground.tga"));
-        unitPreviewFrame = TgaDecoder.decode(
-                new File(
-                        dataRoot,
-                        "Complete/UI/New_mission/Middle_Panels_screen001.tga"));
-        unitIconBackground = TgaDecoder.decode(
-                new File(
-                        dataRoot,
-                        "Complete/UI/Buttons/Icons/UnitIconBackground.tga"));
-        soldierIcon = TgaDecoder.decode(
-                new File(
-                        dataRoot,
-                        "Complete/UI/Buttons/Icons/Allies/Soldier.tga"));
-        tankIcon = TgaDecoder.decode(
-                new File(
-                        dataRoot,
-                        "Complete/UI/Buttons/Icons/Tank.tga"));
-        greenHitBar = TgaDecoder.decode(
-                new File(
-                        dataRoot,
-                        "Complete/UI/Buttons/HitBars/GreenUnitBar.tga"));
-        yellowHitBar = TgaDecoder.decode(
-                new File(
-                        dataRoot,
-                        "Complete/UI/Buttons/HitBars/YellowUnitBar.tga"));
-        redHitBar = TgaDecoder.decode(
-                new File(
-                        dataRoot,
-                        "Complete/UI/Buttons/HitBars/RedUnitBar.tga"));
+        panel = loadOriginalBitmap(
+                context,
+                dataRoot,
+                "Complete/UI/Panels/MissionMain.tga");
+        minimapFrame = loadOriginalBitmap(
+                context,
+                dataRoot,
+                "Complete/UI/MiniMap/foreground.tga");
+        unitPreviewFrame = loadOriginalBitmap(
+                context,
+                dataRoot,
+                "Complete/UI/New_mission/Middle_Panels_screen001.tga");
+        unitIconBackground = loadOriginalBitmap(
+                context,
+                dataRoot,
+                "Complete/UI/Buttons/Icons/UnitIconBackground.tga");
+        soldierIcon = loadOriginalBitmap(
+                context,
+                dataRoot,
+                "Complete/UI/Buttons/Icons/Allies/Soldier.tga");
+        tankIcon = loadOriginalBitmap(
+                context,
+                dataRoot,
+                "Complete/UI/Buttons/Icons/Tank.tga");
+        greenHitBar = loadOriginalBitmap(
+                context,
+                dataRoot,
+                "Complete/UI/Buttons/HitBars/GreenUnitBar.tga");
+        yellowHitBar = loadOriginalBitmap(
+                context,
+                dataRoot,
+                "Complete/UI/Buttons/HitBars/YellowUnitBar.tga");
+        redHitBar = loadOriginalBitmap(
+                context,
+                dataRoot,
+                "Complete/UI/Buttons/HitBars/RedUnitBar.tga");
     }
 
     void setMinimapPixels(int[] pixels, int width, int height) {
@@ -225,8 +229,8 @@ final class OriginalMissionHudView extends View {
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
         memberCardTargets.clear();
+        canvas.drawColor(0xff000000);
         if (panel == null || minimapFrame == null) {
-            canvas.drawColor(0xd91e241d);
             return;
         }
 
@@ -442,5 +446,15 @@ final class OriginalMissionHudView extends View {
         } catch (NumberFormatException ignored) {
             return 0;
         }
+    }
+
+    private static Bitmap loadOriginalBitmap(
+            Context context,
+            File dataRoot,
+            String relativePath) {
+        return TgaDecoder.decode(
+                context,
+                new File(dataRoot, relativePath),
+                relativePath);
     }
 }
