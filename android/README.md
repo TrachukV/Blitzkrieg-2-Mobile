@@ -627,9 +627,14 @@ dereferences that null resource when a unit crosses a mine. The staging
 validator treats a missing or empty Weapons directory as a blocker.
 
 The in-game Android HUD now uses the shipped `MissionMain.tga` panel,
-`MiniMap/foreground.tga`, and original Move, Attack, Stop, Objectives, and F10
-button art instead of the temporary top debug card. A compact Android TGA
-decoder reads these assets directly from staged `Complete/UI`. The minimap is
+`MiniMap/foreground.tga`, and original Move, Attack, and Stop button art
+instead of the temporary top debug card. The checkout's Objectives and F10
+images are explicit white `fake_*.tga` placeholder labels, not the icon buttons
+shown in the released game, so Android no longer draws them over the original
+panel. Their transparent touch zones remain active at the right edge until the
+released icon art or a descriptor-driven legacy HUD path replaces them. A
+compact Android TGA decoder reads the real assets directly from staged
+`Complete/UI`. The minimap is
 generated from the live terrain-type map and presentation entities, then
 clipped into the original diamond frame. The F10 menu returns to the native
 single-player mission list without terminating the app process. The center

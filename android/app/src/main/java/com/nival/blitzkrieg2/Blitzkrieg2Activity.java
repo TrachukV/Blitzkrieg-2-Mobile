@@ -199,25 +199,23 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 new LinearLayout.LayoutParams(dp(38), dp(38)));
         updateCommandButtonState(0);
 
-        ImageButton objectives = originalImageButton(
-                dataRoot,
-                "Complete/UI/Buttons/Objectives/ObjectivesNormal.tga",
+        ImageButton objectives = touchOnlyButton(
+                "Objectives",
                 view -> missionStatus.setVisibility(
                         missionStatus.getVisibility() == View.VISIBLE
                                 ? View.INVISIBLE
                                 : View.VISIBLE));
         commandButtons.addView(
                 objectives,
-                new LinearLayout.LayoutParams(dp(82), dp(34)));
+                new LinearLayout.LayoutParams(dp(42), dp(38)));
 
-        ImageButton menu = originalImageButton(
-                dataRoot,
-                "Complete/UI/Buttons/F10Menu/fake_F10MenuNormal.tga",
+        ImageButton menu = touchOnlyButton(
+                "F10 menu",
                 view -> setMissionMenuVisible(
                         missionMenu.getVisibility() != View.VISIBLE));
         commandButtons.addView(
                 menu,
-                new LinearLayout.LayoutParams(dp(82), dp(34)));
+                new LinearLayout.LayoutParams(dp(42), dp(38)));
 
         FrameLayout.LayoutParams commandParams = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -383,6 +381,18 @@ public final class Blitzkrieg2Activity extends GameActivity {
         } else {
             button.setOnClickListener(listener);
         }
+        return button;
+    }
+
+    private ImageButton touchOnlyButton(
+            String contentDescription,
+            View.OnClickListener listener) {
+        ImageButton button = new ImageButton(this);
+        button.setPadding(0, 0, 0, 0);
+        button.setBackgroundColor(Color.TRANSPARENT);
+        button.setImageDrawable(null);
+        button.setContentDescription(contentDescription);
+        button.setOnClickListener(listener);
         return button;
     }
 
