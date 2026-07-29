@@ -151,6 +151,7 @@ public final class Blitzkrieg2Activity extends GameActivity {
         missionStatus.setShadowLayer(dp(2), dp(1), dp(1), Color.BLACK);
         missionStatus.setText("Objectives: loading");
         missionStatus.setMaxLines(3);
+        missionStatus.setVisibility(View.INVISIBLE);
         missionInfo.addView(
                 missionStatus,
                 new LinearLayout.LayoutParams(

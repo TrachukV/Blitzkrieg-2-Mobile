@@ -634,7 +634,9 @@ shown in the released game, so Android no longer draws them over the original
 panel. Their transparent touch zones remain active at the right edge until the
 released icon art or a descriptor-driven legacy HUD path replaces them. A
 compact Android TGA decoder reads the real assets directly from staged
-`Complete/UI`. The minimap is
+`Complete/UI`. The detailed Android objective summary is hidden during normal
+battlefield play and toggled by the Objectives touch zone instead of remaining
+as a permanent debug overlay. The minimap is
 generated from the live terrain-type map and presentation entities, then
 clipped into the original diamond frame. The F10 menu returns to the native
 single-player mission list without terminating the app process. The center
