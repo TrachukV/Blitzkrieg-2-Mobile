@@ -13,6 +13,7 @@ from pathlib import Path
 
 REQUIRED_CONTENT_ROOTS = [
     Path("Versions/Current/Data"),
+    Path("Versions/Current/Data/Reinforcements"),
     Path("Complete"),
 ]
 

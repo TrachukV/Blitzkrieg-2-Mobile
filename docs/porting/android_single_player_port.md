@@ -38,11 +38,14 @@ resources, and restores the active objective after expiry. Converted static and
 dynamic models also produce one translucent ground silhouette from the convex
 hull of their sun-projected Granny vertices. The dynamic path samples the same
 current pre-skinned animation frame used by the visible model, so infantry
-shadows move with the unit rather than remaining fixed proxy circles. The battlefield camera
-loads horizontal FOV, default pitch/yaw, and min/average/max distance from the
-same legacy `ClientGameConsts` used by the desktop mission. Screen projection,
-terrain picking, drag selection, and bgfx rendering all consume that one camera
-state.
+shadows move with the unit rather than remaining fixed proxy circles. The
+battlefield camera loads horizontal FOV, default pitch/yaw, and
+min/average/max distance from the legacy `ClientGameConsts`, then applies
+`SMapInfo::players[local].camera` after the original AI/map load. The anchor is
+always used; distance, pitch, and yaw are replaced only when the shipped
+`UseAnchorOnly` flag is false, matching the desktop
+`InterfaceMissionInternal` order. Screen projection, terrain picking, drag
+selection, and bgfx rendering all consume that one camera state.
 
 ## Implemented In This Slice
 
@@ -345,10 +348,10 @@ state.
 - `DataAndroid` staging helper for symlink/copy/hardlink based asset layout.
   Its manifest now probes the DB startup files and the main prebuilt geometry,
   skeleton, animation, and AI geometry directories expected by the Android VFS.
-  It also treats `Data/Scenario`, `Data/Consts`, and `Data/Other/Text` as
-  runtime gates because the Android DB can otherwise see only indexed headers
-  while campaign bodies, game const bodies, or map designer text refs remain
-  missing.
+  It also treats `Data/Scenario`, `Data/Consts`, `Data/Reinforcements`, and
+  `Data/Other/Text` as runtime gates because the Android DB can otherwise see
+  only indexed headers while campaign bodies, game const bodies, scripted
+  reinforcement formations, or map designer text refs remain missing.
 
 ## Deliberately Not Linked Yet
 
@@ -391,11 +394,16 @@ replacement by the portable parts of `CScenarioTracker`.
 The sparse checkout now includes the runtime single-player roots needed for the
 Android DB view, not only loose file counting:
 
-- `Versions/Current/Data` stages 39,193 files into `DataAndroid/Data`.
+- `Versions/Current/Data` stages 75,695 files into `DataAndroid/Data` in the
+  current verified sparse checkout.
 - `Data/bin/Geometries`, `Skeletons`, `Animations`, and `AIGeometries` are
   present with 2,817, 2,585, 7,557, and 2,783 files respectively.
 - `Data/Scenario` is present with 3,496 files, `Data/Consts` with 162 files,
   and `Data/Other/Text` with 11,254 files.
+- `Data/Reinforcements` is present with 1,970 files. GER3.3 then creates the
+  original local-player formations, opens 873 legacy war-fog cells on the first
+  completed snapshot, and renders the battlefield at the shipped player camera
+  anchor instead of remaining black.
 - `prepare_data_android.py --output build/android/DataAndroid --mode symlink`
   reports no layout blockers for those runtime gates.
 - On the ARM64 emulator, the Android startup probe opens the real legacy

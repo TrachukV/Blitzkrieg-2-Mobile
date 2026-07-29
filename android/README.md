@@ -49,9 +49,11 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   silhouette shadows for static objects and live units; animated infantry
   shadows use the same current pre-skinned frame as the visible mesh. The camera
   reads the original horizontal FOV, pitch/yaw defaults, and distance range from
-  the loaded `ClientGameConsts`. The top-left headline now has a thread-safe
-  three-line stack for original five-second scenario notifications. Objective feedback
-  combines the shipped notification prefix with the objective header, while
+  the loaded `ClientGameConsts`, then applies the local player's shipped map
+  anchor and optional placement exactly where the desktop mission does. The
+  top-left headline now has a thread-safe three-line stack for original
+  five-second scenario notifications. Objective feedback combines the shipped
+  notification prefix with the objective header, while
   `EFB_REINFORCEMENT_CENTER_LOCAL_PLAYER` resolves and displays the shipped
   reinforcement text. General runtime skinning, remaining action-specific
   clips, a multi-line notification console, command subpanels, briefings, and
@@ -311,6 +313,7 @@ python3 tools/android/validate_transcoded_videos.py \
 git sparse-checkout add \
   Versions/Current/Data/Scenario \
   Versions/Current/Data/Consts \
+  Versions/Current/Data/Reinforcements \
   Versions/Current/Data/Other/Text \
   Versions/Current/Data/Scene/TexAndMats/All/Effects \
   Versions/Current/Data/Scene/TexAndMats/All/Units/Weapons \
@@ -455,6 +458,7 @@ in app-private storage:
   Data/
     Scenario/
     Consts/
+    Reinforcements/
     Other/Text/
     bin/
     Music/
@@ -478,6 +482,12 @@ The port generates this tree from `Versions/Current/Data`,
 the required `Complete` and `Sound` roots, Disk_J movie sources, and converted
 `.bik` videos. If Git LFS returns pointer files instead of media blobs, the
 video/content validators report that as a blocker.
+
+`Data/Reinforcements` is runtime payload, not optional catalog metadata. If a
+sparse checkout omits it, Lua still reaches `LandReinforcementFromMap` and can
+emit the arrival notification, but no player formation is created and the
+legacy war fog remains closed. The content validator and staging manifest now
+reject that incomplete layout.
 
 ## Current Interactive Runtime
 
@@ -840,4 +850,5 @@ for the files the Android DB bridge needs at startup:
 - `Data/bin/AIGeometries`
 - `Data/Scenario`
 - `Data/Consts`
+- `Data/Reinforcements`
 - `Data/Other/Text`

@@ -68,6 +68,7 @@ REQUIRED_RUNTIME_DIRS = [
 REQUIRED_DB_PAYLOAD_DIRS = [
     Path("Data/Units"),
     Path("Data/Squads"),
+    Path("Data/Reinforcements"),
     Path("Data/Objects"),
     Path("Data/Buildings"),
     Path("Data/Entrenchments"),

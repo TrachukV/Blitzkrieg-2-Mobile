@@ -2621,6 +2621,55 @@ bool FocusCameraOnPlayerLocked(int player) {
     return true;
 }
 
+bool ApplyMissionCameraLocked(
+        const NDb::SMapInfo* map,
+        int player) {
+    if (map == nullptr ||
+        player < 0 ||
+        player >= static_cast<int>(map->players.size())) {
+        return false;
+    }
+
+    const NDb::SCameraPlacement& placement =
+            map->players[player].camera;
+    if (!std::isfinite(placement.vAnchor.x) ||
+        !std::isfinite(placement.vAnchor.y) ||
+        !std::isfinite(placement.vAnchor.z)) {
+        return false;
+    }
+
+    g_camera.target_x = placement.vAnchor.x;
+    g_camera.target_y = placement.vAnchor.y;
+    g_camera.target_z = placement.vAnchor.z;
+    if (!placement.bUseAnchorOnly &&
+        std::isfinite(placement.fDist) &&
+        std::isfinite(placement.fPitch) &&
+        std::isfinite(placement.fYaw) &&
+        placement.fDist > 0.0f) {
+        g_camera.distance = placement.fDist;
+        g_camera.pitch_radians =
+                CameraDegreesToRadians(placement.fPitch);
+        g_camera.yaw_radians =
+                CameraDegreesToRadians(placement.fYaw);
+    }
+
+    std::ostringstream report;
+    report << "camera_focus=mission"
+           << "; player=" << player
+           << "; anchor=" << g_camera.target_x << ","
+           << g_camera.target_y << ","
+           << g_camera.target_z
+           << "; anchor_only="
+           << (placement.bUseAnchorOnly ? "true" : "false")
+           << "; distance=" << g_camera.distance
+           << "; pitch=" << g_camera.pitch_radians
+           << "; yaw=" << g_camera.yaw_radians
+           << "; horizontal_fov="
+           << g_camera.horizontal_fov_degrees;
+    PlatformRuntime::instance().log_info(report.str());
+    return true;
+}
+
 float TerrainMeshHeightAtLocked(float world_x, float world_y) {
     if (g_height_width < 2 ||
         g_height_height < 2 ||
@@ -3211,7 +3260,9 @@ bool InitializeSinglePlayerRuntime() {
         g_last_error = "dynamic_world_snapshot_failed";
         return false;
     }
-    FocusCameraOnPlayerLocked(0);
+    if (!ApplyMissionCameraLocked(map, 0)) {
+        FocusCameraOnPlayerLocked(0);
+    }
     if (!RefreshRenderResourcesLocked()) {
         ShutdownLegacyGameRuntime();
         g_last_error = RenderBackend().last_error().empty()
