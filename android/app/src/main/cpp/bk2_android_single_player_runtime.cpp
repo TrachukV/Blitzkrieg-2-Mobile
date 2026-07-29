@@ -74,6 +74,13 @@ size_t g_converted_geometry_instance_count = 0;
 size_t g_converted_geometry_fallback_count = 0;
 size_t g_animated_geometry_part_count = 0;
 size_t g_move_animation_instance_count = 0;
+size_t g_attack_animation_instance_count = 0;
+
+enum class ConvertedAnimationVariant {
+    Base,
+    Move,
+    Attack,
+};
 
 struct ConvertedGeometryVertex {
     float x;
@@ -115,6 +122,8 @@ std::unordered_map<int, ConvertedGeometry> g_converted_geometries;
 std::unordered_set<int> g_missing_converted_geometries;
 std::unordered_map<int, ConvertedGeometry> g_move_converted_geometries;
 std::unordered_set<int> g_missing_move_converted_geometries;
+std::unordered_map<int, ConvertedGeometry> g_attack_converted_geometries;
+std::unordered_set<int> g_missing_attack_converted_geometries;
 std::unordered_map<uint64_t, GeometryBinding> g_stats_geometry_index;
 std::unordered_map<
         uint64_t,
@@ -837,29 +846,35 @@ bool ReadExact(std::ifstream* input, void* output, size_t size) {
 
 const ConvertedGeometry* LoadConvertedGeometry(
         int record_id,
-        bool move_animation) {
-    std::unordered_map<int, ConvertedGeometry>& converted_geometries =
-            move_animation
-                    ? g_move_converted_geometries
-                    : g_converted_geometries;
-    std::unordered_set<int>& missing_converted_geometries =
-            move_animation
-                    ? g_missing_move_converted_geometries
-                    : g_missing_converted_geometries;
-    const auto loaded = converted_geometries.find(record_id);
-    if (loaded != converted_geometries.end()) {
+        ConvertedAnimationVariant animation_variant) {
+    std::unordered_map<int, ConvertedGeometry>* converted_geometries =
+            &g_converted_geometries;
+    std::unordered_set<int>* missing_converted_geometries =
+            &g_missing_converted_geometries;
+    const char* filename_suffix = ".bk2mesh";
+    if (animation_variant == ConvertedAnimationVariant::Move) {
+        converted_geometries = &g_move_converted_geometries;
+        missing_converted_geometries = &g_missing_move_converted_geometries;
+        filename_suffix = ".move.bk2mesh";
+    } else if (animation_variant == ConvertedAnimationVariant::Attack) {
+        converted_geometries = &g_attack_converted_geometries;
+        missing_converted_geometries = &g_missing_attack_converted_geometries;
+        filename_suffix = ".attack.bk2mesh";
+    }
+    const auto loaded = converted_geometries->find(record_id);
+    if (loaded != converted_geometries->end()) {
         return &loaded->second;
     }
     if (record_id < 0 ||
-        missing_converted_geometries.find(record_id) !=
-                missing_converted_geometries.end()) {
+        missing_converted_geometries->find(record_id) !=
+                missing_converted_geometries->end()) {
         return nullptr;
     }
 
     const std::string path = JoinHostPath(
             GetPortPaths().data_root(),
             "Converted/Geometries/" + std::to_string(record_id) +
-                    (move_animation ? ".move.bk2mesh" : ".bk2mesh"));
+                    filename_suffix);
     std::ifstream input(path, std::ios::in | std::ios::binary);
     char magic[8] = {};
     uint32_t version = 0;
@@ -873,7 +888,7 @@ const ConvertedGeometry* LoadConvertedGeometry(
         (version != 1 && version != 2 && version != 3) ||
         mesh_count == 0 ||
         mesh_count > 128) {
-        missing_converted_geometries.insert(record_id);
+        missing_converted_geometries->insert(record_id);
         return nullptr;
     }
 
@@ -909,7 +924,7 @@ const ConvertedGeometry* LoadConvertedGeometry(
             animation_frame_count > 120 ||
             !std::isfinite(animation_duration_seconds) ||
             animation_duration_seconds < 0.0f) {
-            missing_converted_geometries.insert(record_id);
+            missing_converted_geometries->insert(record_id);
             return nullptr;
         }
         ConvertedGeometryPart part;
@@ -926,7 +941,7 @@ const ConvertedGeometry* LoadConvertedGeometry(
                         frame.data(),
                         static_cast<size_t>(vertex_count) *
                                 sizeof(ConvertedGeometryVertex))) {
-                missing_converted_geometries.insert(record_id);
+                missing_converted_geometries->insert(record_id);
                 return nullptr;
             }
         }
@@ -936,12 +951,12 @@ const ConvertedGeometry* LoadConvertedGeometry(
                     &input,
                     part.triangle_indices.data(),
                     static_cast<size_t>(index_count) * sizeof(uint32_t))) {
-            missing_converted_geometries.insert(record_id);
+            missing_converted_geometries->insert(record_id);
             return nullptr;
         }
         for (uint32_t index : part.triangle_indices) {
             if (index >= vertex_count) {
-                missing_converted_geometries.insert(record_id);
+                missing_converted_geometries->insert(record_id);
                 return nullptr;
             }
         }
@@ -973,7 +988,7 @@ const ConvertedGeometry* LoadConvertedGeometry(
                     (static_cast<uint64_t>(first_triangle) +
                      triangle_count) * 3ull >
                             index_count) {
-                    missing_converted_geometries.insert(record_id);
+                    missing_converted_geometries->insert(record_id);
                     return nullptr;
                 }
                 part.groups.push_back(ConvertedGeometryGroup{
@@ -985,7 +1000,7 @@ const ConvertedGeometry* LoadConvertedGeometry(
         geometry.parts.push_back(std::move(part));
     }
 
-    auto inserted = converted_geometries.emplace(
+    auto inserted = converted_geometries->emplace(
             record_id,
             std::move(geometry));
     g_animated_geometry_part_count += animated_parts;
@@ -1138,7 +1153,7 @@ bool AppendConvertedGeometry(
         float z,
         float heading,
         uint32_t abgr,
-        bool move_animation,
+        ConvertedAnimationVariant animation_variant,
         float animation_time_seconds,
         int frame_index) {
     if (mesh == nullptr) {
@@ -1150,22 +1165,31 @@ bool AppendConvertedGeometry(
                     stats_record_id,
                     geometry_record_id,
                     frame_index);
-    const ConvertedGeometry* geometry = move_animation
-            ? LoadConvertedGeometry(
-                      binding.geometry_record_id,
-                      true)
-            : nullptr;
+    const ConvertedGeometry* geometry =
+            animation_variant == ConvertedAnimationVariant::Base
+                    ? nullptr
+                    : LoadConvertedGeometry(
+                              binding.geometry_record_id,
+                              animation_variant);
     if (geometry != nullptr) {
-        ++g_move_animation_instance_count;
-        if (g_move_animation_instance_count == 1) {
+        size_t* instance_count =
+                animation_variant == ConvertedAnimationVariant::Attack
+                        ? &g_attack_animation_instance_count
+                        : &g_move_animation_instance_count;
+        ++*instance_count;
+        if (*instance_count == 1) {
             PlatformRuntime::instance().log_info(
-                    std::string("move_animation_runtime=active; geometry=") +
+                    std::string(
+                            animation_variant ==
+                                            ConvertedAnimationVariant::Attack
+                                    ? "attack_animation_runtime=active; geometry="
+                                    : "move_animation_runtime=active; geometry=") +
                     std::to_string(binding.geometry_record_id));
         }
     } else {
         geometry = LoadConvertedGeometry(
                 binding.geometry_record_id,
-                false);
+                ConvertedAnimationVariant::Base);
     }
     if (geometry == nullptr) {
         return false;
@@ -1364,6 +1388,15 @@ void AppendEntityModel(
         const Bk2PresentationEntity& entity,
         uint32_t abgr,
         bool selected) {
+    ConvertedAnimationVariant animation_variant =
+            ConvertedAnimationVariant::Base;
+    if ((entity.flags & BK2_PRESENTATION_ENTITY_INFANTRY) != 0) {
+        if ((entity.flags & BK2_PRESENTATION_ENTITY_ATTACKING) != 0) {
+            animation_variant = ConvertedAnimationVariant::Attack;
+        } else if ((entity.flags & BK2_PRESENTATION_ENTITY_MOVING) != 0) {
+            animation_variant = ConvertedAnimationVariant::Move;
+        }
+    }
     if (AppendConvertedGeometry(
                 mesh,
                 entity.rpg_stats_path_hash,
@@ -1374,9 +1407,7 @@ void AppendEntityModel(
                 entity.z,
                 entity.heading_radians,
                 abgr,
-                (entity.flags & BK2_PRESENTATION_ENTITY_MOVING) != 0 &&
-                        (entity.flags &
-                         BK2_PRESENTATION_ENTITY_INFANTRY) != 0,
+                animation_variant,
                 g_animation_elapsed_seconds,
                 -1)) {
         return;
@@ -1496,7 +1527,7 @@ void AppendMapObjects(
                     z,
                     heading,
                     ObjectColor(object.nPlayer, scenario_objects),
-                    false,
+                    ConvertedAnimationVariant::Base,
                     0.0f,
                     object.nFrameIndex)) {
             ++g_converted_geometry_fallback_count;
@@ -2267,10 +2298,13 @@ void ShutdownSinglePlayerRuntime() {
     g_converted_geometry_fallback_count = 0;
     g_animated_geometry_part_count = 0;
     g_move_animation_instance_count = 0;
+    g_attack_animation_instance_count = 0;
     g_converted_geometries.clear();
     g_missing_converted_geometries.clear();
     g_move_converted_geometries.clear();
     g_missing_move_converted_geometries.clear();
+    g_attack_converted_geometries.clear();
+    g_missing_attack_converted_geometries.clear();
     g_stats_geometry_index.clear();
     g_stats_geometry_variants.clear();
     g_stats_geometry_index_loaded = false;
@@ -2480,6 +2514,10 @@ std::string SinglePlayerRuntimeReport() {
            << g_move_converted_geometries.size()
            << "; missing_move_geometry="
            << g_missing_move_converted_geometries.size()
+           << "; attack_geometry_cache="
+           << g_attack_converted_geometries.size()
+           << "; missing_attack_geometry="
+           << g_missing_attack_converted_geometries.size()
            << "; stats_geometry_index="
            << g_stats_geometry_index.size()
            << "; model_texture_layers="
@@ -2493,6 +2531,8 @@ std::string SinglePlayerRuntimeReport() {
            << g_animated_geometry_part_count
            << "; move_animation_instances="
            << g_move_animation_instance_count
+           << "; attack_animation_instances="
+           << g_attack_animation_instance_count
            << "; static_fallback_types="
            << g_static_fallback_stats_paths.size()
            << "; dynamic_fallback_types="

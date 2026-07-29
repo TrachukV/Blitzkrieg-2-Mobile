@@ -1,5 +1,11 @@
 # Blitzkrieg 2 Android Port Bootstrap
 
+This Android port is maintained in
+[`TrachukV/Blitzkrieg-2-Mobile`](https://github.com/TrachukV/Blitzkrieg-2-Mobile),
+a community fork of the original
+[`nival/Blitzkrieg-2`](https://github.com/nival/Blitzkrieg-2) repository. It is
+a non-commercial native mobile port under the original project's license.
+
 This directory is the native Android shell for the single-player source port.
 It is intentionally small: the current target builds the GameActivity entrypoint
 and Android path/lifecycle bridge, then legacy runtime modules are enabled one by
@@ -22,9 +28,9 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   now renders the real mission heightfield and terrain materials plus converted
   original Granny meshes for mapped static objects and live AI units. Original
   model DDS materials are wired, and compatible infantry meshes use baked
-  frames from the original rifle idle and move clips. General runtime skinning,
-  the remaining action-specific clips, and the full legacy UI are still
-  pending.
+  frames from the original rifle idle, move, and shoot clips. General runtime
+  skinning, the remaining action-specific clips, and the full legacy UI are
+  still pending.
 - `BK2_ENABLE_LEGACY_TEXTURE_RUNTIME=ON` links the Android
   `NGfx::CTexture`/`I2DBuffer` contract. Legacy callers can allocate textures,
   lock mip levels with `CTextureLock`, write the original pixel formats into CPU
@@ -291,6 +297,7 @@ python3 tools/android/prepare_data_android.py \
     --output ../../DataAndroid/Converted/Geometries \
     --idle-animation ../../Versions/Current/Data/bin/Animations/3977 \
     --move-animation ../../Versions/Current/Data/bin/Animations/3967 \
+    --attack-animation ../../Versions/Current/Data/bin/Animations/3972 \
     --skip-unsupported \
     --all
 )
@@ -480,17 +487,18 @@ Texture descriptor's original DDS `DestName`. Version 3 of the `BK2MSH1` cache
 preserves Granny triangle material groups and can carry pre-skinned animation
 frames. The converter samples the shipped RIFLE idle animation through the
 mesh's real bone bindings and vertex weights; compatible infantry instances
-advance those frames in the live mission. A second cache is emitted only for
-the same skinned meshes using the shipped RIFLE move clip: the current pass
-creates 259 move-cache files (32,913,536 bytes). The presentation bridge marks
-infantry in original AI move/patrol states, and the renderer selects the move
-cache for those entities with automatic idle fallback. The bgfx backend submits
-a separate index layer per model texture. Direct DDS loading deliberately
-avoids the incomplete Android `ObjectRecordID` table. On the first USA mission
-the verified runtime loads all 38 referenced model textures for 38 material
-layers. Model textures upload their complete shipped mip chain: allocating all
-DDS levels but uploading only level zero made buildings and vehicles turn into
-black silhouettes at the default camera distance. The full-chain path has been
+advance those frames in the live mission. Additional caches are emitted only
+for the same skinned meshes using the shipped RIFLE move and shoot clips: the
+current pass creates 259 files per action (32,913,536 bytes each). The
+presentation bridge marks infantry from the original AI movement and attacking
+states; the renderer selects shoot before move and falls back to idle if an
+action cache is unavailable. The bgfx backend submits a separate index layer
+per model texture. Direct DDS loading deliberately avoids the incomplete
+Android `ObjectRecordID` table. On the first USA mission the verified runtime
+loads all 38 referenced model textures for 38 material layers. Model textures
+upload their complete shipped mip chain: allocating all DDS levels but uploading
+only level zero made buildings and vehicles turn into black silhouettes at the
+default camera distance. The full-chain path has been
 exercised on USA1.0, GB3.1, and GER1.0 with 38, 84, and 81 model textures
 respectively.
 
@@ -597,10 +605,10 @@ camera starts focused on the player's formation.
 This is a playable runtime milestone, not a complete visual port. Terrain now
 uses original game materials and the first runtime model path uses original
 Granny geometry and DDS materials. Compatible rifle infantry now uses original
-bone weights plus idle/move animation frames selected from live AI state.
-Multi-part attachment transforms, shoot/death/stance animation selection,
-GPU/runtime skinning, combat effects, complete briefing HUD behavior, and the
-complete campaign-selection/progression UI remain unfinished.
+bone weights plus idle/move/shoot animation frames selected from live AI state.
+Multi-part attachment transforms, death/stance animation selection, GPU/runtime
+skinning, combat effects, complete briefing HUD behavior, and the complete
+campaign-selection/progression UI remain unfinished.
 
 The video transcode manifest now writes Android-canonical runtime paths. A Bink
 ref such as `Movies\Nival.bik` maps to `DataAndroid/Movies/Nival.mp4`, not to a

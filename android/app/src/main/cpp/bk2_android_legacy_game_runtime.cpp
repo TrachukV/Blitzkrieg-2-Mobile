@@ -559,6 +559,11 @@ void PublishPresentationEntities() {
         IUnitState* state = unit->GetState();
         const EUnitStateNames state_name =
                 state == nullptr ? EUSN_ERROR : state->GetName();
+        if ((state != nullptr && state->IsAttackingState()) ||
+            (unit->GetUniqueIdQU() == g_selected_unit_id &&
+             g_attack_target_unit_id >= 0)) {
+            flags |= BK2_PRESENTATION_ENTITY_ATTACKING;
+        }
         if (state_name == EUSN_MOVE ||
             state_name == EUSN_MOVE_BY_FORMATION ||
             state_name == EUSN_MOVE_TO_GRID ||

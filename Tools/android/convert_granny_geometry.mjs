@@ -35,6 +35,7 @@ function usage() {
       "--input <Data/bin/Geometries> --output <Converted/Geometries> " +
       "[--idle-animation <Data/bin/Animations/resource>] " +
       "[--move-animation <Data/bin/Animations/resource>] " +
+      "[--attack-animation <Data/bin/Animations/resource>] " +
       "[--animation-frames <count>] " +
       "[--skip-unsupported] " +
       "[--all | <resource-id> ...]\n",
@@ -46,6 +47,7 @@ function parseArguments(argv) {
   let output = "";
   let idleAnimation = "";
   let moveAnimation = "";
+  let attackAnimation = "";
   let animationFrames = DEFAULT_ANIMATION_FRAME_COUNT;
   let all = false;
   let skipUnsupported = false;
@@ -60,6 +62,8 @@ function parseArguments(argv) {
       idleAnimation = argv[++index] ?? "";
     } else if (argument === "--move-animation") {
       moveAnimation = argv[++index] ?? "";
+    } else if (argument === "--attack-animation") {
+      attackAnimation = argv[++index] ?? "";
     } else if (argument === "--animation-frames") {
       animationFrames = Number.parseInt(argv[++index] ?? "", 10);
     } else if (argument === "--all") {
@@ -89,6 +93,7 @@ function parseArguments(argv) {
     output: resolve(output),
     idleAnimation: idleAnimation ? resolve(idleAnimation) : "",
     moveAnimation: moveAnimation ? resolve(moveAnimation) : "",
+    attackAnimation: attackAnimation ? resolve(attackAnimation) : "",
     animationFrames,
     all,
     skipUnsupported,
@@ -337,7 +342,38 @@ async function resourceIds(options) {
   );
 }
 
-async function convertOne(options, id, idleAnimation, moveAnimation) {
+async function writeAnimationVariant(
+  parsed,
+  animation,
+  animationFrames,
+  target,
+) {
+  if (animation === null) {
+    await rm(target, { force: true });
+    return { animatedMeshes: 0, outputBytes: 0 };
+  }
+  const converted = serializeGeometry(parsed, animation, animationFrames);
+  const animatedMeshes = converted.meshes.filter(
+    (mesh) => mesh.androidAnimationFrames.length > 0,
+  ).length;
+  if (animatedMeshes === 0) {
+    await rm(target, { force: true });
+    return { animatedMeshes: 0, outputBytes: 0 };
+  }
+  await writeFile(target, converted.output);
+  return {
+    animatedMeshes,
+    outputBytes: converted.output.length,
+  };
+}
+
+async function convertOne(
+  options,
+  id,
+  idleAnimation,
+  moveAnimation,
+  attackAnimation,
+) {
   const source = join(options.input, id);
   const runtimeId = runtimeGeometryId(id);
   const target = join(options.output, `${runtimeId}.bk2mesh`);
@@ -360,36 +396,25 @@ async function convertOne(options, id, idleAnimation, moveAnimation) {
   ).length;
   await writeFile(target, primary.output);
 
-  const moveTarget = join(
-    options.output,
-    `${runtimeId}.move.bk2mesh`,
+  const move = await writeAnimationVariant(
+    parsed,
+    moveAnimation,
+    options.animationFrames,
+    join(options.output, `${runtimeId}.move.bk2mesh`),
   );
-  let moveAnimatedMeshes = 0;
-  let moveOutputBytes = 0;
-  if (moveAnimation !== null) {
-    const move = serializeGeometry(
-      parsed,
-      moveAnimation,
-      options.animationFrames,
-    );
-    moveAnimatedMeshes = move.meshes.filter(
-      (mesh) => mesh.androidAnimationFrames.length > 0,
-    ).length;
-    if (moveAnimatedMeshes > 0) {
-      await writeFile(moveTarget, move.output);
-      moveOutputBytes = move.output.length;
-    } else {
-      await rm(moveTarget, { force: true });
-    }
-  } else {
-    await rm(moveTarget, { force: true });
-  }
+  const attack = await writeAnimationVariant(
+    parsed,
+    attackAnimation,
+    options.animationFrames,
+    join(options.output, `${runtimeId}.attack.bk2mesh`),
+  );
   return {
     id,
     runtimeId,
     sourceBytes: sourceBytes.length,
     outputBytes: primary.output.length,
-    moveOutputBytes,
+    moveOutputBytes: move.outputBytes,
+    attackOutputBytes: attack.outputBytes,
     meshes: primary.meshes.length,
     vertices: primary.meshes.reduce(
       (sum, mesh) => sum + mesh.vertexCount,
@@ -400,7 +425,8 @@ async function convertOne(options, id, idleAnimation, moveAnimation) {
       0,
     ),
     animatedMeshes,
-    moveAnimatedMeshes,
+    moveAnimatedMeshes: move.animatedMeshes,
+    attackAnimatedMeshes: attack.animatedMeshes,
   };
 }
 
@@ -428,6 +454,15 @@ async function main() {
       throw new Error("move animation resource has no animation");
     }
   }
+  let attackAnimation = null;
+  if (options.attackAnimation) {
+    const animationBytes = await readFile(options.attackAnimation);
+    attackAnimation =
+      parseAnimated(toArrayBuffer(animationBytes)).animations[0] ?? null;
+    if (attackAnimation === null) {
+      throw new Error("attack animation resource has no animation");
+    }
+  }
   const ids = await resourceIds(options);
   let converted = 0;
   let skipped = 0;
@@ -437,9 +472,12 @@ async function main() {
   let triangles = 0;
   let outputBytes = 0;
   let moveOutputBytes = 0;
+  let attackOutputBytes = 0;
   let animatedMeshes = 0;
   let moveAnimatedMeshes = 0;
+  let attackAnimatedMeshes = 0;
   let moveCacheFiles = 0;
+  let attackCacheFiles = 0;
   for (const id of ids) {
     try {
       const result = await convertOne(
@@ -447,24 +485,30 @@ async function main() {
         id,
         idleAnimation,
         moveAnimation,
+        attackAnimation,
       );
       ++converted;
       vertices += result.vertices;
       triangles += result.triangles;
       outputBytes += result.outputBytes;
       moveOutputBytes += result.moveOutputBytes;
+      attackOutputBytes += result.attackOutputBytes;
       animatedMeshes += result.animatedMeshes;
       moveAnimatedMeshes += result.moveAnimatedMeshes;
+      attackAnimatedMeshes += result.attackAnimatedMeshes;
       moveCacheFiles += result.moveOutputBytes > 0 ? 1 : 0;
+      attackCacheFiles += result.attackOutputBytes > 0 ? 1 : 0;
       if (!options.all) {
         process.stdout.write(
           `geometry=${result.id}; runtime_id=${result.runtimeId}; ` +
             `meshes=${result.meshes}; ` +
             `animated_meshes=${result.animatedMeshes}; ` +
             `move_animated_meshes=${result.moveAnimatedMeshes}; ` +
+            `attack_animated_meshes=${result.attackAnimatedMeshes}; ` +
             `vertices=${result.vertices}; triangles=${result.triangles}; ` +
             `output=${basename(join(options.output, `${result.runtimeId}.bk2mesh`))}; ` +
-            `move_output=${result.moveOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.move.bk2mesh`)) : "<none>"}\n`,
+            `move_output=${result.moveOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.move.bk2mesh`)) : "<none>"}; ` +
+            `attack_output=${result.attackOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.attack.bk2mesh`)) : "<none>"}\n`,
         );
       }
     } catch (error) {
@@ -488,7 +532,10 @@ async function main() {
       `triangles=${triangles}; animated_meshes=${animatedMeshes}; ` +
       `move_animated_meshes=${moveAnimatedMeshes}; ` +
       `move_cache_files=${moveCacheFiles}; ` +
-      `output_bytes=${outputBytes}; move_output_bytes=${moveOutputBytes}\n`,
+      `attack_animated_meshes=${attackAnimatedMeshes}; ` +
+      `attack_cache_files=${attackCacheFiles}; ` +
+      `output_bytes=${outputBytes}; move_output_bytes=${moveOutputBytes}; ` +
+      `attack_output_bytes=${attackOutputBytes}\n`,
   );
   if (failed > 0) {
     process.exitCode = 1;

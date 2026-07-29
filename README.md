@@ -1,5 +1,12 @@
 [English](README.md)        [Русский](README_Russian.md)        [中文](README_Chinese.md)        [हिन्दी](README_Hindi.md)        [Español](README_Spanish.md)        [Français](README_French.md)        [Deutsch](README_German.md)        [Português](README_Portuguese.md)        [日本語](README_Japanese.md)        [Bahasa Indonesia](README_Indonesian.md)
 
+> [!NOTE]
+> This is a community fork of the original
+> [nival/Blitzkrieg-2](https://github.com/nival/Blitzkrieg-2) repository,
+> focused on a full native Android mobile port. The original game, source code,
+> trademarks, and assets remain the property of their respective owners. This
+> port follows the original repository's non-commercial license.
+
 [![Blitzkrieg II Trailer](Blitzkrieg_2.png)](https://www.youtube.com/watch?v=Cw8rA2hvDGg)
 
 The computer game [Blitzkrieg 2](https://en.wikipedia.org/wiki/Blitzkrieg_2) is the second installment of the legendary series of real-time strategy war games, developed by [Nival Interactive](http://nival.com/) and released in 2005.
@@ -85,4 +92,3 @@ This project is released under a **special non-commercial license** from NIVAL I
 - **zlib** (v1.1.3) - Copyright (C) 1995-1998 Jean-loup Gailly and Mark Adler - zlib License
 
 Please review the complete [license agreement](LICENSE.md) before using this code.
-
