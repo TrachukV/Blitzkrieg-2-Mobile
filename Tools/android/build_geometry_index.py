@@ -24,6 +24,21 @@ LEGACY_RELOCATED_PREFIXES = (
     "scene/texandmats/all/",
 )
 
+MISSING_MODEL_FALLBACKS = {
+    (
+        "units/technics/german/tanks/pz_iv_f2/"
+        "summer_whole_model.xdb"
+    ): (
+        "units/technics/german/tanks/pz_iv_ausf_g/"
+        "summer_whole_model.xdb"
+    ),
+    (
+        "buildings/common/concretedot_2/1_1_model.xdb"
+    ): (
+        "buildings/common/concretedot/summer_whole_model.xdb"
+    ),
+}
+
 
 def child(element: ET.Element, name: str) -> ET.Element | None:
     wanted = name.lower()
@@ -223,6 +238,8 @@ def geometry_info(
             geometry_record_id = int(ai_record)
             # Matches AI_TO_VIS from Stats_B2_M1/Vis2AI.h.
             geometry_scale = 2.75 / 64.0
+        else:
+            return None
     quantities: list[int] = []
     material_quantities = child(geometry, "MaterialQuantities")
     if material_quantities is not None:
@@ -285,6 +302,20 @@ def binding_from_vis_path(
     if model is None:
         return None
     geometry = geometry_info(data_root, model)
+    if geometry is None:
+        try:
+            model_key = model.relative_to(data_root).as_posix().lower()
+        except ValueError:
+            model_key = ""
+        fallback_value = MISSING_MODEL_FALLBACKS.get(model_key)
+        fallback_model = (
+            resolve_relative_path(str(data_root), fallback_value)
+            if fallback_value is not None
+            else None
+        )
+        if fallback_model is not None:
+            model = fallback_model
+            geometry = geometry_info(data_root, model)
     if geometry is None:
         return None
     geometry_record_id, material_quantities, geometry_scale = geometry
