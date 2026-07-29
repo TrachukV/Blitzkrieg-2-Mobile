@@ -355,6 +355,11 @@ void PollInput(android_app* app) {
             case AKEYCODE_E:
                 bk2::android::RotateSinglePlayerCamera(0.08f);
                 break;
+            case AKEYCODE_P:
+            case AKEYCODE_SPACE:
+                bk2::android::SetSinglePlayerPaused(
+                        !bk2::android::IsSinglePlayerPaused());
+                break;
 #if !defined(NDEBUG)
             case AKEYCODE_V:
                 bk2::android::HandleLegacyInputEvent("local_win");

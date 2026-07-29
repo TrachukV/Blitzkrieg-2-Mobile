@@ -56,7 +56,9 @@ through one legacy AI command group. Holding for 350 ms and then dragging draws
 an original-style selection rectangle and selects up to twelve friendly units
 of any type inside it; a quick drag still pans the camera. Tapping a member card
 makes that unit active, so its type-specific actions replace the command grid
-while common commands continue to address the whole selection. See
+while common commands continue to address the whole selection. Native pause
+from `P` or `Space` now displays the original orange `PAUSED` treatment centered
+over the battlefield without covering the shipped bottom HUD. See
 [`android/README.md`](android/README.md) for build, content-staging, verification,
 and remaining-port details.
 

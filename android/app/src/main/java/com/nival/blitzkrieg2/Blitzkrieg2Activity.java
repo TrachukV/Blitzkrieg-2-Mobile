@@ -87,6 +87,7 @@ public final class Blitzkrieg2Activity extends GameActivity {
             updateActionGrid(selectedUnitSnapshot);
             updateCommandButtonState(
                     NativeBridge.getTouchCommandMode());
+            syncPauseUi();
             String outcome = NativeBridge.getMissionOutcome();
             if ("won".equals(outcome)) {
                 showOutcome("VICTORY", 0xffd9c46b);
@@ -237,16 +238,18 @@ public final class Blitzkrieg2Activity extends GameActivity {
         pauseIndicator.setText("PAUSED");
         pauseIndicator.setTextColor(0xffff922f);
         pauseIndicator.setTextSize(38.0f);
-        pauseIndicator.setTypeface(Typeface.DEFAULT_BOLD);
+        pauseIndicator.setTypeface(
+                Typeface.create("sans-serif-condensed", Typeface.BOLD));
         pauseIndicator.setGravity(Gravity.CENTER);
+        pauseIndicator.setIncludeFontPadding(false);
         pauseIndicator.setShadowLayer(dp(3), dp(2), dp(2), Color.BLACK);
         pauseIndicator.setVisibility(View.GONE);
         FrameLayout.LayoutParams pauseParams =
                 new FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        Gravity.TOP | Gravity.CENTER_HORIZONTAL);
-        pauseParams.topMargin = dp(82);
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        Gravity.TOP);
+        pauseParams.bottomMargin = hudHeight;
         root.addView(pauseIndicator, pauseParams);
 
         missionMenu = new LinearLayout(this);
@@ -574,11 +577,21 @@ public final class Blitzkrieg2Activity extends GameActivity {
     private void setMissionMenuVisible(boolean visible) {
         NativeBridge.setMissionPaused(visible);
         missionMenu.setVisibility(visible ? View.VISIBLE : View.GONE);
+        syncPauseUi();
+        updateCommandButtonState(0);
+    }
+
+    private void syncPauseUi() {
+        boolean paused = NativeBridge.isMissionPaused();
         if (pauseIndicator != null) {
             pauseIndicator.setVisibility(
-                    visible ? View.VISIBLE : View.GONE);
+                    paused ? View.VISIBLE : View.GONE);
         }
-        updateCommandButtonState(0);
+        if (!paused &&
+            missionMenu != null &&
+            missionMenu.getVisibility() == View.VISIBLE) {
+            missionMenu.setVisibility(View.GONE);
+        }
     }
 
     private void updateCommandButtonState(int mode) {

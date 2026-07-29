@@ -610,6 +610,8 @@ Touch controls currently implemented:
   up to twelve friendly units of any type inside it; a quick drag still pans;
 - tap any selected-unit HUD card to make that unit active, update the
   type-specific action grid, and keep common commands bound to the full group;
+- press `P` or `Space` to toggle native mission pause and the centered
+  original-style orange `PAUSED` overlay without opening the Android menu;
 - tap a red hostile unit while a player unit is selected to issue the original
   legacy attack command;
 - tap terrain to issue the original legacy move command and move the selected

@@ -23,7 +23,10 @@ screen-space selection rectangle and selects up to twelve friendly `CAIUnit`
 instances of any type inside it; a quick one-finger drag remains camera pan.
 Tapping a member card moves that unit to the active slot. Common desktop
 actions address the full selection, while type-specific actions are derived
-from and dispatched to the active unit's matching legacy stats group.
+from and dispatched to the active unit's matching legacy stats group. `P` and
+`Space` toggle the native pause state. The Java HUD polls that state and centers
+the orange `PAUSED` label over the playable viewport while leaving the original
+bottom panel visible, matching the desktop mission presentation.
 
 ## Implemented In This Slice
 
