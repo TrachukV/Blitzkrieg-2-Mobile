@@ -64,6 +64,7 @@ final class OriginalMissionHudView extends View {
     private final List<MemberCardTarget> memberCardTargets =
             new ArrayList<>();
     private int pressedMemberId = -1;
+    private boolean minimapTracking;
 
     OriginalMissionHudView(Context context, File dataRoot) {
         super(context);
@@ -181,12 +182,33 @@ final class OriginalMissionHudView extends View {
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            minimapTracking = false;
             pressedMemberId = findMemberCard(
                     event.getX(),
                     event.getY());
-            return pressedMemberId >= 0;
+            if (pressedMemberId >= 0) {
+                return true;
+            }
+            minimapTracking = updateCameraFromMinimap(
+                    event.getX(),
+                    event.getY());
+            return minimapTracking;
+        }
+        if (event.getActionMasked() == MotionEvent.ACTION_MOVE &&
+                minimapTracking) {
+            if (event.getPointerCount() == 1) {
+                updateCameraFromMinimap(
+                        event.getX(),
+                        event.getY());
+            }
+            return true;
         }
         if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+            if (minimapTracking) {
+                minimapTracking = false;
+                performClick();
+                return true;
+            }
             int releasedMemberId = findMemberCard(
                     event.getX(),
                     event.getY());
@@ -203,11 +225,13 @@ final class OriginalMissionHudView extends View {
             return handled;
         }
         if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
-            boolean handled = pressedMemberId >= 0;
+            boolean handled =
+                    pressedMemberId >= 0 || minimapTracking;
             pressedMemberId = -1;
+            minimapTracking = false;
             return handled;
         }
-        return pressedMemberId >= 0;
+        return pressedMemberId >= 0 || minimapTracking;
     }
 
     @Override
@@ -223,6 +247,30 @@ final class OriginalMissionHudView extends View {
             }
         }
         return -1;
+    }
+
+    private boolean updateCameraFromMinimap(float x, float y) {
+        if (getHeight() <= 0) {
+            return false;
+        }
+        float scale = getHeight() / 180.0f;
+        float frameWidth = 260.0f * scale;
+        float frameHeight = 160.0f * scale;
+        float frameTop = (getHeight() - frameHeight) * 0.5f;
+        float normalizedX = x / frameWidth;
+        float normalizedY = (y - frameTop) / frameHeight;
+        if (normalizedX < 0.0f ||
+                normalizedX > 1.0f ||
+                normalizedY < 0.0f ||
+                normalizedY > 1.0f ||
+                Math.abs(normalizedX - 0.5f) +
+                        Math.abs(normalizedY - 0.5f) > 0.5f) {
+            return false;
+        }
+        NativeBridge.centerMissionCameraFromMinimap(
+                normalizedX,
+                normalizedY);
+        return true;
     }
 
     @Override

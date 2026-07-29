@@ -35,6 +35,9 @@ final class NativeBridge {
     static native void setMissionPaused(boolean paused);
     static native boolean isMissionPaused();
     static native int[] getMissionMinimapArgb(int width, int height);
+    static native boolean centerMissionCameraFromMinimap(
+            float normalizedX,
+            float normalizedY);
     static native void forfeitMission();
 
     static void attachActivity(Blitzkrieg2Activity activity) {

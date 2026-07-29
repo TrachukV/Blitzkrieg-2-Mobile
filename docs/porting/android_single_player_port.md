@@ -20,6 +20,16 @@ descriptor coordinates `(7,92)` and `(193,92)`. They open the native mission
 menu and objective summary instead of leaving invisible touch targets beside
 the command grid. Mission play also enters sticky immersive mode so the Android
 navigation handle does not cover the center panel.
+The minimap samples the same `GetMiniMapWarForInfo` snapshot as the battlefield.
+It follows the desktop `WindowMiniMap` constants: hidden cells receive a black
+overlay with alpha 128 and fully visible cells receive alpha 0. Friendly and
+currently visible hostile presentation entities are drawn after that layer,
+with the active selection highlighted in yellow. Touches are clipped to the
+original diamond; tap and one-finger drag convert its normalized coordinates
+back to terrain coordinates, update the shared camera target and terrain
+height, and leave the current zoom and yaw intact. On the ARM64 emulator a
+center tap logged `normalized=0.498626,0.5` and moved the camera target to
+`175.516,176,0`.
 The Android build packages the required 4.2 MiB original HUD subset and the TGA
 loader uses it only when the corresponding external `Complete/UI` file is
 missing. This keeps the original panel functional after a partial content sync

@@ -3426,6 +3426,39 @@ void PanSinglePlayerCamera(float delta_x_pixels, float delta_y_pixels) {
     ApplyCameraLocked();
 }
 
+bool CenterSinglePlayerCameraFromMinimap(
+        float normalized_x,
+        float normalized_y) {
+    std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    if (!g_ready ||
+        !std::isfinite(normalized_x) ||
+        !std::isfinite(normalized_y) ||
+        g_height_width < 2 ||
+        g_height_height < 2) {
+        return false;
+    }
+    normalized_x = std::clamp(normalized_x, 0.0f, 1.0f);
+    normalized_y = std::clamp(normalized_y, 0.0f, 1.0f);
+    const float maximum_x =
+            static_cast<float>(g_height_width - 1) * VIS_TILE_SIZE;
+    const float maximum_y =
+            static_cast<float>(g_height_height - 1) * VIS_TILE_SIZE;
+    g_camera.target_x = normalized_x * maximum_x;
+    g_camera.target_y = (1.0f - normalized_y) * maximum_y;
+    g_camera.target_z = TerrainMeshHeightAtLocked(
+            g_camera.target_x,
+            g_camera.target_y);
+    ApplyCameraLocked();
+
+    std::ostringstream report;
+    report << "camera_focus=minimap"
+           << "; normalized=" << normalized_x << "," << normalized_y
+           << "; target=" << g_camera.target_x << ","
+           << g_camera.target_y << "," << g_camera.target_z;
+    PlatformRuntime::instance().log_info(report.str());
+    return true;
+}
+
 void ZoomSinglePlayerCamera(float scale) {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
     if (!g_ready || scale <= 0.0f) {
@@ -4162,6 +4195,14 @@ std::vector<int32_t> MissionMinimapArgb(int width, int height) {
     std::vector<int32_t> pixels(
             static_cast<size_t>(width) * height,
             static_cast<int32_t>(0xff1d3027u));
+    const AndroidWarFogSnapshot war_fog =
+            CopyAndroidWarFogSnapshot();
+    const bool has_war_fog =
+            war_fog.width >= 2 &&
+            war_fog.height >= 2 &&
+            war_fog.visibility.size() ==
+                    static_cast<size_t>(
+                            war_fog.width * war_fog.height);
     for (int y = 0; y < height; ++y) {
         const int source_y = std::min(
                 g_terrain_type_height - 1,
@@ -4178,6 +4219,56 @@ std::vector<int32_t> MissionMinimapArgb(int width, int height) {
                         static_cast<int>(g_terrain_type_colors.size())) {
                 uint32_t color = g_terrain_type_colors[type_index];
                 color = 0xff000000u | (color & 0x00ffffffu);
+                if (has_war_fog) {
+                    const int fog_x = std::clamp(
+                            source_x * (war_fog.width - 1) /
+                                    std::max(
+                                            g_terrain_type_width - 1,
+                                            1),
+                            0,
+                            war_fog.width - 1);
+                    const int fog_y = std::clamp(
+                            source_y * (war_fog.height - 1) /
+                                    std::max(
+                                            g_terrain_type_height - 1,
+                                            1),
+                            0,
+                            war_fog.height - 1);
+                    const float visibility = std::clamp(
+                            static_cast<float>(
+                                    war_fog.visibility[
+                                            static_cast<size_t>(
+                                                    fog_y *
+                                                            war_fog.width +
+                                                    fog_x)]) /
+                                    static_cast<float>(
+                                            std::max<int>(
+                                                    war_fog.visibility_power,
+                                                    1)),
+                            0.0f,
+                            1.0f);
+                    const float brightness =
+                            0.5f + visibility * 0.5f;
+                    const uint32_t red = static_cast<uint32_t>(
+                            std::lround(
+                                    static_cast<float>(
+                                            (color >> 16) & 0xffu) *
+                                    brightness));
+                    const uint32_t green = static_cast<uint32_t>(
+                            std::lround(
+                                    static_cast<float>(
+                                            (color >> 8) & 0xffu) *
+                                    brightness));
+                    const uint32_t blue = static_cast<uint32_t>(
+                            std::lround(
+                                    static_cast<float>(
+                                            color & 0xffu) *
+                                    brightness));
+                    color = 0xff000000u |
+                            (red << 16) |
+                            (green << 8) |
+                            blue;
+                }
                 pixels[static_cast<size_t>(y * width + x)] =
                         static_cast<int32_t>(color);
             }
@@ -4208,13 +4299,18 @@ std::vector<int32_t> MissionMinimapArgb(int width, int height) {
                                     static_cast<float>(height)),
                     0,
                     height - 1);
+            const bool selected =
+                    (entity.flags &
+                     BK2_PRESENTATION_ENTITY_SELECTED) != 0;
             const int radius =
                     (entity.flags & BK2_PRESENTATION_ENTITY_MECHANIZED) != 0
                     ? 2
-                    : 1;
-            const uint32_t color = entity.player == 0
-                    ? 0xff70e08au
-                    : 0xffe55f54u;
+                    : selected ? 2 : 1;
+            const uint32_t color = selected
+                    ? 0xffffdf58u
+                    : entity.player == 0
+                            ? 0xff70e08au
+                            : 0xffe55f54u;
             for (int dy = -radius; dy <= radius; ++dy) {
                 for (int dx = -radius; dx <= radius; ++dx) {
                     const int px = center_x + dx;
@@ -4353,4 +4449,17 @@ Java_com_nival_blitzkrieg2_NativeBridge_getMissionMinimapArgb(
                 reinterpret_cast<const jint*>(pixels.data()));
     }
     return result;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_centerMissionCameraFromMinimap(
+        JNIEnv*,
+        jclass,
+        jfloat normalized_x,
+        jfloat normalized_y) {
+    return bk2::android::CenterSinglePlayerCameraFromMinimap(
+                   normalized_x,
+                   normalized_y)
+            ? JNI_TRUE
+            : JNI_FALSE;
 }

@@ -718,7 +718,14 @@ that projection and input remain aligned after the inset.
 The detailed Android objective summary is hidden during normal battlefield play
 and toggled by the Objectives touch zone instead of remaining as a permanent
 debug overlay. The minimap is generated from the live terrain-type map and
-presentation entities, then clipped into the original diamond frame. The F10
+presentation entities, then clipped into the original diamond frame. It now
+applies the live `GetMiniMapWarForInfo` grid using the desktop client's
+128-alpha hidden-cell overlay and 0-alpha visible-cell endpoint. Friendly and
+currently visible hostile units remain readable above that layer; the active
+selection is yellow. Tap or drag inside the diamond converts back to terrain
+coordinates and updates the shared camera target without changing zoom or yaw.
+The verified center tap logged `normalized=0.498626,0.5` and moved the target
+to `175.516,176,0`. The F10
 menu returns to the native single-player mission list without terminating the
 app process. The center panel now follows the original battle-screen layout:
 mission/objective text is kept at the top-left, while selecting a real legacy
