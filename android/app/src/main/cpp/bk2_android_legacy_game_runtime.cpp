@@ -25,6 +25,7 @@
 #include "Common_RTS_AI/CommonPathFinder.h"
 #include "Common_RTS_AI/Pathfinders.h"
 #include "Common_RTS_AI/StaticMapHeights.h"
+#include "3Dmotor/DBScene.h"
 #include "GameX/DBGameRoot.h"
 #include "GameX/GetConsts.h"
 #include "GameX/ScenarioTracker.h"
@@ -32,10 +33,12 @@
 #include "SceneB2/TerrainInfo.h"
 #include "Stats_B2_M1/DBMapInfo.h"
 #include "Stats_B2_M1/DBVisObj.h"
+#include "Stats_B2_M1/RPGStats.h"
 #include "Stats_B2_M1/ActionsRemap.h"
 #include "Stats_B2_M1/AIUpdates.h"
 #include "Stats_B2_M1/DBNotifications.h"
 #include "Stats_B2_M1/FeedBackUpdates.h"
+#include "Stats_B2_M1/AnimationType.h"
 #include "Stats_B2_M1/TerraAIObserver.h"
 #include "Stats_B2_M1/Vis2AI.h"
 #include "System/VFSOperations.h"
@@ -114,15 +117,35 @@ struct TimedCombatEffect {
     uint64_t expires_millis = 0;
 };
 std::vector<TimedCombatEffect> g_combat_effects;
+struct TimedSceneEffect {
+    AndroidSceneEffect effect;
+    uint64_t created_millis = 0;
+    uint64_t expires_millis = 0;
+};
+std::vector<TimedSceneEffect> g_scene_effects;
 struct TimedDestructionEffect {
     AndroidDestructionEffect effect;
     uint64_t created_millis = 0;
     uint64_t expires_millis = 0;
+    bool exact_animation_recipe = false;
 };
 std::vector<TimedDestructionEffect> g_destruction_effects;
+struct UnitDeathEffectCandidates {
+    std::string smoke_descriptor_id;
+    std::vector<AndroidParticleEmitter> smoke_emitters;
+    uint32_t smoke_lifetime_millis = 0;
+    std::string fatality_descriptor_id;
+    std::vector<AndroidParticleEmitter> fatality_emitters;
+    uint32_t fatality_lifetime_millis = 0;
+};
+std::unordered_map<int32_t, UnitDeathEffectCandidates>
+        g_unit_death_effect_candidates;
 uint64_t g_infantry_shot_effect_count = 0;
 uint64_t g_mechanized_shot_effect_count = 0;
 uint64_t g_mechanized_destruction_effect_count = 0;
+uint64_t g_descriptor_scene_effect_count = 0;
+uint64_t g_descriptor_particle_emitter_count = 0;
+uint64_t g_descriptor_particle_texture_count = 0;
 uint64_t g_forwarded_unit_kill_count = 0;
 uint64_t g_forwarded_unit_kill_error_count = 0;
 struct PresentationCorpse {
@@ -741,13 +764,223 @@ void FinalizePendingMissionOutcome() {
                     : "; progression_error=" + progression.error));
 }
 
-void CapturePresentationCorpse(
-        int32_t unit_id,
+std::string NormalizeParticleTexturePath(
+        const NDb::STexture* texture) {
+    if (texture == nullptr) {
+        return {};
+    }
+    std::string path = texture->szDestName.c_str();
+    std::replace(path.begin(), path.end(), '\\', '/');
+    while (!path.empty() && path.front() == '/') {
+        path.erase(path.begin());
+    }
+    if (path.find('/') != std::string::npos) {
+        return path;
+    }
+    std::string descriptor = texture->GetDBID().ToString().c_str();
+    const size_t xpointer = descriptor.find('#');
+    if (xpointer != std::string::npos) {
+        descriptor.resize(xpointer);
+    }
+    std::replace(descriptor.begin(), descriptor.end(), '\\', '/');
+    while (!descriptor.empty() && descriptor.front() == '/') {
+        descriptor.erase(descriptor.begin());
+    }
+    const size_t slash = descriptor.rfind('/');
+    if (slash == std::string::npos) {
+        return path;
+    }
+    return descriptor.substr(0, slash + 1) + path;
+}
+
+uint32_t AppendSceneEffectRecipe(
+        const NDb::SEffect* scene_effect,
+        std::vector<AndroidParticleEmitter>* emitters) {
+    if (scene_effect == nullptr || emitters == nullptr) {
+        return 0;
+    }
+    float lifetime_seconds =
+            std::max(scene_effect->fDuration, 0.1f);
+    for (const CDBPtr<NDb::SParticleInstance>& instance_ref :
+         scene_effect->instances) {
+        const NDb::SParticleInstance* instance =
+                instance_ref.GetPtr();
+        if (instance == nullptr || instance->textures.empty()) {
+            continue;
+        }
+        AndroidParticleEmitter emitter;
+        emitter.offset_x = AI2Vis(instance->vPosition.x);
+        emitter.offset_y = AI2Vis(instance->vPosition.y);
+        emitter.offset_z = AI2Vis(instance->vPosition.z);
+        emitter.scale =
+                std::isfinite(instance->fScale)
+                ? std::clamp(instance->fScale, 0.05f, 20.0f)
+                : 1.0f;
+        emitter.speed =
+                std::isfinite(instance->fSpeed) &&
+                        std::abs(instance->fSpeed) > 0.001f
+                ? instance->fSpeed
+                : 1.0f;
+        emitter.time_offset_seconds =
+                std::isfinite(instance->fOffset)
+                ? instance->fOffset
+                : 0.0f;
+        emitter.end_cycle_seconds =
+                std::isfinite(instance->fEndCycle)
+                ? std::max(instance->fEndCycle, 0.0f)
+                : 0.0f;
+        emitter.cycle_count = instance->nCycleCount;
+        emitter.textures.reserve(instance->textures.size());
+        for (const CDBPtr<NDb::STexture>& texture_ref :
+             instance->textures) {
+            const NDb::STexture* texture = texture_ref.GetPtr();
+            if (texture == nullptr) {
+                continue;
+            }
+            AndroidParticleTexture snapshot;
+            snapshot.path = NormalizeParticleTexturePath(texture);
+            if (snapshot.path.empty()) {
+                continue;
+            }
+            snapshot.width = std::max(texture->nWidth, 1);
+            snapshot.height = std::max(texture->nHeight, 1);
+            snapshot.additive =
+                    texture->eConversionType ==
+                    NDb::CONVERT_TRANSPARENT_ADD;
+            emitter.textures.push_back(std::move(snapshot));
+        }
+        if (emitter.textures.empty()) {
+            continue;
+        }
+        const float cycle_seconds =
+                emitter.end_cycle_seconds > 0.0f
+                ? emitter.end_cycle_seconds
+                : std::max(scene_effect->fDuration, 0.1f);
+        const float emitter_lifetime =
+                emitter.cycle_count == 0
+                ? 10.0f
+                : std::max(emitter.time_offset_seconds, 0.0f) +
+                        cycle_seconds *
+                                static_cast<float>(
+                                        std::max(
+                                                emitter.cycle_count,
+                                                1));
+        lifetime_seconds =
+                std::max(lifetime_seconds, emitter_lifetime);
+        g_descriptor_particle_texture_count +=
+                emitter.textures.size();
+        emitters->push_back(std::move(emitter));
+        ++g_descriptor_particle_emitter_count;
+    }
+    return static_cast<uint32_t>(
+            std::lround(
+                    std::clamp(lifetime_seconds, 0.1f, 12.0f) *
+                    1000.0f));
+}
+
+uint32_t BuildComplexEffectRecipe(
+        const NDb::SComplexEffect* complex_effect,
+        std::string* descriptor_id,
+        std::vector<AndroidParticleEmitter>* emitters) {
+    if (complex_effect == nullptr ||
+        descriptor_id == nullptr ||
+        emitters == nullptr) {
+        return 0;
+    }
+    *descriptor_id =
+            complex_effect->GetDBID().ToString().c_str();
+    return AppendSceneEffectRecipe(
+            complex_effect->GetSceneEffect(),
+            emitters);
+}
+
+UnitDeathEffectCandidates BuildUnitDeathEffectCandidates(
+        const NDb::SUnitBaseRPGStats* stats) {
+    UnitDeathEffectCandidates result;
+    if (stats == nullptr ||
+        stats->GetTypeID() != NDb::SMechUnitRPGStats::typeID) {
+        return result;
+    }
+    const NDb::SMechUnitRPGStats* mechanized =
+            static_cast<const NDb::SMechUnitRPGStats*>(stats);
+    result.smoke_lifetime_millis = BuildComplexEffectRecipe(
+            mechanized->pEffectSmoke.GetPtr(),
+            &result.smoke_descriptor_id,
+            &result.smoke_emitters);
+    result.fatality_lifetime_millis = BuildComplexEffectRecipe(
+            mechanized->pEffectFatality.GetPtr(),
+            &result.fatality_descriptor_id,
+            &result.fatality_emitters);
+    return result;
+}
+
+const NDb::SComplexEffect* ResolveHitEffect(
+        const SAINotifyHitInfo& info) {
+    const NDb::SWeaponRPGStats* weapon = info.pWeapon.GetPtr();
+    if (weapon == nullptr ||
+        info.wShell >= weapon->shells.size()) {
+        return nullptr;
+    }
+    const NDb::SWeaponRPGStats::SShell& shell =
+            weapon->shells[info.wShell];
+    switch (info.eHitType) {
+        case SAINotifyHitInfo::EHT_HIT:
+            return shell.pEffectHitDirect.GetPtr();
+        case SAINotifyHitInfo::EHT_MISS:
+            return shell.pEffectHitMiss.GetPtr();
+        case SAINotifyHitInfo::EHT_REFLECT:
+            return shell.pEffectHitReflect.GetPtr();
+        case SAINotifyHitInfo::EHT_GROUND:
+            return shell.pEffectHitGround.GetPtr();
+        case SAINotifyHitInfo::EHT_WATER:
+            return shell.pEffectHitWater.GetPtr();
+        case SAINotifyHitInfo::EHT_AIR:
+            return shell.pEffectHitAir.GetPtr();
+        case SAINotifyHitInfo::EHT_NONE:
+        default:
+            return nullptr;
+    }
+}
+
+void CaptureDescriptorSceneEffect(
+        const NDb::SComplexEffect* complex_effect,
+        int32_t victim_unit_id,
         const CVec3& position) {
-    if (g_presentation_corpses.find(unit_id) !=
-        g_presentation_corpses.end()) {
+    TimedSceneEffect timed;
+    timed.effect.victim_unit_id = victim_unit_id;
+    timed.effect.x = AI2Vis(position.x);
+    timed.effect.y = AI2Vis(position.y);
+    timed.effect.z = AI2Vis(position.z);
+    timed.effect.lifetime_millis = BuildComplexEffectRecipe(
+            complex_effect,
+            &timed.effect.descriptor_id,
+            &timed.effect.emitters);
+    if (timed.effect.emitters.empty() ||
+        timed.effect.lifetime_millis == 0) {
         return;
     }
+    timed.created_millis = g_timer_millis;
+    timed.expires_millis =
+            g_timer_millis + timed.effect.lifetime_millis;
+    g_scene_effects.push_back(std::move(timed));
+    ++g_descriptor_scene_effect_count;
+    if (g_descriptor_scene_effect_count == 1) {
+        const AndroidSceneEffect& effect =
+                g_scene_effects.back().effect;
+        PlatformRuntime::instance().log_info(
+                std::string("descriptor_scene_effect=") +
+                effect.descriptor_id +
+                "; emitters=" +
+                std::to_string(effect.emitters.size()));
+    }
+}
+
+void CapturePresentationCorpse(
+        int32_t unit_id,
+        const CVec3& position,
+        const NDb::SUnitBaseRPGStats* stats = nullptr,
+        int die_animation_param =
+                std::numeric_limits<int>::min()) {
     const auto previous = g_last_presentation_entities.find(unit_id);
     if (previous == g_last_presentation_entities.end()) {
         return;
@@ -763,46 +996,130 @@ void CapturePresentationCorpse(
          BK2_PRESENTATION_ENTITY_FORMATION) != 0) {
         return;
     }
-    PresentationCorpse corpse;
-    corpse.entity = previous->second;
-    corpse.entity.flags &=
-            ~(BK2_PRESENTATION_ENTITY_ALIVE |
-              BK2_PRESENTATION_ENTITY_SELECTABLE |
-              BK2_PRESENTATION_ENTITY_MOVABLE |
-              BK2_PRESENTATION_ENTITY_SELECTED |
-              BK2_PRESENTATION_ENTITY_TARGETED |
-              BK2_PRESENTATION_ENTITY_MOVING |
-              BK2_PRESENTATION_ENTITY_ATTACKING);
-    corpse.entity.flags |= BK2_PRESENTATION_ENTITY_DEAD;
-    corpse.entity.hit_points = 0.0f;
-    corpse.entity.x = AI2Vis(position.x);
-    corpse.entity.y = AI2Vis(position.y);
-    corpse.entity.z = AI2Vis(position.z);
-    corpse.expires_millis = g_timer_millis + 10000;
-    g_presentation_corpses[unit_id] = corpse;
-    ++g_presentation_death_count;
-    PlatformRuntime::instance().log_info(
-            std::string(
-                    mechanized
-                            ? "mechanized_death_presentation="
-                            : "infantry_death_presentation=") +
-            std::to_string(unit_id));
+    const bool new_corpse =
+            g_presentation_corpses.find(unit_id) ==
+            g_presentation_corpses.end();
+    if (new_corpse) {
+        PresentationCorpse corpse;
+        corpse.entity = previous->second;
+        corpse.entity.flags &=
+                ~(BK2_PRESENTATION_ENTITY_ALIVE |
+                  BK2_PRESENTATION_ENTITY_SELECTABLE |
+                  BK2_PRESENTATION_ENTITY_MOVABLE |
+                  BK2_PRESENTATION_ENTITY_SELECTED |
+                  BK2_PRESENTATION_ENTITY_TARGETED |
+                  BK2_PRESENTATION_ENTITY_MOVING |
+                  BK2_PRESENTATION_ENTITY_ATTACKING);
+        corpse.entity.flags |= BK2_PRESENTATION_ENTITY_DEAD;
+        corpse.entity.hit_points = 0.0f;
+        corpse.entity.x = AI2Vis(position.x);
+        corpse.entity.y = AI2Vis(position.y);
+        corpse.entity.z = AI2Vis(position.z);
+        corpse.expires_millis = g_timer_millis + 10000;
+        g_presentation_corpses[unit_id] = corpse;
+        ++g_presentation_death_count;
+        PlatformRuntime::instance().log_info(
+                std::string(
+                        mechanized
+                                ? "mechanized_death_presentation="
+                                : "infantry_death_presentation=") +
+                std::to_string(unit_id));
+    }
     if (mechanized) {
-        TimedDestructionEffect destruction;
-        destruction.effect.unit_id = unit_id;
-        destruction.effect.x = corpse.entity.x;
-        destruction.effect.y = corpse.entity.y;
-        destruction.effect.z = corpse.entity.z;
-        destruction.effect.lifetime_millis = 10000u;
-        destruction.created_millis = g_timer_millis;
-        destruction.expires_millis =
-                g_timer_millis + destruction.effect.lifetime_millis;
-        g_destruction_effects.push_back(destruction);
-        ++g_mechanized_destruction_effect_count;
-        if (g_mechanized_destruction_effect_count == 1) {
-            PlatformRuntime::instance().log_info(
-                    std::string("destruction_effect=mechanized; unit=") +
-                    std::to_string(unit_id));
+        if (stats != nullptr) {
+            g_unit_death_effect_candidates[unit_id] =
+                    BuildUnitDeathEffectCandidates(stats);
+        }
+        const auto candidates =
+                g_unit_death_effect_candidates.find(unit_id);
+        const bool exact_animation =
+                die_animation_param !=
+                std::numeric_limits<int>::min();
+        bool fatality = false;
+        if (exact_animation && die_animation_param != -1) {
+            const NDb::EAnimationType animation =
+                    static_cast<NDb::EAnimationType>(
+                            (die_animation_param >> 16) &
+                            0x00000fff);
+            fatality =
+                    animation ==
+                    NDb::ANIMATION_DEATH_FATALITY;
+        }
+        auto existing = std::find_if(
+                g_destruction_effects.begin(),
+                g_destruction_effects.end(),
+                [unit_id](const TimedDestructionEffect& effect) {
+                    return effect.effect.unit_id == unit_id;
+                });
+        const bool new_effect =
+                existing == g_destruction_effects.end();
+        if (new_effect ||
+            (exact_animation &&
+             !existing->exact_animation_recipe)) {
+            TimedDestructionEffect destruction;
+            destruction.effect.unit_id = unit_id;
+            destruction.effect.x =
+                    g_presentation_corpses[unit_id].entity.x;
+            destruction.effect.y =
+                    g_presentation_corpses[unit_id].entity.y;
+            destruction.effect.z =
+                    g_presentation_corpses[unit_id].entity.z;
+            destruction.effect.lifetime_millis = 10000u;
+            destruction.exact_animation_recipe =
+                    exact_animation;
+            if (candidates !=
+                g_unit_death_effect_candidates.end()) {
+                const UnitDeathEffectCandidates& recipe =
+                        candidates->second;
+                const bool use_fatality =
+                        fatality &&
+                        !recipe.fatality_emitters.empty();
+                destruction.effect.descriptor_id =
+                        use_fatality
+                        ? recipe.fatality_descriptor_id
+                        : recipe.smoke_descriptor_id;
+                destruction.effect.emitters =
+                        use_fatality
+                        ? recipe.fatality_emitters
+                        : recipe.smoke_emitters;
+                const uint32_t recipe_lifetime =
+                        use_fatality
+                        ? recipe.fatality_lifetime_millis
+                        : recipe.smoke_lifetime_millis;
+                if (recipe_lifetime > 0) {
+                    destruction.effect.lifetime_millis =
+                            recipe_lifetime;
+                }
+            }
+            destruction.effect.uses_fallback_recipe =
+                    destruction.effect.emitters.empty();
+            destruction.created_millis = g_timer_millis;
+            destruction.expires_millis =
+                    g_timer_millis +
+                    destruction.effect.lifetime_millis;
+            if (new_effect) {
+                g_destruction_effects.push_back(
+                        std::move(destruction));
+                ++g_mechanized_destruction_effect_count;
+            } else {
+                *existing = std::move(destruction);
+            }
+            if (g_mechanized_destruction_effect_count == 1) {
+                const AndroidDestructionEffect& effect =
+                        new_effect
+                        ? g_destruction_effects.back().effect
+                        : existing->effect;
+                PlatformRuntime::instance().log_info(
+                        std::string(
+                                "destruction_effect=mechanized; unit=") +
+                        std::to_string(unit_id) +
+                        "; descriptor=" +
+                        (effect.descriptor_id.empty()
+                                 ? "fallback"
+                                 : effect.descriptor_id) +
+                        "; emitters=" +
+                        std::to_string(effect.emitters.size()));
+            }
         }
     }
 }
@@ -856,6 +1173,14 @@ void PruneExpiredCombatEffects() {
                         return effect.expires_millis <= g_timer_millis;
                     }),
             g_combat_effects.end());
+    g_scene_effects.erase(
+            std::remove_if(
+                    g_scene_effects.begin(),
+                    g_scene_effects.end(),
+                    [](const TimedSceneEffect& effect) {
+                        return effect.expires_millis <= g_timer_millis;
+                    }),
+            g_scene_effects.end());
     g_destruction_effects.erase(
             std::remove_if(
                     g_destruction_effects.begin(),
@@ -947,7 +1272,18 @@ void DrainLegacyClientUpdates() {
                             : CVec3(
                                       placement.center.x,
                                       placement.center.y,
-                                      placement.z));
+                                      placement.z),
+                    nullptr,
+                    dead->dieAnimation.nParam);
+            continue;
+        }
+        SAIHitUpdate* hit =
+                dynamic_cast<SAIHitUpdate*>(update.GetPtr());
+        if (hit != nullptr) {
+            CaptureDescriptorSceneEffect(
+                    ResolveHitEffect(hit->info),
+                    hit->info.nVictimUniqueID,
+                    hit->info.explCoord);
             continue;
         }
         SAIInfantryShotUpdate* infantry_shot =
@@ -1373,10 +1709,15 @@ void ResetReportState() {
     g_objective_update_count = 0;
     g_hud_notification_count = 0;
     g_combat_effects.clear();
+    g_scene_effects.clear();
     g_destruction_effects.clear();
+    g_unit_death_effect_candidates.clear();
     g_infantry_shot_effect_count = 0;
     g_mechanized_shot_effect_count = 0;
     g_mechanized_destruction_effect_count = 0;
+    g_descriptor_scene_effect_count = 0;
+    g_descriptor_particle_emitter_count = 0;
+    g_descriptor_particle_texture_count = 0;
     g_forwarded_unit_kill_count = 0;
     g_forwarded_unit_kill_error_count = 0;
     g_last_presentation_entities.clear();
@@ -1395,7 +1736,9 @@ void Bk2AndroidOnUnitDead(CCommonUnit* unit) {
     }
     bk2::android::CapturePresentationCorpse(
             unit->GetUniqueIdQU(),
-            unit->GetCenter());
+            unit->GetCenter(),
+            dynamic_cast<const NDb::SUnitBaseRPGStats*>(
+                    unit->GetStats()));
 }
 
 void Bk2AndroidOnUnitKilled(
@@ -2430,6 +2773,21 @@ std::vector<AndroidCombatEffect> CopyActiveAndroidCombatEffects() {
     return result;
 }
 
+std::vector<AndroidSceneEffect> CopyActiveAndroidSceneEffects() {
+    std::vector<AndroidSceneEffect> result;
+    result.reserve(g_scene_effects.size());
+    for (const TimedSceneEffect& timed : g_scene_effects) {
+        AndroidSceneEffect effect = timed.effect;
+        effect.age_millis = static_cast<uint32_t>(
+                std::min(
+                        g_timer_millis - timed.created_millis,
+                        static_cast<uint64_t>(
+                                effect.lifetime_millis)));
+        result.push_back(std::move(effect));
+    }
+    return result;
+}
+
 std::vector<AndroidDestructionEffect>
 CopyActiveAndroidDestructionEffects() {
     std::vector<AndroidDestructionEffect> result;
@@ -2489,10 +2847,15 @@ void ShutdownLegacyGameRuntime() {
     g_war_fog_snapshot = AndroidWarFogSnapshot();
     g_war_fog_first_update = true;
     g_combat_effects.clear();
+    g_scene_effects.clear();
     g_destruction_effects.clear();
+    g_unit_death_effect_candidates.clear();
     g_infantry_shot_effect_count = 0;
     g_mechanized_shot_effect_count = 0;
     g_mechanized_destruction_effect_count = 0;
+    g_descriptor_scene_effect_count = 0;
+    g_descriptor_particle_emitter_count = 0;
+    g_descriptor_particle_texture_count = 0;
     g_forwarded_unit_kill_count = 0;
     g_forwarded_unit_kill_error_count = 0;
     g_mission_outcome.store(kLegacyMissionRunning);
@@ -2537,6 +2900,13 @@ std::string LegacyGameRuntimeReport() {
            << "; mechanized_shot_effects="
            << g_mechanized_shot_effect_count
            << "; active_combat_effects=" << g_combat_effects.size()
+           << "; descriptor_scene_effects="
+           << g_descriptor_scene_effect_count
+           << "; active_scene_effects=" << g_scene_effects.size()
+           << "; descriptor_particle_emitters="
+           << g_descriptor_particle_emitter_count
+           << "; descriptor_particle_textures="
+           << g_descriptor_particle_texture_count
            << "; mechanized_destruction_effects="
            << g_mechanized_destruction_effect_count
            << "; active_destruction_effects="

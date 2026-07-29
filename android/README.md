@@ -861,13 +861,20 @@ ribbons at the source and destination coordinates supplied by the legacy AI
 simulation. Infantry ribbons use the shipped DXT3
 `GunShotTraceBlue_Texture.dds`; mechanized ribbons use the shipped
 `GunShotTraceOrange_texture.dds`. These effect-only layers enable alpha blending
-without changing the opaque model layers. The first native particle milestone
-also replaces the temporary shot marker with the shipped
-`Shot8_Texture.dds` muzzle flash. A visible mechanized death now keeps its
-original wreck model for ten seconds and animates shipped `Fire2`–`Fire5`
-textures plus rising `Explosion2`/`Explosion3` smoke. Those legacy fire and
-muzzle DDS files encode transparency through RGB luminance with a zero alpha
-channel; the Android texture bridge derives a compatible alpha channel during
+without changing the opaque model layers. The native particle bridge also
+replaces the temporary shot marker with the shipped `Shot8_Texture.dds` muzzle
+flash. More importantly, it now consumes real `SAIHitUpdate` events and
+resolves the desktop shell hit mapping (`HIT`, `MISS`, `REFLECT`, `GROUND`,
+`WATER`, and `AIR`) to each shell's original `SComplexEffect`. Mechanized death
+uses the unit RPG descriptor's `pEffectSmoke` or `pEffectFatality`, matching the
+selected legacy death animation. The bridge snapshots each resolved
+descriptor's scene-effect variant and carries its emitter texture sequence,
+dimensions, cycle duration, time offset, scale, speed, particle count, and
+alpha/additive conversion mode to bgfx. It retains the visible wreck for ten
+seconds. The earlier fixed `Fire2`–`Fire5` plus `Explosion2`/`Explosion3`
+recipe remains only as a fallback when the content has no usable effect
+descriptor. Legacy effect DDS files that encode transparency through RGB
+luminance with a zero alpha channel receive a compatible alpha channel during
 GPU upload. Particle layers depth-test against the scene but do not write the
 depth buffer, so overlapping fire and smoke remain visible.
 
@@ -883,14 +890,20 @@ without using generic circular blobs. It is not yet the desktop engine's
 terrain-conforming shadow-map renderer, so steep terrain and self-shadowing
 remain part of the larger renderer port.
 
-This is a targeted native presentation path driven by real legacy combat/death
-events, not yet the general `.xdb` particle-system interpreter. Multi-mesh
-Granny models preserve all of their model mesh bindings;
+The bridge is descriptor-driven but is not a byte-for-byte port of the desktop
+particle evaluator. The checked-in content exposes the XDB emitter recipes and
+textures, while the compiled particle keyframe tracks used by the old renderer
+are not available to this Android path. Android therefore preserves descriptor
+selection, timing, texture animation, scale, speed, count, and blend mode but
+approximates per-particle position, size, and color curves with camera-facing
+billboards. A verified US1.2 emulator run consumed
+`AntitankMineExplosion_ComplexEffect.xdb`, rendered both of its emitters from
+`Explosion1_Texture.dds`, and retired the effect after its descriptor lifetime.
+Multi-mesh Granny models preserve all of their model mesh bindings;
 global `InitialPlacement` is intentionally not reapplied because shipped
 infantry geometry already contains the correct root placement. Standing-to-prone
 and prone-to-standing transition clips, GPU/runtime skinning, original
-descriptor-driven explosion/projectile geometry and the remaining particle
-emitters, complete briefing HUD behavior, and the original
+effect-attached Granny geometry, complete briefing HUD behavior, and the original
 chapter-map/statistics/progression UI remain unfinished.
 
 The video transcode manifest now writes Android-canonical runtime paths. A Bink

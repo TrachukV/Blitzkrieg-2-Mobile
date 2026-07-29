@@ -43,6 +43,7 @@ struct WorldObjectMesh {
         std::string texture_path;
         uint16_t texture_handle = UINT16_MAX;
         bool alpha_blended = false;
+        bool additive_blended = false;
         bool alpha_tested = false;
         bool alpha_masked_shadow = false;
         bool depth_test_always = false;

@@ -28,6 +28,7 @@
 #include "libdb/Database.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cerrno>
 #include <cstring>
@@ -124,10 +125,12 @@ size_t g_lying_move_animation_instance_count = 0;
 size_t g_lying_attack_animation_instance_count = 0;
 size_t g_combat_effect_render_count = 0;
 size_t g_active_combat_effect_count = 0;
+size_t g_active_scene_effect_count = 0;
 size_t g_active_destruction_effect_count = 0;
 size_t g_active_unit_indicator_count = 0;
 bool g_combat_effect_trace_texture_logged = false;
 bool g_muzzle_flash_texture_logged = false;
+bool g_descriptor_particle_texture_logged = false;
 bool g_destruction_effect_texture_logged = false;
 
 enum class TouchCommandMode {
@@ -2042,7 +2045,8 @@ void AppendCameraFacingSprite(
         float width,
         float height,
         uint32_t abgr,
-        const std::string& texture_path) {
+        const std::string& texture_path,
+        bool additive_blended = false) {
     if (mesh == nullptr || texture_path.empty() ||
         width <= 0.0f || height <= 0.0f) {
         return;
@@ -2086,17 +2090,248 @@ void AppendCameraFacingSprite(
     if (layer == nullptr) {
         return;
     }
-    layer->alpha_blended = true;
+    layer->alpha_blended = !additive_blended;
+    layer->additive_blended = additive_blended;
     const uint32_t indices[] = {0, 1, 2, 0, 2, 3};
     for (uint32_t index : indices) {
         layer->triangle_indices.push_back(base + index);
     }
 }
 
+bool ParticlePathContains(
+        const std::string& path,
+        const char* needle) {
+    if (needle == nullptr || *needle == '\0') {
+        return false;
+    }
+    std::string lower_path(path);
+    std::transform(
+            lower_path.begin(),
+            lower_path.end(),
+            lower_path.begin(),
+            [](unsigned char value) {
+                return static_cast<char>(std::tolower(value));
+            });
+    return lower_path.find(needle) != std::string::npos;
+}
+
+void AppendDescriptorParticleEffect(
+        WorldObjectMesh* mesh,
+        const std::vector<AndroidParticleEmitter>& emitters,
+        float origin_x,
+        float origin_y,
+        float origin_z,
+        uint32_t age_millis,
+        uint32_t lifetime_millis,
+        int32_t seed) {
+    if (mesh == nullptr || emitters.empty() ||
+        lifetime_millis == 0) {
+        return;
+    }
+    const float age_seconds =
+            static_cast<float>(age_millis) / 1000.0f;
+    const float lifetime_phase = std::clamp(
+            static_cast<float>(age_millis) /
+                    static_cast<float>(lifetime_millis),
+            0.0f,
+            1.0f);
+    const size_t emitter_count =
+            std::min<size_t>(emitters.size(), 16);
+    for (size_t emitter_index = 0;
+         emitter_index < emitter_count;
+         ++emitter_index) {
+        const AndroidParticleEmitter& emitter =
+                emitters[emitter_index];
+        if (emitter.textures.empty()) {
+            continue;
+        }
+        const float speed =
+                std::abs(emitter.speed) > 0.001f
+                ? emitter.speed
+                : 1.0f;
+        const float local_seconds =
+                age_seconds * speed -
+                emitter.time_offset_seconds * speed;
+        if (local_seconds < 0.0f) {
+            continue;
+        }
+        const float cycle_seconds =
+                emitter.end_cycle_seconds > 0.001f
+                ? emitter.end_cycle_seconds
+                : std::max(
+                          static_cast<float>(lifetime_millis) /
+                                  1000.0f,
+                          0.1f);
+        if (emitter.cycle_count > 0 &&
+            local_seconds >=
+                    cycle_seconds *
+                            static_cast<float>(
+                                    emitter.cycle_count)) {
+            continue;
+        }
+        const float cycle_position =
+                std::fmod(local_seconds, cycle_seconds);
+        const float cycle_phase = std::clamp(
+                cycle_position / cycle_seconds,
+                0.0f,
+                0.9999f);
+        const AndroidParticleTexture& probe_texture =
+                emitter.textures[static_cast<size_t>(
+                        cycle_phase *
+                        static_cast<float>(
+                                emitter.textures.size()))];
+        const bool smoke =
+                ParticlePathContains(probe_texture.path, "smoke") ||
+                ParticlePathContains(probe_texture.path, "dust") ||
+                ParticlePathContains(probe_texture.path, "explosion2") ||
+                ParticlePathContains(probe_texture.path, "explosion3");
+        const bool fire =
+                ParticlePathContains(probe_texture.path, "fire") ||
+                ParticlePathContains(probe_texture.path, "flame");
+        const bool flash =
+                ParticlePathContains(probe_texture.path, "flash") ||
+                ParticlePathContains(probe_texture.path, "shot");
+        const int sprite_count = smoke ? 3 : fire ? 2 : 1;
+        for (int sprite = 0;
+             sprite < sprite_count;
+             ++sprite) {
+            const float sprite_phase = std::fmod(
+                    cycle_phase +
+                            static_cast<float>(sprite) /
+                                    static_cast<float>(
+                                            sprite_count),
+                    1.0f);
+            const size_t texture_index = std::min(
+                    static_cast<size_t>(
+                            sprite_phase *
+                            static_cast<float>(
+                                    emitter.textures.size())),
+                    emitter.textures.size() - 1);
+            const AndroidParticleTexture& texture =
+                    emitter.textures[texture_index];
+            const float texture_width =
+                    static_cast<float>(
+                            std::max(texture.width, 1));
+            const float texture_height =
+                    static_cast<float>(
+                            std::max(texture.height, 1));
+            const float aspect =
+                    std::clamp(
+                            texture_height / texture_width,
+                            0.35f,
+                            2.85f);
+            float width = std::clamp(
+                    texture_width / 32.0f *
+                            std::max(emitter.scale, 0.05f),
+                    0.8f,
+                    12.0f);
+            float height = std::clamp(
+                    width * aspect,
+                    0.8f,
+                    16.0f);
+            const float random_seed =
+                    static_cast<float>(
+                            (seed & 0xffff) +
+                            static_cast<int>(emitter_index) * 97 +
+                            sprite * 43);
+            float x = origin_x + emitter.offset_x;
+            float y = origin_y + emitter.offset_y;
+            float z = origin_z + emitter.offset_z +
+                    height * 0.5f;
+            if (smoke) {
+                const float drift =
+                        (0.4f + sprite_phase * 1.8f) *
+                        emitter.scale;
+                x += std::sin(random_seed * 0.37f) * drift;
+                y += std::cos(random_seed * 0.29f) * drift;
+                z += sprite_phase *
+                        (2.5f + 5.0f * emitter.scale);
+                width *= 0.8f + sprite_phase * 0.8f;
+                height *= 0.8f + sprite_phase * 0.8f;
+            } else if (fire) {
+                const float flicker =
+                        0.9f +
+                        0.12f *
+                                std::sin(
+                                        static_cast<float>(
+                                                age_millis) *
+                                                0.035f +
+                                        random_seed);
+                x += std::sin(random_seed) *
+                        0.35f * emitter.scale;
+                y += std::cos(random_seed) *
+                        0.35f * emitter.scale;
+                width *= flicker;
+                height *= flicker;
+            } else if (flash) {
+                const float expansion =
+                        0.75f + sprite_phase * 0.65f;
+                width *= expansion;
+                height *= expansion;
+            }
+            const float cycle_envelope = std::clamp(
+                    std::min(
+                            sprite_phase * 5.0f,
+                            (1.0f - sprite_phase) * 5.0f),
+                    0.0f,
+                    1.0f);
+            const float lifetime_envelope = std::clamp(
+                    (1.0f - lifetime_phase) * 6.0f,
+                    0.0f,
+                    1.0f);
+            const uint32_t alpha =
+                    static_cast<uint32_t>(
+                            std::lround(
+                                    255.0f *
+                                    cycle_envelope *
+                                    lifetime_envelope));
+            if (alpha == 0) {
+                continue;
+            }
+            AppendCameraFacingSprite(
+                    mesh,
+                    x,
+                    y,
+                    z,
+                    width,
+                    height,
+                    (alpha << 24) | 0x00ffffffu,
+                    texture.path,
+                    texture.additive);
+        }
+    }
+}
+
+void AppendSceneEffect(
+        WorldObjectMesh* mesh,
+        const AndroidSceneEffect& effect) {
+    AppendDescriptorParticleEffect(
+            mesh,
+            effect.emitters,
+            effect.x,
+            effect.y,
+            effect.z,
+            effect.age_millis,
+            effect.lifetime_millis,
+            effect.victim_unit_id);
+}
+
 void AppendDestructionEffect(
         WorldObjectMesh* mesh,
         const AndroidDestructionEffect& effect) {
     if (mesh == nullptr || effect.lifetime_millis == 0) {
+        return;
+    }
+    if (!effect.emitters.empty()) {
+        AppendDescriptorParticleEffect(
+                mesh,
+                effect.emitters,
+                effect.x,
+                effect.y,
+                effect.z,
+                effect.age_millis,
+                effect.lifetime_millis,
+                effect.unit_id);
         return;
     }
     constexpr uint32_t kSmokeCycleMillis = 2600u;
@@ -2461,6 +2696,8 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
             bk2_presentation_snapshot_info();
     const std::vector<AndroidCombatEffect> combat_effects =
             CopyActiveAndroidCombatEffects();
+    const std::vector<AndroidSceneEffect> scene_effects =
+            CopyActiveAndroidSceneEffects();
     const std::vector<AndroidDestructionEffect> destruction_effects =
             CopyActiveAndroidDestructionEffects();
     const AndroidWarFogSnapshot war_fog =
@@ -2471,6 +2708,8 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         g_animated_geometry_part_count == 0 &&
         combat_effects.empty() &&
         g_active_combat_effect_count == 0 &&
+        scene_effects.empty() &&
+        g_active_scene_effect_count == 0 &&
         destruction_effects.empty() &&
         g_active_destruction_effect_count == 0) {
         return true;
@@ -2552,6 +2791,26 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         g_active_combat_effect_count == 0) {
         PlatformRuntime::instance().log_info(
                 "combat_effect_render=cleared");
+    }
+    const size_t previous_active_scene_effect_count =
+            g_active_scene_effect_count;
+    for (const AndroidSceneEffect& effect : scene_effects) {
+        AppendSceneEffect(&combined, effect);
+    }
+    g_active_scene_effect_count = scene_effects.size();
+    if (g_active_scene_effect_count > 0 &&
+        previous_active_scene_effect_count == 0) {
+        PlatformRuntime::instance().log_info(
+                std::string("descriptor_scene_effect_render=active; id=") +
+                scene_effects.front().descriptor_id +
+                "; emitters=" +
+                std::to_string(
+                        scene_effects.front().emitters.size()));
+    } else if (
+            g_active_scene_effect_count == 0 &&
+            previous_active_scene_effect_count > 0) {
+        PlatformRuntime::instance().log_info(
+                "descriptor_scene_effect_render=cleared");
     }
     const size_t previous_active_destruction_effect_count =
             g_active_destruction_effect_count;
@@ -3263,6 +3522,23 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
                     "; path=" + layer.texture_path);
             g_muzzle_flash_texture_logged = true;
         }
+        if ((layer.alpha_blended ||
+             layer.additive_blended) &&
+            layer.texture_path.find(
+                    "Scene/TexAndMats/All/Effects/") == 0 &&
+            !g_descriptor_particle_texture_logged) {
+            PlatformRuntime::instance().log_info(
+                    std::string("descriptor_particle_texture=") +
+                    (layer.texture_handle == UINT16_MAX
+                             ? "unavailable"
+                             : "ready") +
+                    "; blend=" +
+                    (layer.additive_blended
+                             ? "additive"
+                             : "alpha") +
+                    "; path=" + layer.texture_path);
+            g_descriptor_particle_texture_logged = true;
+        }
         if ((layer.texture_path.find(
                      "Scene/TexAndMats/All/Effects/Destructions/Fire/") == 0 ||
              layer.texture_path.find(
@@ -3581,10 +3857,12 @@ void ShutdownSinglePlayerRuntime() {
     g_lying_attack_animation_instance_count = 0;
     g_combat_effect_render_count = 0;
     g_active_combat_effect_count = 0;
+    g_active_scene_effect_count = 0;
     g_active_destruction_effect_count = 0;
     g_active_unit_indicator_count = 0;
     g_combat_effect_trace_texture_logged = false;
     g_muzzle_flash_texture_logged = false;
+    g_descriptor_particle_texture_logged = false;
     g_destruction_effect_texture_logged = false;
     g_touch_command_mode = TouchCommandMode::Contextual;
     ResetPendingTrenchCommandLocked();
@@ -4399,6 +4677,10 @@ std::string SinglePlayerRuntimeReport() {
            << g_combat_effect_render_count
            << "; active_combat_effects_rendered="
            << g_active_combat_effect_count
+           << "; active_scene_effects_rendered="
+           << g_active_scene_effect_count
+           << "; active_destruction_effects_rendered="
+           << g_active_destruction_effect_count
            << "; active_unit_indicators="
            << g_active_unit_indicator_count
            << "; static_fallback_types="

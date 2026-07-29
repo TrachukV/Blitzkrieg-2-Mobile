@@ -868,7 +868,10 @@ private:
                             BGFX_STATE_WRITE_A |
                             BGFX_STATE_MSAA
                     : state;
-            if (layer.alpha_blended) {
+            if (layer.additive_blended) {
+                layer_state &= ~BGFX_STATE_WRITE_Z;
+                layer_state |= BGFX_STATE_BLEND_ADD;
+            } else if (layer.alpha_blended) {
                 layer_state &= ~BGFX_STATE_WRITE_Z;
                 layer_state |= BGFX_STATE_BLEND_ALPHA;
             }

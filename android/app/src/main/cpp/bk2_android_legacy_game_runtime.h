@@ -38,11 +38,44 @@ struct AndroidWarFogSnapshot {
     std::vector<uint8_t> visibility;
 };
 
+struct AndroidParticleTexture {
+    std::string path;
+    int width = 0;
+    int height = 0;
+    bool additive = false;
+};
+
+struct AndroidParticleEmitter {
+    float offset_x = 0.0f;
+    float offset_y = 0.0f;
+    float offset_z = 0.0f;
+    float scale = 1.0f;
+    float speed = 1.0f;
+    float time_offset_seconds = 0.0f;
+    float end_cycle_seconds = 0.0f;
+    int cycle_count = 1;
+    std::vector<AndroidParticleTexture> textures;
+};
+
+struct AndroidSceneEffect {
+    int32_t victim_unit_id = -1;
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    std::string descriptor_id;
+    std::vector<AndroidParticleEmitter> emitters;
+    uint32_t age_millis = 0;
+    uint32_t lifetime_millis = 0;
+};
+
 struct AndroidDestructionEffect {
     int32_t unit_id = -1;
     float x = 0.0f;
     float y = 0.0f;
     float z = 0.0f;
+    std::string descriptor_id;
+    std::vector<AndroidParticleEmitter> emitters;
+    bool uses_fallback_recipe = false;
     uint32_t age_millis = 0;
     uint32_t lifetime_millis = 0;
 };
@@ -91,6 +124,7 @@ std::string SelectedLegacyUnitHudSnapshot();
 void HandleLegacyInputEvent(const char* event_name);
 const char* LegacyMissionOutcome();
 std::vector<AndroidCombatEffect> CopyActiveAndroidCombatEffects();
+std::vector<AndroidSceneEffect> CopyActiveAndroidSceneEffects();
 std::vector<AndroidDestructionEffect> CopyActiveAndroidDestructionEffects();
 AndroidWarFogSnapshot CopyAndroidWarFogSnapshot();
 void ShutdownLegacyGameRuntime();

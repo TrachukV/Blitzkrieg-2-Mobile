@@ -64,9 +64,12 @@ only for surviving texels, and casts translucent projected shadows through the
 same texture mask instead of the port's coarse full-card convex hull. On USA
 US1.2 the rendered static-object count increased from 215 to 2,180 of 2,254 map
 records with zero missing converted geometries.
-Original combat textures now provide
-tracer ribbons, muzzle flashes, and animated fire/smoke on destroyed mechanized
-units. Static objects and live units now cast translucent projected silhouettes
+Original combat textures now provide tracer ribbons and muzzle flashes. Hit and
+death events also resolve their original `SComplexEffect` XDB descriptors,
+including emitter timing, texture sequences, scale, speed, and alpha/additive
+blend mode; the old fixed fire/smoke recipe is retained only as a fallback for
+content without a usable descriptor. Static objects and live units now cast
+translucent projected silhouettes
 derived from their actual converted Granny vertices; animated infantry shadows
 follow the current frame instead of using fixed circles. The battlefield camera
 and terrain projection use the render-surface height minus the actual 112dp
