@@ -653,7 +653,10 @@ tree omits each bridge's `center_visobj.xdb`, so the offline index recovers its
 shipped seasonal `summer_center_model.xdb` directly. This restores all four
 asphalt bridge spans on GB3.1 and reduces its remaining diagnostic fallbacks
 from 33 to 29. Unmapped formations and objects remain green/red proxies. The
-camera starts focused on the player's formation.
+camera starts closer to the player's formation, points inward from the nearest
+map edge, and caps zoom-out so the clear color outside the terrain does not
+dominate the battle view. The HUD campaign and mission title comes from the
+mission ID loaded by the native runtime instead of assuming the first USA map.
 
 This is a playable runtime milestone, not a complete visual port. Terrain now
 uses original game materials and the first runtime model path uses original

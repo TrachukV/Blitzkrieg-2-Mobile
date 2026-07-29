@@ -40,6 +40,8 @@ namespace {
 
 constexpr float kPackedHeightScale = 0.01f;
 constexpr float kMinCameraDistance = 24.0f;
+constexpr float kInitialCameraMinDistance = 72.0f;
+constexpr float kCameraMaxTerrainFraction = 0.48f;
 
 std::mutex g_runtime_mutex;
 bool g_ready = false;
@@ -1911,11 +1913,25 @@ bool FocusCameraOnPlayerLocked(int player) {
     g_camera.target_x = (min_x + max_x) * 0.5f;
     g_camera.target_y = (min_y + max_y) * 0.5f;
     g_camera.target_z = height_sum / static_cast<float>(count);
+    const float camera_from_center_x =
+            g_camera.target_x - g_terrain_mesh.center_x;
+    const float camera_from_center_y =
+            g_camera.target_y - g_terrain_mesh.center_y;
+    if (camera_from_center_x * camera_from_center_x +
+            camera_from_center_y * camera_from_center_y >
+        g_terrain_mesh.world_size * g_terrain_mesh.world_size * 0.01f) {
+        g_camera.yaw_radians = std::atan2(
+                camera_from_center_x,
+                -camera_from_center_y);
+    }
     const float formation_span = std::max(max_x - min_x, max_y - min_y);
     g_camera.distance = std::clamp(
-            formation_span * 2.8f + 55.0f,
-            110.0f,
-            std::max(g_terrain_mesh.world_size * 0.6f, 110.0f));
+            formation_span * 1.8f + 42.0f,
+            kInitialCameraMinDistance,
+            std::max(
+                    g_terrain_mesh.world_size *
+                            kCameraMaxTerrainFraction,
+                    kInitialCameraMinDistance));
 
     std::ostringstream report;
     report << "camera_focus=player"
@@ -2381,7 +2397,7 @@ bool InitializeSinglePlayerRuntime() {
     g_camera.target_y = mesh.center_y;
     g_camera.target_z = mesh.center_z;
     g_camera.yaw_radians = 0.72f;
-    g_camera.pitch_radians = 0.82f;
+    g_camera.pitch_radians = 0.92f;
     g_camera.distance = std::max(mesh.world_size * 1.05f, kMinCameraDistance);
 
     g_terrain_mesh = std::move(mesh);
@@ -2538,9 +2554,14 @@ void ZoomSinglePlayerCamera(float scale) {
     if (!g_ready || scale <= 0.0f) {
         return;
     }
-    g_camera.distance = std::max(
+    const float maximum_distance = std::max(
             kMinCameraDistance,
-            g_camera.distance / std::max(0.25f, std::min(scale, 4.0f)));
+            g_terrain_mesh.world_size * kCameraMaxTerrainFraction);
+    g_camera.distance = std::clamp(
+            g_camera.distance /
+                    std::max(0.25f, std::min(scale, 4.0f)),
+            kMinCameraDistance,
+            maximum_distance);
     ApplyCameraLocked();
 }
 
@@ -2652,6 +2673,11 @@ bool HandleSinglePlayerTap(
 bool IsSinglePlayerRuntimeReady() {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
     return g_ready;
+}
+
+std::string CurrentSinglePlayerMissionId() {
+    std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    return g_mission_id;
 }
 
 std::string SinglePlayerRuntimeReport() {
@@ -2857,6 +2883,15 @@ std::vector<int32_t> MissionMinimapArgb(int width, int height) {
 }
 
 }  // namespace bk2::android
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_getCurrentMissionId(
+        JNIEnv* env,
+        jclass) {
+    const std::string mission_id =
+            bk2::android::CurrentSinglePlayerMissionId();
+    return env->NewStringUTF(mission_id.c_str());
+}
 
 extern "C" JNIEXPORT jintArray JNICALL
 Java_com_nival_blitzkrieg2_NativeBridge_getMissionMinimapArgb(

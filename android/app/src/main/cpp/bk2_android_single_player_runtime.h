@@ -20,6 +20,7 @@ bool HandleSinglePlayerTap(
         uint32_t viewport_height);
 
 bool IsSinglePlayerRuntimeReady();
+std::string CurrentSinglePlayerMissionId();
 std::string SinglePlayerRuntimeReport();
 
 }  // namespace bk2::android

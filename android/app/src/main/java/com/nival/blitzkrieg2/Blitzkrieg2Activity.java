@@ -29,6 +29,7 @@ public final class Blitzkrieg2Activity extends GameActivity {
     private LinearLayout outcomePanel;
     private LinearLayout missionMenu;
     private TextView outcomeTitle;
+    private TextView missionTitle;
     private TextView missionStatus;
     private OriginalMissionHudView originalHud;
     private boolean outcomePolling;
@@ -38,6 +39,12 @@ public final class Blitzkrieg2Activity extends GameActivity {
         public void run() {
             if (!outcomePolling) {
                 return;
+            }
+            if (missionTitle != null) {
+                String missionId = NativeBridge.getCurrentMissionId();
+                if (missionId != null && !missionId.isEmpty()) {
+                    missionTitle.setText(missionLabel(missionId));
+                }
             }
             if (missionStatus != null) {
                 missionStatus.setText(NativeBridge.getMissionHudStatus());
@@ -111,13 +118,13 @@ public final class Blitzkrieg2Activity extends GameActivity {
         missionInfo.setOrientation(LinearLayout.VERTICAL);
         missionInfo.setGravity(Gravity.CENTER_VERTICAL);
 
-        TextView mission = new TextView(this);
-        mission.setTextColor(0xffe5d9ad);
-        mission.setTextSize(12.0f);
-        mission.setText(missionLabel());
-        mission.setSingleLine(true);
+        missionTitle = new TextView(this);
+        missionTitle.setTextColor(0xffe5d9ad);
+        missionTitle.setTextSize(12.0f);
+        missionTitle.setText(missionLabel());
+        missionTitle.setSingleLine(true);
         missionInfo.addView(
-                mission,
+                missionTitle,
                 new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -309,9 +316,26 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 ? null
                 : intent.getStringExtra(EXTRA_MISSION_ID);
         if (missionId == null || missionId.isEmpty()) {
-            return "USA campaign — first mission";
+            return "Loading mission...";
         }
+        return missionLabel(missionId);
+    }
+
+    private String missionLabel(String missionId) {
         String label = missionId.replace('\\', '/');
+        String[] segments = label.split("/");
+        for (int index = 0; index + 1 < segments.length; ++index) {
+            if (!"Campaigns".equalsIgnoreCase(segments[index])) {
+                continue;
+            }
+            String campaign = campaignLabel(segments[index + 1]);
+            String mission = segments.length >= 2
+                    ? segments[segments.length - 2]
+                    : "";
+            if (!campaign.isEmpty() && !mission.isEmpty()) {
+                return campaign + " campaign — " + mission;
+            }
+        }
         if (label.startsWith("Scenario/")) {
             label = label.substring("Scenario/".length());
         }
@@ -321,6 +345,22 @@ public final class Blitzkrieg2Activity extends GameActivity {
                     label.length() - "/MapInfo.xdb".length());
         }
         return label.replace('/', ' ');
+    }
+
+    private String campaignLabel(String code) {
+        if ("USA".equalsIgnoreCase(code)) {
+            return "USA";
+        }
+        if ("GER".equalsIgnoreCase(code)) {
+            return "Germany";
+        }
+        if ("USSR".equalsIgnoreCase(code)) {
+            return "USSR";
+        }
+        if ("Tutorial".equalsIgnoreCase(code)) {
+            return "Tutorial";
+        }
+        return code;
     }
 
     private int dp(int value) {
