@@ -41,13 +41,22 @@ records. USA US1.2 contains 1,965 such vegetation and small-prop records, which
 were previously omitted even though their converted Granny geometry was
 available. The verified runtime count increased from 215 to 2,180 rendered
 objects out of 2,254 map records with `missing_converted_geometry=0`. Flora
-uses its original DDS material through a dedicated alpha-test fragment shader.
-It discards texels below the desktop renderer's reference value of 120 and
-keeps depth writes enabled; checked-in GLES3 and SPIR-V binaries cover both
-Android bgfx backends. Flora shadows reuse the projected Granny triangles and
-UVs with a second masked shader, so the ground receives translucent leaf and
-branch silhouettes rather than the complete crossed billboard cards. Opaque
-small props keep their convex projected shadows. US1.2 produced 19 masked
+uses its original DDS material and the `SMaterial::AlphaMode` exported beside
+each texture in `geometry_index.tsv`; this replaces the old case-sensitive
+flora-path heuristic. `AM_ALPHA_TEST` leaves go through a dedicated fragment
+shader, which discards texels below the desktop renderer's reference value of
+120 and keeps depth writes enabled. `AM_TRANSPARENT` brushwood and reeds use
+blending, so their texture cards no longer render as opaque black rectangles.
+Distinct material layers prevent a shared texture from merging incompatible
+alpha modes. Checked-in GLES3 and SPIR-V alpha-test binaries cover both Android
+bgfx backends.
+
+Alpha-tested flora shadows reuse the projected Granny triangles and UVs with a
+second masked shader, so the ground receives translucent leaf and branch
+silhouettes rather than the complete crossed billboard cards. Opaque small
+props keep their convex projected shadows. GB3.1 produced 43 alpha-test layers
+with 69,638 triangles and 10 blended world layers with 30,580 triangles; the
+blend total also includes its road and river passes. US1.2 produced 19 masked
 shadow layers and 199,194 projected triangles. Unit `5198` remained selectable
 over the restored vegetation and populated its original world ring, portrait,
 health card, and action grid.

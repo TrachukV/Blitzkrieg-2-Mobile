@@ -250,10 +250,18 @@ struct ConvertedGeometry {
     std::vector<ConvertedGeometryPart> parts;
 };
 
+enum class GeometryMaterialAlphaMode : uint8_t {
+    Inherit,
+    Opaque,
+    Blend,
+    Test,
+};
+
 struct GeometryBinding {
     int geometry_record_id = -1;
     std::vector<int> material_quantities;
     std::vector<std::string> texture_paths;
+    std::vector<GeometryMaterialAlphaMode> material_alpha_modes;
     float geometry_scale = 1.0f;
 };
 
@@ -279,6 +287,10 @@ std::unordered_map<
 bool g_stats_geometry_index_loaded = false;
 std::unordered_map<std::string, CObj<NGfx::CTexture> > g_model_textures;
 size_t g_model_texture_count = 0;
+size_t g_material_alpha_test_layer_count = 0;
+size_t g_material_alpha_test_triangle_count = 0;
+size_t g_material_alpha_blend_layer_count = 0;
+size_t g_material_alpha_blend_triangle_count = 0;
 std::unordered_map<std::string, size_t> g_static_fallback_stats_paths;
 std::unordered_map<uint64_t, size_t> g_dynamic_fallback_stats_hashes;
 
@@ -1587,6 +1599,23 @@ std::vector<std::string> SplitPreservingEmpty(
     return result;
 }
 
+GeometryMaterialAlphaMode ParseGeometryMaterialAlphaMode(
+        const std::string& value) {
+    if (value == "AM_OPAQUE") {
+        return GeometryMaterialAlphaMode::Opaque;
+    }
+    if (value == "AM_ALPHA_TEST") {
+        return GeometryMaterialAlphaMode::Test;
+    }
+    if (value == "AM_TRANSPARENT" ||
+        value == "AM_OVERLAY" ||
+        value == "AM_OVERLAY_ZWRITE" ||
+        value == "AM_DECAL") {
+        return GeometryMaterialAlphaMode::Blend;
+    }
+    return GeometryMaterialAlphaMode::Inherit;
+}
+
 GeometryBinding ResolveGeometryBinding(
         uint64_t stats_path_hash,
         int stats_record_id,
@@ -1639,6 +1668,13 @@ GeometryBinding ResolveGeometryBinding(
                 const float scale = std::strtof(fields[6].c_str(), nullptr);
                 if (std::isfinite(scale) && scale > 0.0f) {
                     binding.geometry_scale = scale;
+                }
+            }
+            if (fields.size() >= 8 && !fields[7].empty()) {
+                for (const std::string& alpha_mode :
+                     SplitPreservingEmpty(fields[7], '|')) {
+                    binding.material_alpha_modes.push_back(
+                            ParseGeometryMaterialAlphaMode(alpha_mode));
                 }
             }
             if (indexed_frame >= 0) {
@@ -1731,6 +1767,32 @@ size_t FindOrAddOpaqueWorldObjectLayer(
     mesh->layers.push_back(WorldObjectMesh::Layer());
     mesh->layers.back().texture_path = texture_path;
     return mesh->layers.size() - 1;
+}
+
+WorldObjectMesh::Layer* FindOrAddMaterialWorldObjectLayer(
+        WorldObjectMesh* mesh,
+        const std::string& texture_path,
+        bool alpha_blended,
+        bool alpha_tested) {
+    if (mesh == nullptr || texture_path.empty()) {
+        return nullptr;
+    }
+    for (WorldObjectMesh::Layer& layer : mesh->layers) {
+        if (layer.texture_path == texture_path &&
+            layer.alpha_blended == alpha_blended &&
+            layer.alpha_tested == alpha_tested &&
+            !layer.additive_blended &&
+            !layer.alpha_masked_shadow &&
+            !layer.depth_test_always) {
+            return &layer;
+        }
+    }
+    mesh->layers.push_back(WorldObjectMesh::Layer());
+    WorldObjectMesh::Layer& layer = mesh->layers.back();
+    layer.texture_path = texture_path;
+    layer.alpha_blended = alpha_blended;
+    layer.alpha_tested = alpha_tested;
+    return &layer;
 }
 
 struct RoadRenderLayer {
@@ -2917,6 +2979,40 @@ void AppendAlphaMaskedGeometryShadow(
     }
 }
 
+void ResolveGeometryMaterialAlpha(
+        const GeometryBinding& binding,
+        int material_index,
+        bool fallback_alpha_blended,
+        bool fallback_alpha_tested,
+        bool* alpha_blended,
+        bool* alpha_tested) {
+    *alpha_blended = fallback_alpha_blended;
+    *alpha_tested = fallback_alpha_tested;
+    if (material_index < 0 ||
+        material_index >=
+                static_cast<int>(
+                        binding.material_alpha_modes.size())) {
+        return;
+    }
+    switch (binding.material_alpha_modes[material_index]) {
+        case GeometryMaterialAlphaMode::Opaque:
+            *alpha_blended = false;
+            *alpha_tested = false;
+            break;
+        case GeometryMaterialAlphaMode::Blend:
+            *alpha_blended = true;
+            *alpha_tested = false;
+            break;
+        case GeometryMaterialAlphaMode::Test:
+            *alpha_blended = false;
+            *alpha_tested = true;
+            break;
+        case GeometryMaterialAlphaMode::Inherit:
+        default:
+            break;
+    }
+}
+
 bool AppendConvertedGeometry(
         WorldObjectMesh* mesh,
         uint64_t stats_path_hash,
@@ -3058,14 +3154,21 @@ bool AppendConvertedGeometry(
             const std::string texture_path = material_index < 0
                     ? std::string()
                     : binding.texture_paths[material_index];
+            bool material_alpha_blended = false;
+            bool material_alpha_tested = false;
+            ResolveGeometryMaterialAlpha(
+                    binding,
+                    material_index,
+                    alpha_blended,
+                    alpha_tested,
+                    &material_alpha_blended,
+                    &material_alpha_tested);
             WorldObjectMesh::Layer* layer =
-                    FindOrAddWorldObjectLayer(mesh, texture_path);
-            if (layer != nullptr && alpha_blended) {
-                layer->alpha_blended = true;
-            }
-            if (layer != nullptr && alpha_tested) {
-                layer->alpha_tested = true;
-            }
+                    FindOrAddMaterialWorldObjectLayer(
+                            mesh,
+                            texture_path,
+                            material_alpha_blended,
+                            material_alpha_tested);
             std::vector<uint32_t>* output = layer == nullptr
                     ? &mesh->triangle_indices
                     : &layer->triangle_indices;
@@ -3098,14 +3201,21 @@ bool AppendConvertedGeometry(
                                             binding.texture_paths.size())
                     ? binding.texture_paths[material_index]
                     : std::string();
+            bool material_alpha_blended = false;
+            bool material_alpha_tested = false;
+            ResolveGeometryMaterialAlpha(
+                    binding,
+                    material_index,
+                    alpha_blended,
+                    alpha_tested,
+                    &material_alpha_blended,
+                    &material_alpha_tested);
             WorldObjectMesh::Layer* layer =
-                    FindOrAddWorldObjectLayer(mesh, texture_path);
-            if (layer != nullptr && alpha_blended) {
-                layer->alpha_blended = true;
-            }
-            if (layer != nullptr && alpha_tested) {
-                layer->alpha_tested = true;
-            }
+                    FindOrAddMaterialWorldObjectLayer(
+                            mesh,
+                            texture_path,
+                            material_alpha_blended,
+                            material_alpha_tested);
             AppendPartIndices(
                     layer == nullptr
                             ? &mesh->triangle_indices
@@ -4078,11 +4188,22 @@ void AppendMapObjects(
                 65536.0f * 6.28318530717958647692f;
         const std::string stats_path =
                 stats->GetDBID().ToString().c_str();
+        std::string normalized_stats_path = stats_path;
+        std::replace(
+                normalized_stats_path.begin(),
+                normalized_stats_path.end(),
+                '\\',
+                '/');
+        std::transform(
+                normalized_stats_path.begin(),
+                normalized_stats_path.end(),
+                normalized_stats_path.begin(),
+                [](unsigned char value) {
+                    return static_cast<char>(std::tolower(value));
+                });
         const bool flora =
                 stats->eGameType == NDb::SGVOGT_FLORA ||
-                stats_path.find("Objects/Flora/") !=
-                        std::string::npos ||
-                stats_path.find("Objects\\Flora\\") !=
+                normalized_stats_path.find("objects/flora/") !=
                         std::string::npos;
         if (!AppendConvertedGeometry(
                     mesh,
@@ -4150,6 +4271,36 @@ void BuildPresentationStaticWorldMesh(
             mesh);
     AppendTerrainRivers(map, terrain_info, mesh);
     AppendTerrainRoads(map, terrain_info, mesh);
+    g_material_alpha_test_layer_count = 0;
+    g_material_alpha_test_triangle_count = 0;
+    g_material_alpha_blend_layer_count = 0;
+    g_material_alpha_blend_triangle_count = 0;
+    for (const WorldObjectMesh::Layer& layer : mesh->layers) {
+        if (layer.alpha_tested && !layer.alpha_masked_shadow) {
+            ++g_material_alpha_test_layer_count;
+            g_material_alpha_test_triangle_count +=
+                    layer.triangle_indices.size() / 3;
+        }
+        if (layer.alpha_blended &&
+            !layer.additive_blended &&
+            !layer.alpha_masked_shadow) {
+            ++g_material_alpha_blend_layer_count;
+            g_material_alpha_blend_triangle_count +=
+                    layer.triangle_indices.size() / 3;
+        }
+    }
+    std::ostringstream material_report;
+    material_report
+            << "world_material_alpha=ready"
+            << "; test_layers="
+            << g_material_alpha_test_layer_count
+            << "; test_triangles="
+            << g_material_alpha_test_triangle_count
+            << "; blend_layers="
+            << g_material_alpha_blend_layer_count
+            << "; blend_triangles="
+            << g_material_alpha_blend_triangle_count;
+    PlatformRuntime::instance().log_info(material_report.str());
 }
 
 std::vector<Bk2PresentationVertex> PresentationVertices(
@@ -5478,6 +5629,10 @@ void ShutdownSinglePlayerRuntime() {
     g_stats_geometry_index_loaded = false;
     g_model_textures.clear();
     g_model_texture_count = 0;
+    g_material_alpha_test_layer_count = 0;
+    g_material_alpha_test_triangle_count = 0;
+    g_material_alpha_blend_layer_count = 0;
+    g_material_alpha_blend_triangle_count = 0;
     g_static_fallback_stats_paths.clear();
     g_dynamic_fallback_stats_hashes.clear();
     g_height_width = 0;
@@ -6288,6 +6443,14 @@ std::string SinglePlayerRuntimeReport() {
            << "; model_texture_layers="
            << g_world_object_mesh.layers.size()
            << "; model_textures=" << g_model_texture_count
+           << "; material_alpha_test_layers="
+           << g_material_alpha_test_layer_count
+           << "; material_alpha_test_triangles="
+           << g_material_alpha_test_triangle_count
+           << "; material_alpha_blend_layers="
+           << g_material_alpha_blend_layer_count
+           << "; material_alpha_blend_triangles="
+           << g_material_alpha_blend_triangle_count
            << "; converted_geometry_instances="
            << g_converted_geometry_instance_count
            << "; converted_geometry_fallbacks="

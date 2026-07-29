@@ -788,20 +788,27 @@ and mechanized-unit types. USA US1.2 contains 1,965 of these general records;
 restoring them raises the runtime's rendered map-object count from 215 to 2,180
 of 2,254, while `missing_converted_geometry` remains zero. This returns the
 original palms, bushes, reeds, crates, and other small props through the same
-converted Granny geometry and DDS material cache. Shipped flora materials use
-the desktop `AM_ALPHA_TEST` mode. Android now submits them through a dedicated
-fragment shader that discards texels below the original engine's reference
-value of 120 while preserving depth writes. Precompiled GLES3 and SPIR-V
-variants are checked in beside the shader source, covering the emulator and
-physical-device bgfx backends without requiring `shaderc` on the Android build
-host. This replaces the earlier alpha-blending compatibility path and prevents
-billboard draw-order artifacts and translucent foliage edges. The renderer
-does not use its coarse convex projected-shadow fallback for flora: it projects
-the original Granny triangles, preserves their UVs, applies the same alpha-test
-mask, and outputs a reduced-opacity shadow color. Crossed billboard planes
-therefore produce leaf and branch silhouettes instead of large dark hulls.
-Non-flora props remain opaque and keep their projected shadows. A fresh ARM64
-GLES3 emulator run reported
+converted Granny geometry and DDS material cache. The geometry-index generator
+now resolves every model material's original `SMaterial::AlphaMode` and carries
+it beside the texture path. Android creates distinct render layers for
+`AM_OPAQUE`, `AM_ALPHA_TEST`, and `AM_TRANSPARENT` materials, even when two
+modes reference the same texture. Alpha-tested leaves use a dedicated fragment
+shader that discards texels below the original engine's reference value of 120
+while preserving depth writes; transparent brushwood and reeds use blending.
+Precompiled GLES3 and SPIR-V alpha-test variants are checked in beside the
+shader source, covering the emulator and physical-device bgfx backends without
+requiring `shaderc` on the Android build host. This removes the opaque black
+cards previously shown around transparent vegetation.
+
+The renderer does not use its coarse convex projected-shadow fallback for
+alpha-tested flora: it projects the original Granny triangles, preserves their
+UVs, applies the same alpha-test mask, and outputs a reduced-opacity shadow
+color. Crossed billboard planes therefore produce leaf and branch silhouettes
+instead of large dark hulls. Opaque small props keep their projected shadows. A
+fresh ARM64 GLES3 emulator run on GB3.1 reported 43 alpha-test layers with
+69,638 triangles and 10 blended world layers with 30,580 triangles. The latter
+count also includes the transparent road and river passes. An earlier US1.2
+runtime pass reported
 `map_objects=2254`, `rendered_objects=2180`,
 `dynamic_rendered_objects=160`, `converted_geometry_cache=66`, and
 `missing_converted_geometry=0`. The masked shadow pass contributed 19 texture

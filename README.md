@@ -64,11 +64,14 @@ The map renderer now includes general `SObjectRPGStats` records in addition to
 buildings, fences, entrenchments, squads, and mechanized units. This restores
 the original mission's vegetation and small props through their converted
 Granny geometry and DDS materials. Flora now uses the desktop
-`AM_ALPHA_TEST` behavior with its original reference value of 120, writes depth
-only for surviving texels, and casts translucent projected shadows through the
-same texture mask instead of the port's coarse full-card convex hull. On USA
-US1.2 the rendered static-object count increased from 215 to 2,180 of 2,254 map
-records with zero missing converted geometries.
+material's declared alpha mode instead of a path-based guess: alpha-tested
+leaves use the original reference value of 120 and transparent brushwood and
+reeds use blending. This removes the opaque black texture cards around
+vegetation. Alpha-tested flora writes depth only for surviving texels and casts
+translucent projected shadows through the same texture mask instead of the
+port's coarse full-card convex hull. On USA US1.2 the rendered static-object
+count increased from 215 to 2,180 of 2,254 map records with zero missing
+converted geometries.
 Original combat textures now provide tracer ribbons and muzzle flashes. Hit and
 death events also resolve their original `SComplexEffect` XDB descriptors,
 including emitter timing, texture sequences, scale, speed, and alpha/additive

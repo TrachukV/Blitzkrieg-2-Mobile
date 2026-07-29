@@ -400,14 +400,18 @@ def geometry_info(
     return geometry_record_id, quantities, geometry_scale
 
 
-def texture_paths(data_root: Path, model: Path) -> list[str]:
+def material_bindings(
+    data_root: Path,
+    model: Path,
+) -> tuple[list[str], list[str]]:
     model_root = parse_root(model)
     if model_root is None:
-        return []
+        return [], []
     materials = child(model_root, "Materials")
     if materials is None:
-        return []
-    result: list[str] = []
+        return [], []
+    textures: list[str] = []
+    alpha_modes: list[str] = []
     for item in materials:
         material_path = reference_path(
             data_root,
@@ -415,16 +419,27 @@ def texture_paths(data_root: Path, model: Path) -> list[str]:
             item.attrib.get("href", ""),
         )
         if material_path is None:
-            result.append("")
+            textures.append("")
+            alpha_modes.append("")
             continue
         material = parse_root(material_path)
+        alpha_mode = (
+            child(material, "AlphaMode")
+            if material is not None
+            else None
+        )
+        alpha_modes.append(
+            (alpha_mode.text or "").strip()
+            if alpha_mode is not None
+            else ""
+        )
         texture_path = (
             href_child_path(data_root, material_path, material, "Texture")
             if material is not None
             else None
         )
         if texture_path is None:
-            result.append("")
+            textures.append("")
             continue
         texture = parse_root(texture_path)
         dest_name = child(texture, "DestName") if texture is not None else None
@@ -438,17 +453,19 @@ def texture_paths(data_root: Path, model: Path) -> list[str]:
             else None
         )
         if dds_path is None:
-            result.append("")
+            textures.append("")
             continue
-        result.append(dds_path.resolve().relative_to(data_root).as_posix())
-    return result
+        textures.append(
+            dds_path.resolve().relative_to(data_root).as_posix()
+        )
+    return textures, alpha_modes
 
 
 def binding_from_vis_path(
     data_root: Path,
     vis_path: Path,
     converted_geometry_root: Path | None,
-) -> tuple[int, list[int], list[str], float] | None:
+) -> tuple[int, list[int], list[str], float, list[str]] | None:
     model = model_path(data_root, vis_path)
     if model is None:
         return None
@@ -486,11 +503,13 @@ def binding_from_vis_path(
         return None
     geometry_record_id, material_quantities, geometry_scale = geometry
     geometry_scale *= geometry_scale_multiplier
+    textures, alpha_modes = material_bindings(data_root, model)
     return (
         geometry_record_id,
         material_quantities,
-        texture_paths(data_root, model),
+        textures,
         geometry_scale,
+        alpha_modes,
     )
 
 
@@ -509,11 +528,14 @@ def fnv1a64(value: str) -> int:
 def build_index(
     data_root: Path,
     converted_geometry_root: Path | None = None,
-) -> dict[tuple[int, int], tuple[int, int, list[int], list[str], float]]:
+) -> dict[
+    tuple[int, int],
+    tuple[int, int, list[int], list[str], float, list[str]],
+]:
     validate_geometry_resource_ids(data_root)
     result: dict[
         tuple[int, int],
-        tuple[int, int, list[int], list[str], float],
+        tuple[int, int, list[int], list[str], float, list[str]],
     ] = {}
     for stats_path in data_root.rglob("*.xdb"):
         stats = parse_root(stats_path)
@@ -545,6 +567,7 @@ def build_index(
                     material_quantities,
                     textures,
                     geometry_scale,
+                    alpha_modes,
                 ) = binding
                 result[(path_hash, -1)] = (
                     int(record),
@@ -552,6 +575,7 @@ def build_index(
                     material_quantities,
                     textures,
                     geometry_scale,
+                    alpha_modes,
                 )
         segments = child(stats, "segments")
         if segments is not None:
@@ -580,6 +604,7 @@ def build_index(
                     material_quantities,
                     textures,
                     geometry_scale,
+                    alpha_modes,
                 ) = binding
                 result[(path_hash, frame_index)] = (
                     int(record),
@@ -587,8 +612,12 @@ def build_index(
                     material_quantities,
                     textures,
                     geometry_scale,
+                    alpha_modes,
                 )
-        bridge_bindings: dict[int, tuple[int, list[int], list[str], float]] = {}
+        bridge_bindings: dict[
+            int,
+            tuple[int, list[int], list[str], float, list[str]],
+        ] = {}
         for frame_index, element_name in ((0, "End"), (1, "Center")):
             element = child(stats, element_name)
             visual_objects = (
@@ -622,6 +651,7 @@ def build_index(
                 material_quantities,
                 textures,
                 geometry_scale,
+                alpha_modes,
             ) = binding
             result[(path_hash, frame_index)] = (
                 int(record),
@@ -629,6 +659,7 @@ def build_index(
                 material_quantities,
                 textures,
                 geometry_scale,
+                alpha_modes,
             )
         if 1 in bridge_bindings:
             (
@@ -636,6 +667,7 @@ def build_index(
                 material_quantities,
                 textures,
                 geometry_scale,
+                alpha_modes,
             ) = bridge_bindings[1]
             result[(path_hash, -1)] = (
                 int(record),
@@ -643,6 +675,7 @@ def build_index(
                 material_quantities,
                 textures,
                 geometry_scale,
+                alpha_modes,
             )
         fence_frame_index = 0
         for group_name in (
@@ -680,6 +713,7 @@ def build_index(
                         material_quantities,
                         textures,
                         geometry_scale,
+                        alpha_modes,
                     ) = binding
                     result[(path_hash, fence_frame_index)] = (
                         int(record),
@@ -687,6 +721,7 @@ def build_index(
                         material_quantities,
                         textures,
                         geometry_scale,
+                        alpha_modes,
                     )
                 fence_frame_index += 1
     return result
@@ -708,17 +743,19 @@ def main() -> int:
     index = build_index(data_root, converted_geometry_root)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        "# path_hash, stats_id, geometry_id, material_quantities, texture_paths, frame_index, geometry_scale",
+        "# path_hash, stats_id, geometry_id, material_quantities, texture_paths, frame_index, geometry_scale, material_alpha_modes",
         *(
             f"{path_hash:016x}\t{stats_id}\t{geometry_id}\t"
             f"{','.join(str(value) for value in quantities)}\t"
-            f"{'|'.join(textures)}\t{frame_index}\t{geometry_scale:.9g}"
+            f"{'|'.join(textures)}\t{frame_index}\t"
+            f"{geometry_scale:.9g}\t{'|'.join(alpha_modes)}"
             for (path_hash, frame_index), (
                 stats_id,
                 geometry_id,
                 quantities,
                 textures,
                 geometry_scale,
+                alpha_modes,
             ) in sorted(index.items())
         ),
         "",
