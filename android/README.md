@@ -20,8 +20,9 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   with bgfx fallback enabled; Android emulators use the GLES3 backend because the
   `ranchu` Vulkan driver crashes inside debug-utils object naming. The backend
   now renders the real mission heightfield and terrain materials plus converted
-  original Granny meshes for mapped static objects and live AI units. Material
-  textures, skinning/animation, and the full legacy UI are still pending.
+  original Granny meshes for mapped static objects and live AI units. Original
+  model DDS materials are wired; skinning/animation and the full legacy UI are
+  still pending.
 - `BK2_ENABLE_LEGACY_TEXTURE_RUNTIME=ON` links the Android
   `NGfx::CTexture`/`I2DBuffer` contract. Legacy callers can allocate textures,
   lock mip levels with `CTextureLock`, write the original pixel formats into CPU
@@ -458,6 +459,13 @@ mission, the verified runtime loads 31 distinct original geometries with no
 missing converted file. Unmapped objects retain the temporary proxy instead of
 disappearing.
 
+The same offline index resolves each selected Model's material list and each
+Texture descriptor's original DDS `DestName`. Version 2 of the `BK2MSH1` cache
+preserves Granny triangle material groups, and the bgfx backend submits a
+separate index layer per model texture. Direct DDS loading deliberately avoids
+the incomplete Android `ObjectRecordID` table. On the first USA mission the
+verified runtime loads all 31 referenced model textures for 31 material layers.
+
 The Android VFS resolves legacy asset paths case-insensitively while preserving
 the actual on-disk spelling. This is required for content such as GB3.1 whose
 XML uses `units/.../mechunitrpgstats.xdb` while the staged files use
@@ -496,16 +504,15 @@ discarded because the old desktop `WorldClient` was not linked. The in-game
 ARM64 emulator through the result panel and back to the 75-map selector.
 
 The selected unit is yellow, the current attack target is orange, and moving
-units follow the real terrain height. Converted original meshes keep the
-current player/hostile tint until original material textures are wired.
-Unmapped formations and objects remain green/red proxies. The camera starts
-focused on the player's formation.
+units follow the real terrain height. Converted original meshes use their
+resolved original DDS material. Unmapped formations and objects remain
+green/red proxies. The camera starts focused on the player's formation.
 
 This is a playable runtime milestone, not a complete visual port. Terrain now
 uses original game materials and the first runtime model path uses original
-Granny geometry. Original model material textures, multi-part attachment
-transforms, skeleton skinning, animations, combat effects, briefing/game HUD,
-and the complete campaign-selection/progression UI remain unfinished.
+Granny geometry and DDS materials. Multi-part attachment transforms, skeleton
+skinning, animations, combat effects, briefing/game HUD, and the complete
+campaign-selection/progression UI remain unfinished.
 
 The video transcode manifest now writes Android-canonical runtime paths. A Bink
 ref such as `Movies\Nival.bik` maps to `DataAndroid/Movies/Nival.mp4`, not to a

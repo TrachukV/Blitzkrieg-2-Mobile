@@ -19,6 +19,7 @@
 #include "System/BinSaver.h"
 #include "System/VFSOperations.h"
 #include "libdb/Db.h"
+#include "libdb/Database.h"
 
 #include <algorithm>
 #include <cmath>
@@ -77,15 +78,36 @@ struct ConvertedGeometryVertex {
     float v;
 };
 
-struct ConvertedGeometry {
+struct ConvertedGeometryGroup {
+    uint32_t material_index = 0;
+    uint32_t first_index = 0;
+    uint32_t index_count = 0;
+};
+
+struct ConvertedGeometryPart {
     std::vector<ConvertedGeometryVertex> vertices;
     std::vector<uint32_t> triangle_indices;
+    std::vector<ConvertedGeometryGroup> groups;
+};
+
+struct ConvertedGeometry {
+    std::vector<ConvertedGeometryPart> parts;
+};
+
+struct GeometryBinding {
+    int geometry_record_id = -1;
+    std::vector<int> material_quantities;
+    std::vector<std::string> texture_paths;
 };
 
 std::unordered_map<int, ConvertedGeometry> g_converted_geometries;
 std::unordered_set<int> g_missing_converted_geometries;
-std::unordered_map<uint64_t, int> g_stats_geometry_index;
+std::unordered_map<uint64_t, GeometryBinding> g_stats_geometry_index;
 bool g_stats_geometry_index_loaded = false;
+std::unordered_map<std::string, CObj<NGfx::CTexture> > g_model_textures;
+size_t g_model_texture_count = 0;
+
+void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh);
 
 struct MissionLaunchOverride {
     bool present = false;
@@ -618,7 +640,7 @@ const ConvertedGeometry* LoadConvertedGeometry(int record_id) {
         std::memcmp(magic, expected_magic, sizeof(magic)) != 0 ||
         !ReadExact(&input, &version, sizeof(version)) ||
         !ReadExact(&input, &mesh_count, sizeof(mesh_count)) ||
-        version != 1 ||
+        (version != 1 && version != 2) ||
         mesh_count == 0 ||
         mesh_count > 128) {
         g_missing_converted_geometries.insert(record_id);
@@ -629,45 +651,83 @@ const ConvertedGeometry* LoadConvertedGeometry(int record_id) {
     for (uint32_t mesh_index = 0; mesh_index < mesh_count; ++mesh_index) {
         uint32_t vertex_count = 0;
         uint32_t index_count = 0;
+        uint32_t group_count = 1;
         if (!ReadExact(&input, &vertex_count, sizeof(vertex_count)) ||
             !ReadExact(&input, &index_count, sizeof(index_count)) ||
+            (version >= 2 &&
+             !ReadExact(&input, &group_count, sizeof(group_count))) ||
             vertex_count == 0 ||
             vertex_count > 5000000 ||
             index_count < 3 ||
             index_count > 15000000 ||
-            index_count % 3 != 0) {
+            index_count % 3 != 0 ||
+            group_count == 0 ||
+            group_count > 4096) {
             g_missing_converted_geometries.insert(record_id);
             return nullptr;
         }
-        const uint32_t vertex_base =
-                static_cast<uint32_t>(geometry.vertices.size());
-        const size_t old_vertex_count = geometry.vertices.size();
-        geometry.vertices.resize(old_vertex_count + vertex_count);
+        ConvertedGeometryPart part;
+        part.vertices.resize(vertex_count);
         if (!ReadExact(
                     &input,
-                    geometry.vertices.data() + old_vertex_count,
+                    part.vertices.data(),
                     static_cast<size_t>(vertex_count) *
                             sizeof(ConvertedGeometryVertex))) {
             g_missing_converted_geometries.insert(record_id);
             return nullptr;
         }
-        std::vector<uint32_t> indices(index_count);
+        part.triangle_indices.resize(index_count);
         if (!ReadExact(
                     &input,
-                    indices.data(),
+                    part.triangle_indices.data(),
                     static_cast<size_t>(index_count) * sizeof(uint32_t))) {
             g_missing_converted_geometries.insert(record_id);
             return nullptr;
         }
-        geometry.triangle_indices.reserve(
-                geometry.triangle_indices.size() + index_count);
-        for (uint32_t index : indices) {
+        for (uint32_t index : part.triangle_indices) {
             if (index >= vertex_count) {
                 g_missing_converted_geometries.insert(record_id);
                 return nullptr;
             }
-            geometry.triangle_indices.push_back(vertex_base + index);
         }
+        if (version == 1) {
+            part.groups.push_back(ConvertedGeometryGroup{
+                    0,
+                    0,
+                    index_count});
+        } else {
+            for (uint32_t group_index = 0;
+                 group_index < group_count;
+                 ++group_index) {
+                uint32_t material_index = 0;
+                uint32_t first_triangle = 0;
+                uint32_t triangle_count = 0;
+                if (!ReadExact(
+                            &input,
+                            &material_index,
+                            sizeof(material_index)) ||
+                    !ReadExact(
+                            &input,
+                            &first_triangle,
+                            sizeof(first_triangle)) ||
+                    !ReadExact(
+                            &input,
+                            &triangle_count,
+                            sizeof(triangle_count)) ||
+                    triangle_count == 0 ||
+                    (static_cast<uint64_t>(first_triangle) +
+                     triangle_count) * 3ull >
+                            index_count) {
+                    g_missing_converted_geometries.insert(record_id);
+                    return nullptr;
+                }
+                part.groups.push_back(ConvertedGeometryGroup{
+                        material_index,
+                        first_triangle * 3,
+                        triangle_count * 3});
+            }
+        }
+        geometry.parts.push_back(std::move(part));
     }
 
     auto inserted = g_converted_geometries.emplace(
@@ -676,14 +736,31 @@ const ConvertedGeometry* LoadConvertedGeometry(int record_id) {
     return &inserted.first->second;
 }
 
-int ResolveGeometryRecordId(
+std::vector<std::string> SplitPreservingEmpty(
+        const std::string& value,
+        char delimiter) {
+    std::vector<std::string> result;
+    size_t start = 0;
+    while (start <= value.size()) {
+        const size_t end = value.find(delimiter, start);
+        result.push_back(value.substr(
+                start,
+                end == std::string::npos
+                        ? std::string::npos
+                        : end - start));
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+    return result;
+}
+
+GeometryBinding ResolveGeometryBinding(
         uint64_t stats_path_hash,
         int stats_record_id,
         int geometry_record_id) {
     (void)stats_record_id;
-    if (geometry_record_id >= 0) {
-        return geometry_record_id;
-    }
     if (!g_stats_geometry_index_loaded) {
         g_stats_geometry_index_loaded = true;
         const std::string path = JoinHostPath(
@@ -695,28 +772,80 @@ int ResolveGeometryRecordId(
             if (line.empty() || line[0] == '#') {
                 continue;
             }
-            std::istringstream parser(line);
-            std::string hash_text;
-            int stats = -1;
-            int geometry = -1;
-            if (!(parser >> hash_text >> stats >> geometry) ||
-                hash_text.empty() ||
-                stats < 0 ||
-                geometry < 0) {
+            const std::vector<std::string> fields =
+                    SplitPreservingEmpty(line, '\t');
+            if (fields.size() < 5 || fields[0].empty()) {
                 continue;
             }
             char* end = nullptr;
             const uint64_t path_hash = std::strtoull(
-                    hash_text.c_str(),
+                    fields[0].c_str(),
                     &end,
                     16);
-            if (end != hash_text.c_str() && *end == '\0') {
-                g_stats_geometry_index[path_hash] = geometry;
+            const int stats = std::atoi(fields[1].c_str());
+            const int geometry = std::atoi(fields[2].c_str());
+            if (end == fields[0].c_str() ||
+                *end != '\0' ||
+                stats < 0 ||
+                geometry < 0) {
+                continue;
             }
+            GeometryBinding binding;
+            binding.geometry_record_id = geometry;
+            if (!fields[3].empty()) {
+                for (const std::string& quantity :
+                     SplitPreservingEmpty(fields[3], ',')) {
+                    binding.material_quantities.push_back(
+                            std::max(std::atoi(quantity.c_str()), 0));
+                }
+            }
+            binding.texture_paths =
+                    SplitPreservingEmpty(fields[4], '|');
+            g_stats_geometry_index[path_hash] = std::move(binding);
         }
     }
     const auto mapped = g_stats_geometry_index.find(stats_path_hash);
-    return mapped == g_stats_geometry_index.end() ? -1 : mapped->second;
+    if (mapped != g_stats_geometry_index.end()) {
+        return mapped->second;
+    }
+    GeometryBinding fallback;
+    fallback.geometry_record_id = geometry_record_id;
+    return fallback;
+}
+
+WorldObjectMesh::Layer* FindOrAddWorldObjectLayer(
+        WorldObjectMesh* mesh,
+        const std::string& texture_path) {
+    if (mesh == nullptr || texture_path.empty()) {
+        return nullptr;
+    }
+    for (WorldObjectMesh::Layer& layer : mesh->layers) {
+        if (layer.texture_path == texture_path) {
+            return &layer;
+        }
+    }
+    mesh->layers.push_back(WorldObjectMesh::Layer());
+    mesh->layers.back().texture_path = texture_path;
+    return &mesh->layers.back();
+}
+
+void AppendPartIndices(
+        std::vector<uint32_t>* output,
+        const ConvertedGeometryPart& part,
+        uint32_t vertex_base,
+        uint32_t first_index,
+        uint32_t index_count) {
+    if (output == nullptr ||
+        static_cast<uint64_t>(first_index) + index_count >
+                part.triangle_indices.size()) {
+        return;
+    }
+    output->reserve(output->size() + index_count);
+    for (uint32_t index = 0; index < index_count; ++index) {
+        output->push_back(
+                vertex_base +
+                part.triangle_indices[first_index + index]);
+    }
 }
 
 bool AppendConvertedGeometry(
@@ -732,33 +861,102 @@ bool AppendConvertedGeometry(
     if (mesh == nullptr) {
         return false;
     }
-    const int record_id =
-            ResolveGeometryRecordId(
+    const GeometryBinding binding =
+            ResolveGeometryBinding(
                     stats_path_hash,
                     stats_record_id,
                     geometry_record_id);
-    const ConvertedGeometry* geometry = LoadConvertedGeometry(record_id);
+    const ConvertedGeometry* geometry =
+            LoadConvertedGeometry(binding.geometry_record_id);
     if (geometry == nullptr) {
         return false;
     }
-    const uint32_t base = static_cast<uint32_t>(mesh->vertices.size());
     const float cosine = std::cos(heading);
     const float sine = std::sin(heading);
-    mesh->vertices.reserve(mesh->vertices.size() + geometry->vertices.size());
-    for (const ConvertedGeometryVertex& vertex : geometry->vertices) {
-        mesh->vertices.push_back(TerrainVertex{
-                x + cosine * vertex.x - sine * vertex.y,
-                y + sine * vertex.x + cosine * vertex.y,
-                z + vertex.z + 0.05f,
-                vertex.u,
-                vertex.v,
-                abgr});
+    size_t total_vertices = 0;
+    for (const ConvertedGeometryPart& part : geometry->parts) {
+        total_vertices += part.vertices.size();
     }
-    mesh->triangle_indices.reserve(
-            mesh->triangle_indices.size() +
-            geometry->triangle_indices.size());
-    for (uint32_t index : geometry->triangle_indices) {
-        mesh->triangle_indices.push_back(base + index);
+    mesh->vertices.reserve(mesh->vertices.size() + total_vertices);
+    const bool has_textures = std::any_of(
+            binding.texture_paths.begin(),
+            binding.texture_paths.end(),
+            [](const std::string& value) {
+                return !value.empty();
+            });
+    int material_base = 0;
+    for (size_t part_index = 0;
+         part_index < geometry->parts.size();
+         ++part_index) {
+        const ConvertedGeometryPart& part = geometry->parts[part_index];
+        const uint32_t vertex_base =
+                static_cast<uint32_t>(mesh->vertices.size());
+        for (const ConvertedGeometryVertex& vertex : part.vertices) {
+            mesh->vertices.push_back(TerrainVertex{
+                    x + cosine * vertex.x - sine * vertex.y,
+                    y + sine * vertex.x + cosine * vertex.y,
+                    z + vertex.z + 0.05f,
+                    vertex.u,
+                    vertex.v,
+                    has_textures ? 0xffffffffu : abgr});
+        }
+
+        if (binding.material_quantities.empty()) {
+            const int material_index = binding.texture_paths.empty()
+                    ? -1
+                    : std::min(
+                            static_cast<int>(part_index),
+                            static_cast<int>(
+                                    binding.texture_paths.size()) - 1);
+            const std::string texture_path = material_index < 0
+                    ? std::string()
+                    : binding.texture_paths[material_index];
+            WorldObjectMesh::Layer* layer =
+                    FindOrAddWorldObjectLayer(mesh, texture_path);
+            std::vector<uint32_t>* output = layer == nullptr
+                    ? &mesh->triangle_indices
+                    : &layer->triangle_indices;
+            AppendPartIndices(
+                    output,
+                    part,
+                    vertex_base,
+                    0,
+                    static_cast<uint32_t>(
+                            part.triangle_indices.size()));
+            continue;
+        }
+
+        const int material_count =
+                part_index < binding.material_quantities.size()
+                ? binding.material_quantities[part_index]
+                : 0;
+        for (const ConvertedGeometryGroup& group : part.groups) {
+            const int material_index =
+                    material_count > 0
+                    ? material_base +
+                            std::min(
+                                    static_cast<int>(group.material_index),
+                                    material_count - 1)
+                    : -1;
+            const std::string texture_path =
+                    material_index >= 0 &&
+                            material_index <
+                                    static_cast<int>(
+                                            binding.texture_paths.size())
+                    ? binding.texture_paths[material_index]
+                    : std::string();
+            WorldObjectMesh::Layer* layer =
+                    FindOrAddWorldObjectLayer(mesh, texture_path);
+            AppendPartIndices(
+                    layer == nullptr
+                            ? &mesh->triangle_indices
+                            : &layer->triangle_indices,
+                    part,
+                    vertex_base,
+                    group.first_index,
+                    group.index_count);
+        }
+        material_base += material_count;
     }
     ++g_converted_geometry_instance_count;
     return true;
@@ -1126,6 +1324,7 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         ++g_dynamic_rendered_object_count;
     }
     g_world_object_mesh = std::move(combined);
+    RefreshWorldObjectTextureHandles(&g_world_object_mesh);
     g_rendered_presentation_generation = info.generation;
     return RenderBackend().set_world_object_mesh(g_world_object_mesh);
 }
@@ -1449,6 +1648,50 @@ bool LoadTextureImmediately(
     return IsValid(*texture);
 }
 
+uint16_t ModelTextureHandle(const std::string& texture_path) {
+    if (texture_path.empty()) {
+        return UINT16_MAX;
+    }
+    auto cached = g_model_textures.find(texture_path);
+    if (cached == g_model_textures.end()) {
+        CPtr<NDb::STexture> texture_desc = new NDb::STexture();
+        NDb::CResourceHelper::SetDBID(
+                texture_desc.GetPtr(),
+                CDBID("Android/OriginalModelTexture.xdb"));
+        NDb::CResourceHelper::SetLoaded(texture_desc.GetPtr());
+        texture_desc->szDestName = texture_path.c_str();
+        texture_desc->eType = NDb::STexture::REGULAR;
+        texture_desc->eAddrType = NDb::STexture::WRAP;
+        texture_desc->bInstantLoad = true;
+        CObj<NGfx::CTexture> texture;
+        if (!LoadTextureImmediately(texture_desc.GetPtr(), &texture)) {
+            g_model_textures.emplace(
+                    texture_path,
+                    CObj<NGfx::CTexture>());
+            return UINT16_MAX;
+        }
+        cached = g_model_textures.emplace(
+                texture_path,
+                texture).first;
+        ++g_model_texture_count;
+    }
+    if (!IsValid(cached->second)) {
+        return UINT16_MAX;
+    }
+    EnsureLegacyTextureUploaded(cached->second, 0);
+    return LegacyTextureHandleIndex(cached->second);
+}
+
+void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
+    if (mesh == nullptr) {
+        return;
+    }
+    for (WorldObjectMesh::Layer& layer : mesh->layers) {
+        layer.texture_handle =
+                ModelTextureHandle(layer.texture_path);
+    }
+}
+
 bool LoadTerrainTexture(const NDb::SMapInfo* map) {
     if (map == nullptr || !map->pMiniMap || !map->pMiniMap->pTexture) {
         return false;
@@ -1533,6 +1776,7 @@ bool RefreshRenderResourcesLocked() {
     if (!RenderBackend().set_terrain_mesh(g_terrain_mesh)) {
         return false;
     }
+    RefreshWorldObjectTextureHandles(&g_world_object_mesh);
     if (!g_world_object_mesh.vertices.empty() &&
         !RenderBackend().set_world_object_mesh(g_world_object_mesh)) {
         return false;
@@ -1687,6 +1931,8 @@ void ShutdownSinglePlayerRuntime() {
     g_missing_converted_geometries.clear();
     g_stats_geometry_index.clear();
     g_stats_geometry_index_loaded = false;
+    g_model_textures.clear();
+    g_model_texture_count = 0;
     g_height_width = 0;
     g_height_height = 0;
     g_triangle_count = 0;
@@ -1877,6 +2123,9 @@ std::string SinglePlayerRuntimeReport() {
            << g_missing_converted_geometries.size()
            << "; stats_geometry_index="
            << g_stats_geometry_index.size()
+           << "; model_texture_layers="
+           << g_world_object_mesh.layers.size()
+           << "; model_textures=" << g_model_texture_count
            << "; converted_geometry_instances="
            << g_converted_geometry_instance_count
            << "; converted_geometry_fallbacks="

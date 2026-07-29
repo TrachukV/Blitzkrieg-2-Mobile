@@ -442,6 +442,13 @@ private:
     }
 
     void destroy_world_object_buffers() {
+        for (bgfx::IndexBufferHandle handle :
+             world_object_layer_index_buffers_) {
+            if (bgfx::isValid(handle)) {
+                bgfx::destroy(handle);
+            }
+        }
+        world_object_layer_index_buffers_.clear();
         if (bgfx::isValid(world_object_index_buffer_)) {
             bgfx::destroy(world_object_index_buffer_);
             world_object_index_buffer_ = BGFX_INVALID_HANDLE;
@@ -505,7 +512,8 @@ private:
     bool upload_world_object_mesh() {
         destroy_world_object_buffers();
         if (!ready_ || world_object_mesh_.vertices.empty() ||
-            world_object_mesh_.triangle_indices.empty()) {
+            (world_object_mesh_.triangle_indices.empty() &&
+             world_object_mesh_.layers.empty())) {
             return false;
         }
 
@@ -516,15 +524,35 @@ private:
                                 world_object_mesh_.vertices.size() *
                                 sizeof(TerrainVertex))),
                 terrain_layout_);
-        world_object_index_buffer_ = bgfx::createIndexBuffer(
-                bgfx::copy(
-                        world_object_mesh_.triangle_indices.data(),
-                        static_cast<uint32_t>(
-                                world_object_mesh_.triangle_indices.size() *
-                                sizeof(uint32_t))),
-                BGFX_BUFFER_INDEX32);
+        if (!world_object_mesh_.triangle_indices.empty()) {
+            world_object_index_buffer_ = bgfx::createIndexBuffer(
+                    bgfx::copy(
+                            world_object_mesh_.triangle_indices.data(),
+                            static_cast<uint32_t>(
+                                    world_object_mesh_.triangle_indices.size() *
+                                    sizeof(uint32_t))),
+                    BGFX_BUFFER_INDEX32);
+        }
+        world_object_layer_index_buffers_.reserve(
+                world_object_mesh_.layers.size());
+        bool has_index_buffer = bgfx::isValid(world_object_index_buffer_);
+        for (const WorldObjectMesh::Layer& layer :
+             world_object_mesh_.layers) {
+            bgfx::IndexBufferHandle handle = BGFX_INVALID_HANDLE;
+            if (!layer.triangle_indices.empty()) {
+                handle = bgfx::createIndexBuffer(
+                        bgfx::copy(
+                                layer.triangle_indices.data(),
+                                static_cast<uint32_t>(
+                                        layer.triangle_indices.size() *
+                                        sizeof(uint32_t))),
+                        BGFX_BUFFER_INDEX32);
+                has_index_buffer = has_index_buffer || bgfx::isValid(handle);
+            }
+            world_object_layer_index_buffers_.push_back(handle);
+        }
         if (!bgfx::isValid(world_object_vertex_buffer_) ||
-            !bgfx::isValid(world_object_index_buffer_)) {
+            !has_index_buffer) {
             last_error_ = "world object GPU buffer creation failed";
             destroy_world_object_buffers();
             return false;
@@ -665,25 +693,53 @@ private:
 
     void submit_world_objects() {
         if (!bgfx::isValid(world_object_vertex_buffer_) ||
-            !bgfx::isValid(world_object_index_buffer_) ||
             !bgfx::isValid(textured_rect_program_) ||
             !bgfx::isValid(texture_sampler_) ||
             !bgfx::isValid(white_texture_)) {
             return;
         }
 
-        bgfx::setTransform(kIdentityMatrix);
-        bgfx::setTexture(0, texture_sampler_, white_texture_);
-        bgfx::setVertexBuffer(0, world_object_vertex_buffer_);
-        bgfx::setIndexBuffer(world_object_index_buffer_);
-        bgfx::setState(
+        const uint64_t state =
                 BGFX_STATE_WRITE_RGB |
                 BGFX_STATE_WRITE_A |
                 BGFX_STATE_WRITE_Z |
                 BGFX_STATE_DEPTH_TEST_LESS |
-                BGFX_STATE_MSAA);
-        bgfx::submit(kTerrainView, textured_rect_program_);
-        ++submitted_primitives_;
+                BGFX_STATE_MSAA;
+        if (bgfx::isValid(world_object_index_buffer_)) {
+            bgfx::setTransform(kIdentityMatrix);
+            bgfx::setTexture(0, texture_sampler_, white_texture_);
+            bgfx::setVertexBuffer(0, world_object_vertex_buffer_);
+            bgfx::setIndexBuffer(world_object_index_buffer_);
+            bgfx::setState(state);
+            bgfx::submit(kTerrainView, textured_rect_program_);
+            ++submitted_primitives_;
+        }
+        const size_t layer_count = std::min(
+                world_object_mesh_.layers.size(),
+                world_object_layer_index_buffers_.size());
+        for (size_t index = 0; index < layer_count; ++index) {
+            const bgfx::IndexBufferHandle index_buffer =
+                    world_object_layer_index_buffers_[index];
+            if (!bgfx::isValid(index_buffer)) {
+                continue;
+            }
+            bgfx::TextureHandle texture = white_texture_;
+            const uint16_t texture_index =
+                    world_object_mesh_.layers[index].texture_handle;
+            if (texture_index != UINT16_MAX) {
+                const bgfx::TextureHandle candidate = {texture_index};
+                if (bgfx::isValid(candidate)) {
+                    texture = candidate;
+                }
+            }
+            bgfx::setTransform(kIdentityMatrix);
+            bgfx::setTexture(0, texture_sampler_, texture);
+            bgfx::setVertexBuffer(0, world_object_vertex_buffer_);
+            bgfx::setIndexBuffer(index_buffer);
+            bgfx::setState(state);
+            bgfx::submit(kTerrainView, textured_rect_program_);
+            ++submitted_primitives_;
+        }
     }
 
     void submit_rects() {
@@ -843,6 +899,8 @@ private:
             BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle world_object_index_buffer_ =
             BGFX_INVALID_HANDLE;
+    std::vector<bgfx::IndexBufferHandle>
+            world_object_layer_index_buffers_;
     bgfx::TextureHandle white_texture_ = BGFX_INVALID_HANDLE;
     TerrainMesh terrain_mesh_;
     WorldObjectMesh world_object_mesh_;

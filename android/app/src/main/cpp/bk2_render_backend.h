@@ -37,8 +37,15 @@ struct TerrainMesh {
 };
 
 struct WorldObjectMesh {
+    struct Layer {
+        std::vector<uint32_t> triangle_indices;
+        std::string texture_path;
+        uint16_t texture_handle = UINT16_MAX;
+    };
+
     std::vector<TerrainVertex> vertices;
     std::vector<uint32_t> triangle_indices;
+    std::vector<Layer> layers;
 };
 
 struct TerrainCamera {

@@ -79,7 +79,10 @@ def model_path(data_root: Path, vis_path: Path) -> Path | None:
     return candidates[0][1] if candidates else None
 
 
-def geometry_id(data_root: Path, model: Path) -> int | None:
+def geometry_info(
+    data_root: Path,
+    model: Path,
+) -> tuple[int, list[int]] | None:
     model_root = parse_root(model)
     if model_root is None:
         return None
@@ -90,7 +93,60 @@ def geometry_id(data_root: Path, model: Path) -> int | None:
     if geometry is None:
         return None
     value = geometry.attrib.get("ObjectRecordID", "")
-    return int(value) if value.isdigit() else None
+    if not value.isdigit():
+        return None
+    quantities: list[int] = []
+    material_quantities = child(geometry, "MaterialQuantities")
+    if material_quantities is not None:
+        for item in material_quantities:
+            text = (item.text or "").strip()
+            if text.isdigit():
+                quantities.append(int(text))
+    return int(value), quantities
+
+
+def texture_paths(data_root: Path, model: Path) -> list[str]:
+    model_root = parse_root(model)
+    if model_root is None:
+        return []
+    materials = child(model_root, "Materials")
+    if materials is None:
+        return []
+    result: list[str] = []
+    for item in materials:
+        material_path = reference_path(
+            data_root,
+            model,
+            item.attrib.get("href", ""),
+        )
+        if material_path is None:
+            result.append("")
+            continue
+        material = parse_root(material_path)
+        texture_path = (
+            href_child_path(data_root, material_path, material, "Texture")
+            if material is not None
+            else None
+        )
+        if texture_path is None:
+            result.append("")
+            continue
+        texture = parse_root(texture_path)
+        dest_name = child(texture, "DestName") if texture is not None else None
+        dds_path = (
+            reference_path(
+                data_root,
+                texture_path,
+                dest_name.attrib.get("href", ""),
+            )
+            if dest_name is not None
+            else None
+        )
+        if dds_path is None:
+            result.append("")
+            continue
+        result.append(dds_path.resolve().relative_to(data_root).as_posix())
+    return result
 
 
 def normalized_path(path: Path, data_root: Path) -> str:
@@ -105,8 +161,10 @@ def fnv1a64(value: str) -> int:
     return result
 
 
-def build_index(data_root: Path) -> dict[int, tuple[int, int]]:
-    result: dict[int, tuple[int, int]] = {}
+def build_index(
+    data_root: Path,
+) -> dict[int, tuple[int, int, list[int], list[str]]]:
+    result: dict[int, tuple[int, int, list[int], list[str]]] = {}
     for stats_path in data_root.rglob("*.xdb"):
         stats = parse_root(stats_path)
         if stats is None:
@@ -125,11 +183,14 @@ def build_index(data_root: Path) -> dict[int, tuple[int, int]]:
         model = model_path(data_root, vis_path)
         if model is None:
             continue
-        geometry = geometry_id(data_root, model)
+        geometry = geometry_info(data_root, model)
         if geometry is not None:
+            geometry_record_id, material_quantities = geometry
             result[fnv1a64(normalized_path(stats_path, data_root))] = (
                 int(record),
-                geometry,
+                geometry_record_id,
+                material_quantities,
+                texture_paths(data_root, model),
             )
     return result
 
@@ -144,10 +205,17 @@ def main() -> int:
     index = build_index(data_root)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        "# RPGStats path FNV-1a 64, RPGStats record ID, Geometry record ID",
+        "# path_hash, stats_id, geometry_id, material_quantities, texture_paths",
         *(
-            f"{path_hash:016x}\t{stats_id}\t{geometry_id}"
-            for path_hash, (stats_id, geometry_id) in sorted(index.items())
+            f"{path_hash:016x}\t{stats_id}\t{geometry_id}\t"
+            f"{','.join(str(value) for value in quantities)}\t"
+            f"{'|'.join(textures)}"
+            for path_hash, (
+                stats_id,
+                geometry_id,
+                quantities,
+                textures,
+            ) in sorted(index.items())
         ),
         "",
     ]

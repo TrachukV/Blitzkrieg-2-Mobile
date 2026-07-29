@@ -6,7 +6,7 @@ import { basename, join, resolve } from "node:path";
 import { parseModel } from "granny-ro-js";
 
 const MAGIC = Buffer.from([0x42, 0x4b, 0x32, 0x4d, 0x53, 0x48, 0x31, 0x00]);
-const FORMAT_VERSION = 1;
+const FORMAT_VERSION = 2;
 const VERTEX_FLOAT_COUNT = 8;
 
 function usage() {
@@ -73,9 +73,14 @@ function serializeGeometry(parsed) {
 
   let byteLength = MAGIC.length + 8;
   for (const mesh of meshes) {
-    byteLength += 8;
+    const groups =
+      mesh.triangleGroups.length > 0
+        ? mesh.triangleGroups
+        : [{ materialIndex: 0, triFirst: 0, triCount: mesh.indexCount / 3 }];
+    byteLength += 12;
     byteLength += mesh.vertexCount * VERTEX_FLOAT_COUNT * 4;
     byteLength += mesh.indexCount * 4;
+    byteLength += groups.length * 12;
   }
   const output = Buffer.allocUnsafe(byteLength);
   MAGIC.copy(output, 0);
@@ -84,9 +89,14 @@ function serializeGeometry(parsed) {
   let offset = 16;
 
   for (const mesh of meshes) {
+    const groups =
+      mesh.triangleGroups.length > 0
+        ? mesh.triangleGroups
+        : [{ materialIndex: 0, triFirst: 0, triCount: mesh.indexCount / 3 }];
     output.writeUInt32LE(mesh.vertexCount, offset);
     output.writeUInt32LE(mesh.indexCount, offset + 4);
-    offset += 8;
+    output.writeUInt32LE(groups.length, offset + 8);
+    offset += 12;
     for (let vertex = 0; vertex < mesh.vertexCount; ++vertex) {
       const position = mesh.positions[vertex] ?? [0, 0, 0];
       const normal = mesh.normals[vertex] ?? [0, 0, 1];
@@ -112,6 +122,23 @@ function serializeGeometry(parsed) {
       }
       output.writeUInt32LE(index, offset);
       offset += 4;
+    }
+    for (const group of groups) {
+      if (
+        !Number.isInteger(group.materialIndex) ||
+        group.materialIndex < 0 ||
+        !Number.isInteger(group.triFirst) ||
+        group.triFirst < 0 ||
+        !Number.isInteger(group.triCount) ||
+        group.triCount <= 0 ||
+        (group.triFirst + group.triCount) * 3 > mesh.indexCount
+      ) {
+        throw new Error("mesh contains an invalid material triangle group");
+      }
+      output.writeUInt32LE(group.materialIndex, offset);
+      output.writeUInt32LE(group.triFirst, offset + 4);
+      output.writeUInt32LE(group.triCount, offset + 8);
+      offset += 12;
     }
   }
   return { output, meshes };
