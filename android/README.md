@@ -515,7 +515,12 @@ ARM64 emulator through the result panel and back to the 75-map selector.
 
 The selected unit is yellow, the current attack target is orange, and moving
 units follow the real terrain height. Converted original meshes use their
-resolved original DDS material. Unmapped formations and objects remain
+resolved original DDS material. The geometry index also resolves frame-specific
+`segments/Item/VisObj` bindings used by composite map objects such as
+entrenchments. If a referenced visual Granny stream is absent but its original
+AI geometry is available, the converter uses the legacy `AI_TO_VIS` scale from
+`Vis2AI.h`. On USA 1.0 this replaces all 142 entrenchment proxies with the
+original segment meshes and materials. Unmapped formations and objects remain
 green/red proxies. The camera starts focused on the player's formation.
 
 This is a playable runtime milestone, not a complete visual port. Terrain now

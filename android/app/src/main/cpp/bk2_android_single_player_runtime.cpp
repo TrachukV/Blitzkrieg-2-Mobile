@@ -107,14 +107,20 @@ struct GeometryBinding {
     int geometry_record_id = -1;
     std::vector<int> material_quantities;
     std::vector<std::string> texture_paths;
+    float geometry_scale = 1.0f;
 };
 
 std::unordered_map<int, ConvertedGeometry> g_converted_geometries;
 std::unordered_set<int> g_missing_converted_geometries;
 std::unordered_map<uint64_t, GeometryBinding> g_stats_geometry_index;
+std::unordered_map<
+        uint64_t,
+        std::unordered_map<int, GeometryBinding> > g_stats_geometry_variants;
 bool g_stats_geometry_index_loaded = false;
 std::unordered_map<std::string, CObj<NGfx::CTexture> > g_model_textures;
 size_t g_model_texture_count = 0;
+std::unordered_map<std::string, size_t> g_static_fallback_stats_paths;
+std::unordered_map<uint64_t, size_t> g_dynamic_fallback_stats_hashes;
 
 void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh);
 
@@ -805,7 +811,8 @@ std::vector<std::string> SplitPreservingEmpty(
 GeometryBinding ResolveGeometryBinding(
         uint64_t stats_path_hash,
         int stats_record_id,
-        int geometry_record_id) {
+        int geometry_record_id,
+        int frame_index) {
     (void)stats_record_id;
     if (!g_stats_geometry_index_loaded) {
         g_stats_geometry_index_loaded = true;
@@ -847,7 +854,30 @@ GeometryBinding ResolveGeometryBinding(
             }
             binding.texture_paths =
                     SplitPreservingEmpty(fields[4], '|');
-            g_stats_geometry_index[path_hash] = std::move(binding);
+            const int indexed_frame =
+                    fields.size() >= 6 ? std::atoi(fields[5].c_str()) : -1;
+            if (fields.size() >= 7) {
+                const float scale = std::strtof(fields[6].c_str(), nullptr);
+                if (std::isfinite(scale) && scale > 0.0f) {
+                    binding.geometry_scale = scale;
+                }
+            }
+            if (indexed_frame >= 0) {
+                g_stats_geometry_variants[path_hash][indexed_frame] =
+                        std::move(binding);
+            } else {
+                g_stats_geometry_index[path_hash] = std::move(binding);
+            }
+        }
+    }
+    if (frame_index >= 0) {
+        const auto variants =
+                g_stats_geometry_variants.find(stats_path_hash);
+        if (variants != g_stats_geometry_variants.end()) {
+            const auto variant = variants->second.find(frame_index);
+            if (variant != variants->second.end()) {
+                return variant->second;
+            }
         }
     }
     const auto mapped = g_stats_geometry_index.find(stats_path_hash);
@@ -904,7 +934,8 @@ bool AppendConvertedGeometry(
         float z,
         float heading,
         uint32_t abgr,
-        float animation_time_seconds) {
+        float animation_time_seconds,
+        int frame_index) {
     if (mesh == nullptr) {
         return false;
     }
@@ -912,7 +943,8 @@ bool AppendConvertedGeometry(
             ResolveGeometryBinding(
                     stats_path_hash,
                     stats_record_id,
-                    geometry_record_id);
+                    geometry_record_id,
+                    frame_index);
     const ConvertedGeometry* geometry =
             LoadConvertedGeometry(binding.geometry_record_id);
     if (geometry == nullptr) {
@@ -955,9 +987,11 @@ bool AppendConvertedGeometry(
                 static_cast<uint32_t>(mesh->vertices.size());
         for (const ConvertedGeometryVertex& vertex : *vertices) {
             mesh->vertices.push_back(TerrainVertex{
-                    x + cosine * vertex.x - sine * vertex.y,
-                    y + sine * vertex.x + cosine * vertex.y,
-                    z + vertex.z + 0.05f,
+                    x + binding.geometry_scale *
+                            (cosine * vertex.x - sine * vertex.y),
+                    y + binding.geometry_scale *
+                            (sine * vertex.x + cosine * vertex.y),
+                    z + binding.geometry_scale * vertex.z + 0.05f,
                     vertex.u,
                     vertex.v,
                     has_textures ? 0xffffffffu : abgr});
@@ -1120,10 +1154,12 @@ void AppendEntityModel(
                 entity.z,
                 entity.heading_radians,
                 abgr,
-                g_animation_elapsed_seconds)) {
+                g_animation_elapsed_seconds,
+                -1)) {
         return;
     }
     ++g_converted_geometry_fallback_count;
+    ++g_dynamic_fallback_stats_hashes[entity.rpg_stats_path_hash];
     const float scale = selected ? 1.25f : 1.0f;
     if ((entity.flags & BK2_PRESENTATION_ENTITY_MECHANIZED) != 0) {
         AppendOrientedBox(
@@ -1237,8 +1273,11 @@ void AppendMapObjects(
                     z,
                     heading,
                     ObjectColor(object.nPlayer, scenario_objects),
-                    0.0f)) {
+                    0.0f,
+                    object.nFrameIndex)) {
             ++g_converted_geometry_fallback_count;
+            ++g_static_fallback_stats_paths[
+                    stats->GetDBID().ToString().c_str()];
             AppendObjectMarker(
                     mesh,
                     x,
@@ -2006,9 +2045,12 @@ void ShutdownSinglePlayerRuntime() {
     g_converted_geometries.clear();
     g_missing_converted_geometries.clear();
     g_stats_geometry_index.clear();
+    g_stats_geometry_variants.clear();
     g_stats_geometry_index_loaded = false;
     g_model_textures.clear();
     g_model_texture_count = 0;
+    g_static_fallback_stats_paths.clear();
+    g_dynamic_fallback_stats_hashes.clear();
     g_height_width = 0;
     g_height_height = 0;
     g_triangle_count = 0;
@@ -2166,6 +2208,15 @@ std::string SinglePlayerRuntimeReport() {
     for (const TerrainLayer& layer : g_terrain_mesh.layers) {
         terrain_layer_triangles += layer.triangle_indices.size() / 3;
     }
+    std::vector<std::pair<std::string, size_t> > static_fallbacks(
+            g_static_fallback_stats_paths.begin(),
+            g_static_fallback_stats_paths.end());
+    std::sort(
+            static_fallbacks.begin(),
+            static_fallbacks.end(),
+            [](const auto& left, const auto& right) {
+                return left.second > right.second;
+            });
     std::ostringstream report;
     report << "single_player_runtime=" << (g_ready ? "ready" : "not_ready")
            << "; error=" << (g_last_error.empty() ? "<none>" : g_last_error)
@@ -2209,6 +2260,21 @@ std::string SinglePlayerRuntimeReport() {
            << g_converted_geometry_fallback_count
            << "; animated_geometry_parts="
            << g_animated_geometry_part_count
+           << "; static_fallback_types="
+           << g_static_fallback_stats_paths.size()
+           << "; dynamic_fallback_types="
+           << g_dynamic_fallback_stats_hashes.size()
+           << "; static_fallback_sample=";
+    for (size_t index = 0;
+         index < std::min<size_t>(static_fallbacks.size(), 8);
+         ++index) {
+        if (index > 0) {
+            report << "|";
+        }
+        report << static_fallbacks[index].first
+               << ":" << static_fallbacks[index].second;
+    }
+    report
            << "; presentation_snapshot="
            << (g_presentation_snapshot_written ? "written" : "not_written")
            << "; " << LegacyGameRuntimeReport();

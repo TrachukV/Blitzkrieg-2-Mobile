@@ -82,7 +82,7 @@ def model_path(data_root: Path, vis_path: Path) -> Path | None:
 def geometry_info(
     data_root: Path,
     model: Path,
-) -> tuple[int, list[int]] | None:
+) -> tuple[int, list[int], float] | None:
     model_root = parse_root(model)
     if model_root is None:
         return None
@@ -95,6 +95,32 @@ def geometry_info(
     value = geometry.attrib.get("ObjectRecordID", "")
     if not value.isdigit():
         return None
+    geometry_record_id = int(value)
+    geometry_scale = 1.0
+    if not (data_root / "bin" / "Geometries" / value).is_file():
+        ai_geometry_path = href_child_path(
+            data_root,
+            geometry_path,
+            geometry,
+            "AIGeometry",
+        )
+        ai_geometry = (
+            parse_root(ai_geometry_path)
+            if ai_geometry_path is not None
+            else None
+        )
+        ai_record = (
+            ai_geometry.attrib.get("ObjectRecordID", "")
+            if ai_geometry is not None
+            else ""
+        )
+        if (
+            ai_record.isdigit()
+            and (data_root / "bin" / "Geometries" / ai_record).is_file()
+        ):
+            geometry_record_id = int(ai_record)
+            # Matches AI_TO_VIS from Stats_B2_M1/Vis2AI.h.
+            geometry_scale = 2.75 / 64.0
     quantities: list[int] = []
     material_quantities = child(geometry, "MaterialQuantities")
     if material_quantities is not None:
@@ -102,7 +128,7 @@ def geometry_info(
             text = (item.text or "").strip()
             if text.isdigit():
                 quantities.append(int(text))
-    return int(value), quantities
+    return geometry_record_id, quantities, geometry_scale
 
 
 def texture_paths(data_root: Path, model: Path) -> list[str]:
@@ -149,6 +175,25 @@ def texture_paths(data_root: Path, model: Path) -> list[str]:
     return result
 
 
+def binding_from_vis_path(
+    data_root: Path,
+    vis_path: Path,
+) -> tuple[int, list[int], list[str], float] | None:
+    model = model_path(data_root, vis_path)
+    if model is None:
+        return None
+    geometry = geometry_info(data_root, model)
+    if geometry is None:
+        return None
+    geometry_record_id, material_quantities, geometry_scale = geometry
+    return (
+        geometry_record_id,
+        material_quantities,
+        texture_paths(data_root, model),
+        geometry_scale,
+    )
+
+
 def normalized_path(path: Path, data_root: Path) -> str:
     return path.relative_to(data_root).as_posix().lstrip("/").lower()
 
@@ -163,34 +208,76 @@ def fnv1a64(value: str) -> int:
 
 def build_index(
     data_root: Path,
-) -> dict[int, tuple[int, int, list[int], list[str]]]:
-    result: dict[int, tuple[int, int, list[int], list[str]]] = {}
+) -> dict[tuple[int, int], tuple[int, int, list[int], list[str], float]]:
+    result: dict[
+        tuple[int, int],
+        tuple[int, int, list[int], list[str], float],
+    ] = {}
     for stats_path in data_root.rglob("*.xdb"):
         stats = parse_root(stats_path)
         if stats is None:
             continue
-        visual = child(stats, "visualObject")
         record = stats.attrib.get("ObjectRecordID", "")
-        if visual is None or not record.isdigit():
+        if not record.isdigit():
             continue
-        vis_path = reference_path(
-            data_root,
-            stats_path,
-            visual.attrib.get("href", ""),
-        )
-        if vis_path is None:
+        path_hash = fnv1a64(normalized_path(stats_path, data_root))
+        visual = child(stats, "visualObject")
+        if visual is not None:
+            vis_path = reference_path(
+                data_root,
+                stats_path,
+                visual.attrib.get("href", ""),
+            )
+            binding = (
+                binding_from_vis_path(data_root, vis_path)
+                if vis_path is not None
+                else None
+            )
+            if binding is not None:
+                (
+                    geometry_record_id,
+                    material_quantities,
+                    textures,
+                    geometry_scale,
+                ) = binding
+                result[(path_hash, -1)] = (
+                    int(record),
+                    geometry_record_id,
+                    material_quantities,
+                    textures,
+                    geometry_scale,
+                )
+        segments = child(stats, "segments")
+        if segments is None:
             continue
-        model = model_path(data_root, vis_path)
-        if model is None:
-            continue
-        geometry = geometry_info(data_root, model)
-        if geometry is not None:
-            geometry_record_id, material_quantities = geometry
-            result[fnv1a64(normalized_path(stats_path, data_root))] = (
+        for frame_index, item in enumerate(segments):
+            vis = child(item, "VisObj")
+            if vis is None:
+                continue
+            vis_path = reference_path(
+                data_root,
+                stats_path,
+                vis.attrib.get("href", ""),
+            )
+            binding = (
+                binding_from_vis_path(data_root, vis_path)
+                if vis_path is not None
+                else None
+            )
+            if binding is None:
+                continue
+            (
+                geometry_record_id,
+                material_quantities,
+                textures,
+                geometry_scale,
+            ) = binding
+            result[(path_hash, frame_index)] = (
                 int(record),
                 geometry_record_id,
                 material_quantities,
-                texture_paths(data_root, model),
+                textures,
+                geometry_scale,
             )
     return result
 
@@ -205,16 +292,17 @@ def main() -> int:
     index = build_index(data_root)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        "# path_hash, stats_id, geometry_id, material_quantities, texture_paths",
+        "# path_hash, stats_id, geometry_id, material_quantities, texture_paths, frame_index, geometry_scale",
         *(
             f"{path_hash:016x}\t{stats_id}\t{geometry_id}\t"
             f"{','.join(str(value) for value in quantities)}\t"
-            f"{'|'.join(textures)}"
-            for path_hash, (
+            f"{'|'.join(textures)}\t{frame_index}\t{geometry_scale:.9g}"
+            for (path_hash, frame_index), (
                 stats_id,
                 geometry_id,
                 quantities,
                 textures,
+                geometry_scale,
             ) in sorted(index.items())
         ),
         "",
