@@ -1475,6 +1475,8 @@ bool AppendConvertedGeometry(
         uint32_t abgr,
         ConvertedAnimationVariant animation_variant,
         float animation_time_seconds,
+        bool alpha_blended,
+        bool cast_projected_shadow,
         int frame_index) {
     if (mesh == nullptr) {
         return false;
@@ -1529,17 +1531,19 @@ bool AppendConvertedGeometry(
     }
     const float cosine = std::cos(heading);
     const float sine = std::sin(heading);
-    AppendProjectedGeometryShadow(
-            mesh,
-            *geometry,
-            binding,
-            x,
-            y,
-            z,
-            cosine,
-            sine,
-            animation_variant,
-            animation_time_seconds);
+    if (cast_projected_shadow) {
+        AppendProjectedGeometryShadow(
+                mesh,
+                *geometry,
+                binding,
+                x,
+                y,
+                z,
+                cosine,
+                sine,
+                animation_variant,
+                animation_time_seconds);
+    }
     size_t total_vertices = 0;
     for (const ConvertedGeometryPart& part : geometry->parts) {
         total_vertices += part.vertices.size();
@@ -1587,6 +1591,9 @@ bool AppendConvertedGeometry(
                     : binding.texture_paths[material_index];
             WorldObjectMesh::Layer* layer =
                     FindOrAddWorldObjectLayer(mesh, texture_path);
+            if (layer != nullptr && alpha_blended) {
+                layer->alpha_blended = true;
+            }
             std::vector<uint32_t>* output = layer == nullptr
                     ? &mesh->triangle_indices
                     : &layer->triangle_indices;
@@ -1621,6 +1628,9 @@ bool AppendConvertedGeometry(
                     : std::string();
             WorldObjectMesh::Layer* layer =
                     FindOrAddWorldObjectLayer(mesh, texture_path);
+            if (layer != nullptr && alpha_blended) {
+                layer->alpha_blended = true;
+            }
             AppendPartIndices(
                     layer == nullptr
                             ? &mesh->triangle_indices
@@ -1819,6 +1829,8 @@ void AppendEntityModel(
                 abgr,
                 animation_variant,
                 animation_time_seconds,
+                false,
+                true,
                 -1)) {
         return;
     }
@@ -2183,6 +2195,7 @@ void AppendMapObjects(
         }
         const bool visible_gameplay_object =
                 dynamic_unit ||
+                type_id == NDb::SObjectRPGStats::typeID ||
                 type_id == NDb::SBuildingRPGStats::typeID ||
                 type_id == NDb::SBridgeRPGStats::typeID ||
                 type_id == NDb::SEntrenchmentRPGStats::typeID ||
@@ -2199,6 +2212,14 @@ void AppendMapObjects(
         const float heading =
                 static_cast<float>(object.nDir & 0xffff) /
                 65536.0f * 6.28318530717958647692f;
+        const std::string stats_path =
+                stats->GetDBID().ToString().c_str();
+        const bool flora =
+                stats->eGameType == NDb::SGVOGT_FLORA ||
+                stats_path.find("Objects/Flora/") !=
+                        std::string::npos ||
+                stats_path.find("Objects\\Flora\\") !=
+                        std::string::npos;
         if (!AppendConvertedGeometry(
                     mesh,
                     StatsPathHash(stats),
@@ -2211,6 +2232,8 @@ void AppendMapObjects(
                     ObjectColor(object.nPlayer, scenario_objects),
                     ConvertedAnimationVariant::Base,
                     0.0f,
+                    flora,
+                    !flora,
                     object.nFrameIndex)) {
             ++g_converted_geometry_fallback_count;
             ++g_static_fallback_stats_paths[

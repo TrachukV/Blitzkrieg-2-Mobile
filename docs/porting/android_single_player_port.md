@@ -35,6 +35,18 @@ bgfx content viewport intersect the terrain and produce the original magenta
 camera polygon above fog and unit markers. On the ARM64 emulator `US1.2` loaded
 its shipped 256x256 minimap; two taps moved both the camera and polygon from
 `177.692,184.25,0` to `130.549,213.714,3.99608`.
+The static presentation pass also includes general `SObjectRPGStats` map
+records. USA US1.2 contains 1,965 such vegetation and small-prop records, which
+were previously omitted even though their converted Granny geometry was
+available. The verified runtime count increased from 215 to 2,180 rendered
+objects out of 2,254 map records with `missing_converted_geometry=0`. Flora
+uses its original DDS material through an alpha-blended compatibility path
+because the current shared bgfx shader does not yet implement desktop
+`AM_ALPHA_TEST`; its coarse convex projected-shadow fallback is disabled to
+avoid casting the complete crossed billboard cards. Opaque small props keep
+their projected shadows. Unit `5198` remained selectable over the restored
+vegetation and populated its original world ring, portrait, health card, and
+action grid.
 The Android build packages the required 4.2 MiB original HUD subset and the TGA
 loader uses it only when the corresponding external `Complete/UI` file is
 missing. This keeps the original panel functional after a partial content sync

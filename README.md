@@ -55,6 +55,13 @@ map-specific DDS background and AI war-fog snapshot with the original
 draws the original magenta viewport polygon from the current 3D camera. The APK
 carries the small original HUD subset as a fallback, so an incomplete external
 content sync no longer replaces that panel with a dark debug rectangle.
+The map renderer now includes general `SObjectRPGStats` records in addition to
+buildings, fences, entrenchments, squads, and mechanized units. This restores
+the original mission's vegetation and small props through their converted
+Granny geometry and DDS materials; flora uses a transparent compatibility path
+and omits the port's coarse full-card projected-shadow fallback. On USA US1.2
+the rendered static-object count increased from 215 to 2,180 of 2,254 map
+records with zero missing converted geometries.
 Original combat textures now provide
 tracer ribbons, muzzle flashes, and animated fire/smoke on destroyed mechanized
 units. Static objects and live units now cast translucent projected silhouettes

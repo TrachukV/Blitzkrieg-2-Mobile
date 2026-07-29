@@ -742,7 +742,27 @@ infantry unit `5236`; the native touch path selected that unit and the HUD
 immediately rendered its original infantry art and current/max RPG-stat HP. A
 second emulator pass removed external `Complete/UI` entirely and verified the
 same panel, minimap, portrait, health card, and original action icons from the
-bundled fallback. The F10 menu
+bundled fallback.
+
+The static presentation pass now accepts general `SObjectRPGStats` map records,
+not only the previously enumerated building, fence, entrenchment, squad, mine,
+and mechanized-unit types. USA US1.2 contains 1,965 of these general records;
+restoring them raises the runtime's rendered map-object count from 215 to 2,180
+of 2,254, while `missing_converted_geometry` remains zero. This returns the
+original palms, bushes, reeds, crates, and other small props through the same
+converted Granny geometry and DDS material cache. Shipped flora materials use
+the desktop `AM_ALPHA_TEST` mode, but the current shared bgfx texture shader has
+no alpha-test branch, so Android enables alpha blending as a compatibility
+path. It also skips the port's coarse convex projected-shadow fallback for
+flora: projecting the complete crossed billboard cards produced large dark
+hulls rather than texture silhouettes. Non-flora props remain opaque and keep
+their projected shadows. A fresh ARM64 emulator run reported
+`map_objects=2254`, `rendered_objects=2180`,
+`dynamic_rendered_objects=160`, `converted_geometry_cache=66`, and
+`missing_converted_geometry=0`; selecting unit `5198` still populated its
+world ring, portrait, health card, and action grid over the restored vegetation.
+
+The F10 menu
 now owns an explicit native user-pause state rather than merely
 covering a still-running battle. It resets pending touch-command mode, pauses
 the mixer/output, stops legacy ticks and animation time, and shows the large
