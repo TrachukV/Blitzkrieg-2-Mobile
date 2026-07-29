@@ -31,10 +31,13 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   frames from the original rifle idle, move, and shoot clips. The shipped
   mission HUD, minimap, selected-unit cards, hit bars, and the original 4x3
   command grid are active. The grid is populated from the selected legacy
-  unit's `CUserActions`; Move, Attack, Stop, Entrench, and Stand Ground have
-  native command round trips, and unavailable handlers render the shipped
-  disabled icons. General runtime skinning, remaining action-specific clips,
-  command subpanels, briefings, and the rest of the legacy UI are still pending.
+  unit's `CUserActions`; Move, Attack, Rotate, Stop, Entrench, Stand Ground,
+  and Spyglass have native command round trips. Rotate and Spyglass enter
+  forced-point modes and send the next terrain tap through the original
+  `ACTION_COMMAND_ROTATE_TO` or `ACTION_COMMAND_USE_SPYGLASS` path. Unavailable
+  handlers render the shipped disabled icons. General runtime skinning,
+  remaining action-specific clips, command subpanels, briefings, and the rest
+  of the legacy UI are still pending.
 - `BK2_ENABLE_LEGACY_TEXTURE_RUNTIME=ON` links the Android
   `NGfx::CTexture`/`I2DBuffer` contract. Legacy callers can allocate textures,
   lock mip levels with `CTextureLock`, write the original pixel formats into CPU

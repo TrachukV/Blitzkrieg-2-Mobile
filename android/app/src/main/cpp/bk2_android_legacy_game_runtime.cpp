@@ -1469,6 +1469,52 @@ bool MoveSelectedLegacyUnit(float world_x, float world_y) {
     return true;
 }
 
+bool PerformSelectedLegacyUnitPointAction(
+        int user_action,
+        float world_x,
+        float world_y) {
+    if (!g_ready || g_selected_unit_id < 0) {
+        return false;
+    }
+    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+    if (unit == nullptr ||
+        !unit->IsAlive() ||
+        !unit->IsSelectable() ||
+        unit->GetPlayer() != 0 ||
+        !IsLegacyUnitAction(unit, user_action)) {
+        return false;
+    }
+
+    EActionCommand command_type;
+    switch (user_action) {
+        case NDb::USER_ACTION_ROTATE:
+            command_type = ACTION_COMMAND_ROTATE_TO;
+            break;
+        case NDb::USER_ACTION_SPYGLASS:
+            command_type = ACTION_COMMAND_USE_SPYGLASS;
+            break;
+        default:
+            return false;
+    }
+
+    CVec2 target;
+    Vis2AI(&target, world_x, world_y);
+    SAIUnitCmd command(command_type, target);
+    command.bFromAI = false;
+    theGroupLogic.UnitCommand(command, unit, false);
+    g_android_move_active = false;
+    g_android_move_log_millis = 0;
+    g_attack_target_unit_id = -1;
+    PublishPresentationEntities();
+    PlatformRuntime::instance().log_info(
+            std::string("player_unit_point_action=") +
+            std::to_string(user_action) +
+            "; unit=" + std::to_string(g_selected_unit_id) +
+            "; target=" + std::to_string(world_x) +
+            "," + std::to_string(world_y));
+    return true;
+}
+
 bool AttackSelectedLegacyUnit(int target_unit_id) {
     if (!g_ready || g_selected_unit_id < 0 || target_unit_id < 0) {
         return false;
@@ -1643,9 +1689,11 @@ std::string SelectedLegacyUnitHudSnapshot() {
     for (const int action : {
                  static_cast<int>(NDb::USER_ACTION_MOVE),
                  static_cast<int>(NDb::USER_ACTION_ATTACK),
+                 static_cast<int>(NDb::USER_ACTION_ROTATE),
                  static_cast<int>(NDb::USER_ACTION_ENTRENCH_SELF),
                  static_cast<int>(NDb::USER_ACTION_STAND_GROUND),
-                 static_cast<int>(NDb::USER_ACTION_STOP)}) {
+                 static_cast<int>(NDb::USER_ACTION_STOP),
+                 static_cast<int>(NDb::USER_ACTION_SPYGLASS)}) {
         if (!actions.HasAction(action) ||
             (action == NDb::USER_ACTION_MOVE && !unit->CanMove())) {
             continue;

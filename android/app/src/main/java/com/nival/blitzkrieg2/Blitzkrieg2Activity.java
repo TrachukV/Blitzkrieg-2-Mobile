@@ -44,6 +44,8 @@ public final class Blitzkrieg2Activity extends GameActivity {
     private GridLayout commandGrid;
     private ImageButton moveCommandButton;
     private ImageButton attackCommandButton;
+    private ImageButton rotateCommandButton;
+    private ImageButton spyglassCommandButton;
     private File hudDataRoot;
     private String displayedCommandSnapshot = "";
     private boolean outcomePolling;
@@ -390,6 +392,8 @@ public final class Blitzkrieg2Activity extends GameActivity {
         commandGrid.removeAllViews();
         moveCommandButton = null;
         attackCommandButton = null;
+        rotateCommandButton = null;
+        spyglassCommandButton = null;
         final int cellSize = dp(36);
         for (int slot = 0; slot < slots.length; ++slot) {
             FrameLayout cell = new FrameLayout(this);
@@ -416,6 +420,10 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 moveCommandButton = button;
             } else if (spec.action == 2) {
                 attackCommandButton = button;
+            } else if (spec.action == 6) {
+                rotateCommandButton = button;
+            } else if (spec.action == 40) {
+                spyglassCommandButton = button;
             }
         }
         updateCommandButtonState(NativeBridge.getTouchCommandMode());
@@ -462,6 +470,14 @@ public final class Blitzkrieg2Activity extends GameActivity {
         }
         if (userAction == 2) {
             toggleTouchCommandMode(2);
+            return;
+        }
+        if (userAction == 6) {
+            toggleTouchCommandMode(3);
+            return;
+        }
+        if (userAction == 40) {
+            toggleTouchCommandMode(4);
             return;
         }
         boolean performed = userAction == 39
@@ -549,6 +565,14 @@ public final class Blitzkrieg2Activity extends GameActivity {
         if (attackCommandButton != null) {
             attackCommandButton.setAlpha(mode == 2 ? 1.0f : 0.72f);
             attackCommandButton.setSelected(mode == 2);
+        }
+        if (rotateCommandButton != null) {
+            rotateCommandButton.setAlpha(mode == 3 ? 1.0f : 0.72f);
+            rotateCommandButton.setSelected(mode == 3);
+        }
+        if (spyglassCommandButton != null) {
+            spyglassCommandButton.setAlpha(mode == 4 ? 1.0f : 0.72f);
+            spyglassCommandButton.setSelected(mode == 4);
         }
     }
 

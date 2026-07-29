@@ -113,6 +113,8 @@ enum class TouchCommandMode {
     Contextual = 0,
     Move = 1,
     Attack = 2,
+    Rotate = 3,
+    Spyglass = 4,
 };
 
 TouchCommandMode g_touch_command_mode = TouchCommandMode::Contextual;
@@ -3111,6 +3113,38 @@ bool HandleSinglePlayerTap(
                 std::to_string(world_x) + "," + std::to_string(world_y));
         return RefreshDynamicWorldMeshLocked(true);
     }
+    if (g_touch_command_mode == TouchCommandMode::Rotate ||
+        g_touch_command_mode == TouchCommandMode::Spyglass) {
+        float world_x = 0.0f;
+        float world_y = 0.0f;
+        const int user_action =
+                g_touch_command_mode == TouchCommandMode::Rotate ? 6 : 40;
+        if (!ScreenToTerrainLocked(
+                    screen_x,
+                    screen_y,
+                    viewport_width,
+                    viewport_height,
+                    &world_x,
+                    &world_y) ||
+            !PerformSelectedLegacyUnitPointAction(
+                    user_action,
+                    world_x,
+                    world_y)) {
+            PlatformRuntime::instance().log_info(
+                    std::string("player_touch_point_action=") +
+                    std::to_string(user_action) +
+                    "; result=invalid_target");
+            return false;
+        }
+        g_touch_command_mode = TouchCommandMode::Contextual;
+        PlatformRuntime::instance().log_info(
+                std::string("player_touch_point_action=") +
+                std::to_string(user_action) +
+                "; result=issued; target=" +
+                std::to_string(world_x) + "," +
+                std::to_string(world_y));
+        return RefreshDynamicWorldMeshLocked(true);
+    }
     const int friendly_unit = FindEntityNearScreenLocked(
             screen_x,
             screen_y,
@@ -3199,7 +3233,7 @@ bool HandleSinglePlayerTap(
 
 bool SetSinglePlayerTouchCommandMode(int mode) {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
-    if (!g_ready || g_user_paused || mode < 0 || mode > 2) {
+    if (!g_ready || g_user_paused || mode < 0 || mode > 4) {
         return false;
     }
     const TouchCommandMode requested =
@@ -3215,7 +3249,11 @@ bool SetSinglePlayerTouchCommandMode(int mode) {
             ? "move"
             : requested == TouchCommandMode::Attack
                     ? "attack"
-                    : "contextual";
+                    : requested == TouchCommandMode::Rotate
+                            ? "rotate"
+                            : requested == TouchCommandMode::Spyglass
+                                    ? "spyglass"
+                                    : "contextual";
     PlatformRuntime::instance().log_info(
             std::string("player_touch_command_mode=") + name);
     return true;

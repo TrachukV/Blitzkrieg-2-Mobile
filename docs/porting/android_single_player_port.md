@@ -8,9 +8,10 @@ original unit/static geometry, materials, supported infantry animation, legacy
 fog of war, combat effects, minimap, selected-unit cards, and the shipped
 mission HUD. The right action panel follows the original twelve-slot layout and
 is rebuilt from the selected `CAIUnit` action data. Move, Attack, Stop,
-Entrench, and Stand Ground call the legacy command path; visible actions whose
-mobile interaction is not implemented remain disabled instead of pretending to
-work.
+Entrench, Stand Ground, Rotate, and Spyglass call the legacy command path.
+Rotate and Spyglass consume the next valid terrain tap as their forced point;
+visible actions whose mobile interaction is not implemented remain disabled
+instead of pretending to work.
 
 ## Implemented In This Slice
 
