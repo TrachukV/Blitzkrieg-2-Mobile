@@ -2,6 +2,7 @@ package com.nival.blitzkrieg2;
 
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
@@ -31,6 +32,7 @@ public final class Blitzkrieg2Activity extends GameActivity {
     private TextView outcomeTitle;
     private TextView missionTitle;
     private TextView missionStatus;
+    private TextView pauseIndicator;
     private OriginalMissionHudView originalHud;
     private ImageButton moveCommandButton;
     private ImageButton attackCommandButton;
@@ -211,10 +213,8 @@ public final class Blitzkrieg2Activity extends GameActivity {
         ImageButton menu = originalImageButton(
                 dataRoot,
                 "Complete/UI/Buttons/F10Menu/fake_F10MenuNormal.tga",
-                view -> missionMenu.setVisibility(
-                        missionMenu.getVisibility() == View.VISIBLE
-                                ? View.GONE
-                                : View.VISIBLE));
+                view -> setMissionMenuVisible(
+                        missionMenu.getVisibility() != View.VISIBLE));
         commandButtons.addView(
                 menu,
                 new LinearLayout.LayoutParams(dp(82), dp(34)));
@@ -231,6 +231,22 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 hudHeight,
                 Gravity.BOTTOM);
         root.addView(hud, hudParams);
+
+        pauseIndicator = new TextView(this);
+        pauseIndicator.setText("PAUSED");
+        pauseIndicator.setTextColor(0xffff922f);
+        pauseIndicator.setTextSize(38.0f);
+        pauseIndicator.setTypeface(Typeface.DEFAULT_BOLD);
+        pauseIndicator.setGravity(Gravity.CENTER);
+        pauseIndicator.setShadowLayer(dp(3), dp(2), dp(2), Color.BLACK);
+        pauseIndicator.setVisibility(View.GONE);
+        FrameLayout.LayoutParams pauseParams =
+                new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        pauseParams.topMargin = dp(82);
+        root.addView(pauseIndicator, pauseParams);
 
         missionMenu = new LinearLayout(this);
         missionMenu.setOrientation(LinearLayout.VERTICAL);
@@ -255,7 +271,10 @@ public final class Blitzkrieg2Activity extends GameActivity {
         missions.setAllCaps(false);
         missions.setText("Return to missions");
         missions.setTextColor(Color.WHITE);
-        missions.setOnClickListener(view -> finish());
+        missions.setOnClickListener(view -> {
+            NativeBridge.setMissionPaused(false);
+            finish();
+        });
         missionMenu.addView(
                 missions,
                 new LinearLayout.LayoutParams(dp(150), dp(44)));
@@ -263,7 +282,8 @@ public final class Blitzkrieg2Activity extends GameActivity {
         FrameLayout.LayoutParams menuParams = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.CENTER);
+                Gravity.CENTER_HORIZONTAL | Gravity.BOTTOM);
+        menuParams.bottomMargin = hudHeight + dp(10);
         root.addView(missionMenu, menuParams);
 
         outcomePanel = new LinearLayout(this);
@@ -314,6 +334,16 @@ public final class Blitzkrieg2Activity extends GameActivity {
             mode = 0;
         }
         updateCommandButtonState(mode);
+    }
+
+    private void setMissionMenuVisible(boolean visible) {
+        NativeBridge.setMissionPaused(visible);
+        missionMenu.setVisibility(visible ? View.VISIBLE : View.GONE);
+        if (pauseIndicator != null) {
+            pauseIndicator.setVisibility(
+                    visible ? View.VISIBLE : View.GONE);
+        }
+        updateCommandButtonState(0);
     }
 
     private void updateCommandButtonState(int mode) {

@@ -21,6 +21,8 @@ bool HandleSinglePlayerTap(
 bool SetSinglePlayerTouchCommandMode(int mode);
 int SinglePlayerTouchCommandMode();
 bool StopSelectedSinglePlayerUnit();
+void SetSinglePlayerPaused(bool paused);
+bool IsSinglePlayerPaused();
 
 bool IsSinglePlayerRuntimeReady();
 std::string CurrentSinglePlayerMissionId();

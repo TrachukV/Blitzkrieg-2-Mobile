@@ -594,6 +594,9 @@ Touch controls currently implemented:
   command mode, then tap its terrain destination or hostile target;
 - tap the original Stop HUD button to send `ACTION_COMMAND_STOP` immediately
   through `CGroupLogic`;
+- tap the original F10 button to pause the legacy simulation and audio, show
+  the prominent orange `PAUSED` indicator, and open the mission menu; closing
+  the menu resumes both;
 - drag with one finger to pan;
 - pinch to zoom;
 - rotate with a two-finger twist.
@@ -633,7 +636,13 @@ center with the shipped preview frame, Soldier or Tank portrait, icon
 background, and live green/yellow/red HP bar. No card is drawn when the
 selection is empty. This was exercised on the ARM64 emulator with infantry unit
 `5236`; the native touch path selected that unit and the HUD immediately
-rendered its original infantry art and current/max RPG-stat HP. The objective
+rendered its original infantry art and current/max RPG-stat HP. The F10 menu
+now owns an explicit native user-pause state rather than merely
+covering a still-running battle. It resets pending touch-command mode, pauses
+the mixer/output, stops legacy ticks and animation time, and shows the large
+orange `PAUSED` label above the menu. Two paused battlefield captures taken two
+seconds apart produced the same raw-frame checksum; closing F10 logged
+`player_pause=false` and resumed the runtime. The objective
 header is decoded directly from the shipped UTF-16 text resource through the
 case-insensitive Android VFS instead of relying on the legacy
 16-bit-`wchar_t` assumption. The Android client now drains the original AI

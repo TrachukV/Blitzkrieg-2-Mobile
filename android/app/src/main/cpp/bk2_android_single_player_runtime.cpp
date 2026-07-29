@@ -1,5 +1,7 @@
 #include "bk2_android_single_player_runtime.h"
 
+#include "bk2_android_audio_backend.h"
+#include "bk2_android_audio_output.h"
 #include "bk2_android_database.h"
 #include "bk2_android_legacy_game_runtime.h"
 #include "bk2_android_mission_runtime.h"
@@ -49,6 +51,7 @@ constexpr const char* kMechanizedTraceTexture =
 
 std::mutex g_runtime_mutex;
 bool g_ready = false;
+bool g_user_paused = false;
 std::string g_last_error;
 std::string g_mission_id;
 std::string g_map_path;
@@ -2601,6 +2604,7 @@ bool InitializeSinglePlayerRuntime() {
     g_presentation_snapshot_written =
             bk2_presentation_write_json(snapshot_path.c_str()) != 0;
     g_last_error.clear();
+    g_user_paused = false;
     g_ready = true;
     return true;
 }
@@ -2621,7 +2625,7 @@ void RefreshSinglePlayerRenderResources() {
 
 void TickSinglePlayerRuntime(uint32_t elapsed_millis) {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
-    if (!g_ready) {
+    if (!g_ready || g_user_paused) {
         return;
     }
     TickLegacyGameRuntime(elapsed_millis);
@@ -2649,6 +2653,7 @@ void ShutdownSinglePlayerRuntime() {
     g_world_object_mesh = WorldObjectMesh();
     bk2::presentation::Reset();
     g_ready = false;
+    g_user_paused = false;
     g_mission_id.clear();
     g_map_path.clear();
     g_terrain_texture_path.clear();
@@ -2755,7 +2760,7 @@ bool HandleSinglePlayerTap(
         uint32_t viewport_width,
         uint32_t viewport_height) {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
-    if (!g_ready) {
+    if (!g_ready || g_user_paused) {
         return false;
     }
     constexpr float kEntityTapRadiusPixels = 52.0f;
@@ -2892,7 +2897,7 @@ bool HandleSinglePlayerTap(
 
 bool SetSinglePlayerTouchCommandMode(int mode) {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
-    if (!g_ready || mode < 0 || mode > 2) {
+    if (!g_ready || g_user_paused || mode < 0 || mode > 2) {
         return false;
     }
     const TouchCommandMode requested =
@@ -2921,11 +2926,35 @@ int SinglePlayerTouchCommandMode() {
 
 bool StopSelectedSinglePlayerUnit() {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
-    if (!g_ready || !StopSelectedLegacyUnit()) {
+    if (!g_ready || g_user_paused || !StopSelectedLegacyUnit()) {
         return false;
     }
     g_touch_command_mode = TouchCommandMode::Contextual;
     return RefreshDynamicWorldMeshLocked(true);
+}
+
+void SetSinglePlayerPaused(bool paused) {
+    std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    if (!g_ready || g_user_paused == paused) {
+        return;
+    }
+    g_user_paused = paused;
+    g_touch_command_mode = TouchCommandMode::Contextual;
+    AudioBackend().set_paused(paused);
+    if (paused) {
+        AudioOutput().pause();
+    } else if (
+            PlatformRuntime::instance().lifecycle_state() ==
+            LifecycleState::Focused) {
+        AudioOutput().resume();
+    }
+    PlatformRuntime::instance().log_info(
+            std::string("player_pause=") + (paused ? "true" : "false"));
+}
+
+bool IsSinglePlayerPaused() {
+    std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    return g_user_paused;
 }
 
 bool IsSinglePlayerRuntimeReady() {
@@ -3216,6 +3245,21 @@ Java_com_nival_blitzkrieg2_NativeBridge_stopSelectedUnit(
     return bk2::android::StopSelectedSinglePlayerUnit()
             ? JNI_TRUE
             : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_setMissionPaused(
+        JNIEnv*,
+        jclass,
+        jboolean paused) {
+    bk2::android::SetSinglePlayerPaused(paused == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_isMissionPaused(
+        JNIEnv*,
+        jclass) {
+    return bk2::android::IsSinglePlayerPaused() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jint JNICALL
