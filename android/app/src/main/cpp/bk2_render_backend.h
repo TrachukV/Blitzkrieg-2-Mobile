@@ -47,6 +47,7 @@ struct WorldObjectMesh {
         bool alpha_tested = false;
         bool alpha_masked_shadow = false;
         bool depth_test_always = false;
+        float texture_v_scroll_speed = 0.0f;
     };
 
     std::vector<TerrainVertex> vertices;

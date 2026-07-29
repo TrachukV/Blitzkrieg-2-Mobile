@@ -46,8 +46,10 @@ surfaces from each map's original `seaMask` with the season-specific DDS and
 descriptor-timed waves, reconstructs terrain roads from their original
 `SRoadDesc`/`SVSOInstance` curves and seasonal DDS atlases, carves and renders
 descriptor-driven rivers from the original `SRiverDesc` control points and
-water materials, and uses the shipped mission HUD, minimap, unit portraits, and
-hit bars. Its original 4x3 command grid is rebuilt from the selected legacy
+water materials, including the seeded bank disturbance and per-layer
+`StreamSpeed` UV motion, and uses the shipped mission HUD, minimap, unit
+portraits, and hit bars. Its original 4x3 command grid is rebuilt from the
+selected legacy
 unit's available actions instead of a fixed mobile button row; Move, Attack,
 Rotate, Stop, Entrench, Stand Ground,
 Spyglass, Clear Mines, Place Mines, and the original two-point Build Trenches

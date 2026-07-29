@@ -540,11 +540,18 @@ each `SRiverDesc`/`SVSOInstance` control point and width with `AI2Vis`, carves
 the heightfield by the desktop four-unit river depth with its four-tile ridge
 transition, and rebuilds the eight-cell bottom plus two descriptor-sized
 alpha-water ribbons. The original per-point opacity, center opacity, tiling,
-season, and `bottom.dds`, `water.dds`, and `water2.dds` assets are preserved.
-On ARM64 GB3.1 the one 279-point river produced 11,676 triangles, carved 1,926
-terrain vertices, and loaded all three Summer DDS files into valid GPU handles.
-The small seeded edge disturbance and stream-speed UV animation from the
-desktop renderer remain follow-up work.
+season, and `bottom.dds`, `water.dds`, and `water2.dds` assets are preserved. A
+local copy of the original Win32 LCG uses `GetVSOSeed`'s first/last-control-point
+distance without touching the simulation RNG. It applies the same seeded
+`fBorderRand` displacement to both the terrain modifier and rendered ribbon,
+then applies each water layer's `fDisturbance` to its internal cells. The two
+water layers also scroll their V coordinate by the original signed
+`fStreamSpeed` while simulation animation time advances.
+
+On ARM64 GB3.1 the one 279-point river produced 11,676 triangles, disturbed
+3,348 internal water vertices, carved 1,933 terrain vertices after the seeded
+border displacement, animated two layers at their descriptor speeds, and
+loaded all three Summer DDS files into valid GPU handles.
 
 The Android content step now decodes the shipped Granny format-6/Oodle0
 geometry into a small native `BK2MSH1` cache. The complete current pass yields

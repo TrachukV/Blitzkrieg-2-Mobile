@@ -153,10 +153,16 @@ from `RiversBuilder.cpp` to the shared heightfield and reproduces its four-tile
 ridge transition. It then emits the original eight-cell bottom ribbon and up to
 two alpha-water ribbons using the `SRiverDesc` cell counts, center opacity,
 tiling, per-point width/opacity, and seasonal `bottom.dds`, `water.dds`, and
-`water2.dds`. GB3.1 verified one 279-point river, 278 segments, 11,676
-triangles, 1,926 carved heightfield vertices, and three ready Summer DDS GPU
-handles. The desktop seeded border disturbance and `StreamSpeed` UV movement
-are not yet reproduced.
+`water2.dds`. A local implementation of the original Win32 LCG starts from
+`GetVSOSeed`'s control-point-distance seed, applies the same `fBorderRand`
+offset to the carved terrain and ribbon centerline, and consumes the remaining
+sequence for each layer's internal-cell `fDisturbance`. It is isolated from the
+gameplay RNG. Each water layer's V coordinate also advances by the original
+signed `fStreamSpeed` against simulation animation time.
+
+GB3.1 verified one 279-point river, 278 segments, 11,676 triangles, 3,348
+disturbed internal water vertices, 1,933 carved heightfield vertices, two
+animated water layers, and three ready Summer DDS GPU handles.
 
 ## Implemented In This Slice
 
