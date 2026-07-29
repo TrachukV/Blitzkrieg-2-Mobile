@@ -164,7 +164,7 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 Typeface.create("sans-serif-condensed", Typeface.BOLD));
         missionTitle.setShadowLayer(dp(2), dp(1), dp(1), Color.BLACK);
         missionTitle.setText(missionLabel());
-        missionTitle.setSingleLine(true);
+        missionTitle.setMaxLines(3);
         missionInfo.addView(
                 missionTitle,
                 new LinearLayout.LayoutParams(

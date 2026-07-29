@@ -29,9 +29,10 @@ the orange `PAUSED` label over the playable viewport while leaving the original
 bottom panel visible, matching the desktop mission presentation. A dedicated
 JNI headline call resolves the active primary `SMissionObjective` header through
 the shipped UTF-16 localization and displays it at the top-left; the internal
-campaign/map ID is now only a startup fallback. A thread-safe five-second FIFO
-temporarily replaces that header with original objective and reinforcement
-notifications. It consumes `EFB_OBJECTIVE_CHANGED` and
+campaign/map ID is now only a startup fallback. A thread-safe stack of up to
+three active five-second messages temporarily replaces that header with
+original objective and reinforcement notifications. It consumes
+`EFB_OBJECTIVE_CHANGED` and
 `EFB_REINFORCEMENT_CENTER_LOCAL_PLAYER`, resolves the shipped UTF-16 text
 resources, and restores the active objective after expiry. Converted static and
 dynamic models also produce one translucent ground silhouette from the convex

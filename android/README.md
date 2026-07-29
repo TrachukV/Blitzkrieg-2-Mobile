@@ -50,7 +50,7 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   shadows use the same current pre-skinned frame as the visible mesh. The camera
   reads the original horizontal FOV, pitch/yaw defaults, and distance range from
   the loaded `ClientGameConsts`. The top-left headline now has a thread-safe
-  five-second FIFO for original scenario notifications. Objective feedback
+  three-line stack for original five-second scenario notifications. Objective feedback
   combines the shipped notification prefix with the objective header, while
   `EFB_REINFORCEMENT_CENTER_LOCAL_PLAYER` resolves and displays the shipped
   reinforcement text. General runtime skinning, remaining action-specific
@@ -624,7 +624,8 @@ Touch controls currently implemented:
   legacy objective, with the internal mission ID used only before objectives
   are ready;
 - original objective and reinforcement feedback temporarily replaces that
-  headline for five seconds, then restores the active objective;
+  headline in a stack of up to three active lines, then restores the active
+  objective after five seconds;
 - tap a red hostile unit while a player unit is selected to issue the original
   legacy attack command;
 - tap terrain to issue the original legacy move command and move the selected
@@ -669,9 +670,10 @@ original standing and prone states for animation validation. Keyboard `M`
 kills a visible mechanized unit through the same statistics/death path and is
 used to validate the destruction presentation. Keyboard `N` injects the
 reinforcement notification type so descriptor lookup, UTF-16 decoding, JNI
-polling, and five-second expiry can be checked independently of the still
-unported `LandReinforcementFromMap` Lua command. All seven shortcuts are absent
-from release builds.
+polling, and five-second expiry can be checked independently of scenario
+timing. The original `CScripts::LandReinforcementFromMap` path remains active in
+the linked AI runtime; `GER3.3` has also produced the same notification from a
+real scenario call. All seven shortcuts are absent from release builds.
 
 `Data/Weapons` is required runtime DB payload. Without it, mine descriptors keep
 an unresolved `pWeapon`; the original `CMineStaticObject::Detonate` path then
@@ -714,10 +716,10 @@ scenario tracker and the Android campaign checkpoint state. Received,
 completed, and failed objective notifications use the original localized
 prefix plus objective header. Local-player reinforcement feedback uses
 `NTF_REINFORCEMENT_ARRIVED` and the shipped UTF-16
-`ReinfArrived/Text.txt`. These messages occupy the same top-left line for five
-seconds before the active objective returns. This is currently a single-line
-FIFO approximation of the desktop mission console, not its complete stacked
-and scrolling implementation.
+`ReinfArrived/Text.txt`. Up to three messages occupy the top-left stack for five
+seconds from their event time before the active objective returns. This is
+still a bounded approximation of the desktop mission console, not its complete
+scrolling history.
 
 The battle renderer now consumes `IAILogic::GetMiniMapWarForInfo()` instead of
 approximating vision with Android-side circles. The legacy AI exports its

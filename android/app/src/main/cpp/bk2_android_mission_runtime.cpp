@@ -42,8 +42,7 @@ std::mutex g_hud_notification_mutex;
 
 struct MissionHudNotification {
     std::string text;
-    uint32_t visible_millis = 0;
-    uint64_t shown_at_millis = 0;
+    uint64_t expires_at_millis = 0;
 };
 
 std::deque<MissionHudNotification> g_hud_notifications;
@@ -3236,15 +3235,18 @@ bool QueueMissionHudNotification(
 
     MissionHudNotification notification;
     notification.text = text;
-    notification.visible_millis =
+    const uint32_t lifetime =
             visible_millis == 0
-            ? kMissionHudNotificationVisibleMillis
-            : visible_millis;
+                    ? kMissionHudNotificationVisibleMillis
+                    : visible_millis;
+    notification.expires_at_millis =
+            PlatformRuntime::instance().monotonic_millis() +
+            lifetime;
 
     std::lock_guard<std::mutex> lock(g_hud_notification_mutex);
     if (g_hud_notifications.size() >=
         kMaxQueuedMissionHudNotifications) {
-        g_hud_notifications.pop_back();
+        g_hud_notifications.pop_front();
     }
     g_hud_notifications.push_back(std::move(notification));
     return true;
@@ -3260,17 +3262,29 @@ std::string GetMissionHudHeadlineText() {
         const uint64_t now =
                 PlatformRuntime::instance().monotonic_millis();
         std::lock_guard<std::mutex> lock(g_hud_notification_mutex);
-        while (!g_hud_notifications.empty()) {
-            MissionHudNotification& notification =
-                    g_hud_notifications.front();
-            if (notification.shown_at_millis == 0) {
-                notification.shown_at_millis = now;
+        g_hud_notifications.erase(
+                std::remove_if(
+                        g_hud_notifications.begin(),
+                        g_hud_notifications.end(),
+                        [now](const MissionHudNotification& notification) {
+                            return notification.expires_at_millis <= now;
+                        }),
+                g_hud_notifications.end());
+        if (!g_hud_notifications.empty()) {
+            const size_t first =
+                    g_hud_notifications.size() > 3
+                            ? g_hud_notifications.size() - 3
+                            : 0;
+            std::string text;
+            for (size_t index = first;
+                 index < g_hud_notifications.size();
+                 ++index) {
+                if (!text.empty()) {
+                    text.push_back('\n');
+                }
+                text += g_hud_notifications[index].text;
             }
-            if (now - notification.shown_at_millis <
-                notification.visible_millis) {
-                return notification.text;
-            }
-            g_hud_notifications.pop_front();
+            return text;
         }
     }
 
