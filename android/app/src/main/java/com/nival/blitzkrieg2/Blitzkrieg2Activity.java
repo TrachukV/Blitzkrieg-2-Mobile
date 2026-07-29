@@ -53,18 +53,17 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 if (status == null) {
                     status = "";
                 }
-                String selectedUnitStatus =
-                        NativeBridge.getSelectedUnitHudStatus();
-                if (selectedUnitStatus != null
-                        && !selectedUnitStatus.isEmpty()) {
-                    status += "\n" + selectedUnitStatus;
-                }
                 missionStatus.setText(status);
             }
-            if (originalHud != null && (hudPollCount++ & 3) == 0) {
-                int[] pixels = NativeBridge.getMissionMinimapArgb(192, 192);
-                if (pixels != null) {
-                    originalHud.setMinimapPixels(pixels, 192, 192);
+            if (originalHud != null) {
+                originalHud.setSelectedUnitSnapshot(
+                        NativeBridge.getSelectedUnitHudSnapshot());
+                if ((hudPollCount++ & 3) == 0) {
+                    int[] pixels =
+                            NativeBridge.getMissionMinimapArgb(192, 192);
+                    if (pixels != null) {
+                        originalHud.setMinimapPixels(pixels, 192, 192);
+                    }
                 }
             }
             updateCommandButtonState(
@@ -133,8 +132,9 @@ public final class Blitzkrieg2Activity extends GameActivity {
         missionInfo.setGravity(Gravity.CENTER_VERTICAL);
 
         missionTitle = new TextView(this);
-        missionTitle.setTextColor(0xffe5d9ad);
-        missionTitle.setTextSize(12.0f);
+        missionTitle.setTextColor(Color.WHITE);
+        missionTitle.setTextSize(14.0f);
+        missionTitle.setShadowLayer(dp(2), dp(1), dp(1), Color.BLACK);
         missionTitle.setText(missionLabel());
         missionTitle.setSingleLine(true);
         missionInfo.addView(
@@ -144,10 +144,11 @@ public final class Blitzkrieg2Activity extends GameActivity {
                         ViewGroup.LayoutParams.WRAP_CONTENT));
 
         missionStatus = new TextView(this);
-        missionStatus.setTextColor(0xffd4c580);
+        missionStatus.setTextColor(0xffeee6c8);
         missionStatus.setTextSize(10.0f);
+        missionStatus.setShadowLayer(dp(2), dp(1), dp(1), Color.BLACK);
         missionStatus.setText("Objectives: loading");
-        missionStatus.setMaxLines(4);
+        missionStatus.setMaxLines(3);
         missionInfo.addView(
                 missionStatus,
                 new LinearLayout.LayoutParams(
@@ -156,11 +157,11 @@ public final class Blitzkrieg2Activity extends GameActivity {
 
         FrameLayout.LayoutParams missionInfoParams =
                 new FrameLayout.LayoutParams(
-                        dp(360),
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        Gravity.CENTER);
-        missionInfoParams.setMargins(0, dp(10), 0, dp(10));
-        hud.addView(missionInfo, missionInfoParams);
+                        dp(440),
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        Gravity.TOP | Gravity.START);
+        missionInfoParams.setMargins(dp(8), dp(4), 0, 0);
+        root.addView(missionInfo, missionInfoParams);
 
         LinearLayout commandButtons = new LinearLayout(this);
         commandButtons.setOrientation(LinearLayout.HORIZONTAL);

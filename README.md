@@ -35,6 +35,16 @@ Please review the terms of the [license agreement](LICENSE.md) carefully before 
 - `Versions` — different build configurations and testing environments
 - `Versions/Temporary/Engine/Sources` — complete game engine source code
 
+## Android mobile port status
+
+The Android port is a playable native ARM64 milestone, not a finished
+release. It currently runs original single-player campaign data through the
+legacy C++ AI/game simulation, renders original terrain, models, materials, and
+supported infantry animations through bgfx, and uses the shipped mission HUD,
+minimap, command buttons, unit portraits, and hit bars. See
+[`android/README.md`](android/README.md) for build, content-staging, verification,
+and remaining-port details.
+
 ---
 
 # Running the game

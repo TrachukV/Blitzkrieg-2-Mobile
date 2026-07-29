@@ -627,14 +627,19 @@ decoder reads these assets directly from staged `Complete/UI`. The minimap is
 generated from the live terrain-type map and presentation entities, then
 clipped into the original diamond frame. The F10 menu returns to the native
 single-player mission list without terminating the app process. The center
-panel shows completed, active, and failed objective counts and the localized
-header of the current primary objective. The header is decoded directly from
-the shipped UTF-16 text resource through the case-insensitive Android VFS
-instead of relying on the legacy 16-bit-`wchar_t` assumption. The Android
-client now drains the original AI update stream every simulation tick instead
-of allowing visual/client updates to accumulate. `EFB_OBJECTIVE_CHANGED`
-updates are applied to both the original scenario tracker and the Android
-campaign checkpoint state.
+panel now follows the original battle-screen layout: mission/objective text is
+kept at the top-left, while selecting a real legacy AI unit populates the
+center with the shipped preview frame, Soldier or Tank portrait, icon
+background, and live green/yellow/red HP bar. No card is drawn when the
+selection is empty. This was exercised on the ARM64 emulator with infantry unit
+`5236`; the native touch path selected that unit and the HUD immediately
+rendered its original infantry art and current/max RPG-stat HP. The objective
+header is decoded directly from the shipped UTF-16 text resource through the
+case-insensitive Android VFS instead of relying on the legacy
+16-bit-`wchar_t` assumption. The Android client now drains the original AI
+update stream every simulation tick instead of allowing visual/client updates
+to accumulate. `EFB_OBJECTIVE_CHANGED` updates are applied to both the original
+scenario tracker and the Android campaign checkpoint state.
 
 Original Lua `Win()`/`Loose()` calls now cross the Android input bridge.
 They freeze the finished simulation, commit the corresponding campaign

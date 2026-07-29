@@ -2943,6 +2943,11 @@ std::string SelectedSinglePlayerUnitHudStatus() {
     return SelectedLegacyUnitHudStatus();
 }
 
+std::string SelectedSinglePlayerUnitHudSnapshot() {
+    std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    return SelectedLegacyUnitHudSnapshot();
+}
+
 std::string SinglePlayerRuntimeReport() {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
     size_t terrain_layer_triangles = 0;
@@ -3183,6 +3188,15 @@ Java_com_nival_blitzkrieg2_NativeBridge_getSelectedUnitHudStatus(
     const std::string status =
             bk2::android::SelectedSinglePlayerUnitHudStatus();
     return env->NewStringUTF(status.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_getSelectedUnitHudSnapshot(
+        JNIEnv* env,
+        jclass) {
+    const std::string snapshot =
+            bk2::android::SelectedSinglePlayerUnitHudSnapshot();
+    return env->NewStringUTF(snapshot.c_str());
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

@@ -25,6 +25,7 @@ bool StopSelectedSinglePlayerUnit();
 bool IsSinglePlayerRuntimeReady();
 std::string CurrentSinglePlayerMissionId();
 std::string SelectedSinglePlayerUnitHudStatus();
+std::string SelectedSinglePlayerUnitHudSnapshot();
 std::string SinglePlayerRuntimeReport();
 
 }  // namespace bk2::android

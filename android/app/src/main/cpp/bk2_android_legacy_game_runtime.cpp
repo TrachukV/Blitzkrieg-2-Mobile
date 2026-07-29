@@ -1395,6 +1395,31 @@ std::string SelectedLegacyUnitHudStatus() {
     return text.str();
 }
 
+std::string SelectedLegacyUnitHudSnapshot() {
+    if (!g_ready || g_selected_unit_id < 0) {
+        return std::string();
+    }
+    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+    if (unit == nullptr || !unit->IsAlive()) {
+        return std::string();
+    }
+    const NDb::SUnitBaseRPGStats* stats = unit->GetStats();
+    if (stats == nullptr ||
+        !std::isfinite(unit->GetHitPoints()) ||
+        !std::isfinite(stats->fMaxHP) ||
+        stats->fMaxHP <= 0.0f) {
+        return std::string();
+    }
+    std::ostringstream snapshot;
+    snapshot << "id=" << g_selected_unit_id
+             << ";kind=" << (unit->IsMech() ? "tank" : "soldier")
+             << ";hp=" << static_cast<int>(std::round(
+                    std::max(unit->GetHitPoints(), 0.0f)))
+             << ";max_hp="
+             << static_cast<int>(std::round(stats->fMaxHP));
+    return snapshot.str();
+}
+
 void HandleLegacyInputEvent(const char* event_name) {
     if (event_name == nullptr ||
         g_mission_outcome.load() != kLegacyMissionRunning) {
