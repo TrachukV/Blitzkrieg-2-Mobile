@@ -472,7 +472,12 @@ mesh's real bone bindings and vertex weights; compatible infantry instances
 advance those frames in the live mission. The bgfx backend submits a separate
 index layer per model texture. Direct DDS loading deliberately avoids the
 incomplete Android `ObjectRecordID` table. On the first USA mission the verified
-runtime loads all 31 referenced model textures for 31 material layers.
+runtime loads all 31 referenced model textures for 31 material layers. Model
+textures upload their complete shipped mip chain: allocating all DDS levels but
+uploading only level zero made buildings and vehicles turn into black
+silhouettes at the default camera distance. The full-chain path has been
+exercised on USA1.0, GB3.1, and GER1.0 with 37, 83, and 77 model textures
+respectively.
 
 The Android VFS resolves legacy asset paths case-insensitively while preserving
 the actual on-disk spelling. This is required for content such as GB3.1 whose

@@ -1972,7 +1972,7 @@ uint16_t ModelTextureHandle(const std::string& texture_path) {
     if (!IsValid(cached->second)) {
         return UINT16_MAX;
     }
-    EnsureLegacyTextureUploaded(cached->second, 0);
+    EnsureLegacyTextureMipChainUploaded(cached->second);
     return LegacyTextureHandleIndex(cached->second);
 }
 

@@ -14,6 +14,7 @@ void QueueLegacyTextureSmokeOverlay(float x, float y, float width, float height)
 void QueueLegacy2DQuadsSmokeOverlay(float x, float y, float width, float height);
 void ReleaseLegacyTextureGpuResources();
 void EnsureLegacyTextureUploaded(NGfx::CTexture* texture, int level);
+void EnsureLegacyTextureMipChainUploaded(NGfx::CTexture* texture);
 void ConfigureLegacyTerrainTexture(NGfx::CTexture* texture);
 uint16_t LegacyTextureHandleIndex(NGfx::CTexture* texture);
 NGfx::CTexture* LegacyTextureSmokeTexture();

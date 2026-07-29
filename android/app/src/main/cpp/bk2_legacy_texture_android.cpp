@@ -511,6 +511,21 @@ public:
 #endif
     }
 
+    void UploadMipChain() {
+        if (force_base_level_only_) {
+            if (uploaded_levels_ < 1) {
+                UploadLevel(0);
+            }
+            return;
+        }
+        if (uploaded_levels_ >= mip_levels_) {
+            return;
+        }
+        for (int level = 0; level < mip_levels_; ++level) {
+            UploadLevel(level);
+        }
+    }
+
     bool CopyLevelAs8888(CArray2D<SPixel8888>* result, int level) const {
         if (result == 0) {
             return false;
@@ -1600,6 +1615,12 @@ NGfx::CTexture* LegacyTextureSmokeTexture() {
 void EnsureLegacyTextureUploaded(NGfx::CTexture* texture, int level) {
     if (IsValid(texture) && !texture->HasGpuHandle()) {
         texture->UploadLevel(level);
+    }
+}
+
+void EnsureLegacyTextureMipChainUploaded(NGfx::CTexture* texture) {
+    if (IsValid(texture)) {
+        texture->UploadMipChain();
     }
 }
 
