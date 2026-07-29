@@ -46,6 +46,9 @@ public final class Blitzkrieg2Activity extends GameActivity {
     private ImageButton attackCommandButton;
     private ImageButton rotateCommandButton;
     private ImageButton spyglassCommandButton;
+    private ImageButton clearMinesCommandButton;
+    private ImageButton placeMinesCommandButton;
+    private ImageButton buildTrenchesCommandButton;
     private File hudDataRoot;
     private String displayedCommandSnapshot = "";
     private boolean outcomePolling;
@@ -394,6 +397,9 @@ public final class Blitzkrieg2Activity extends GameActivity {
         attackCommandButton = null;
         rotateCommandButton = null;
         spyglassCommandButton = null;
+        clearMinesCommandButton = null;
+        placeMinesCommandButton = null;
+        buildTrenchesCommandButton = null;
         final int cellSize = dp(36);
         for (int slot = 0; slot < slots.length; ++slot) {
             FrameLayout cell = new FrameLayout(this);
@@ -422,6 +428,12 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 attackCommandButton = button;
             } else if (spec.action == 6) {
                 rotateCommandButton = button;
+            } else if (spec.action == 18) {
+                placeMinesCommandButton = button;
+            } else if (spec.action == 19) {
+                clearMinesCommandButton = button;
+            } else if (spec.action == 21) {
+                buildTrenchesCommandButton = button;
             } else if (spec.action == 40) {
                 spyglassCommandButton = button;
             }
@@ -478,6 +490,18 @@ public final class Blitzkrieg2Activity extends GameActivity {
         }
         if (userAction == 40) {
             toggleTouchCommandMode(4);
+            return;
+        }
+        if (userAction == 19) {
+            toggleTouchCommandMode(5);
+            return;
+        }
+        if (userAction == 18) {
+            toggleTouchCommandMode(6);
+            return;
+        }
+        if (userAction == 21) {
+            toggleTouchCommandMode(7);
             return;
         }
         boolean performed = userAction == 39
@@ -573,6 +597,21 @@ public final class Blitzkrieg2Activity extends GameActivity {
         if (spyglassCommandButton != null) {
             spyglassCommandButton.setAlpha(mode == 4 ? 1.0f : 0.72f);
             spyglassCommandButton.setSelected(mode == 4);
+        }
+        if (clearMinesCommandButton != null) {
+            clearMinesCommandButton.setAlpha(
+                    mode == 5 ? 1.0f : 0.72f);
+            clearMinesCommandButton.setSelected(mode == 5);
+        }
+        if (placeMinesCommandButton != null) {
+            placeMinesCommandButton.setAlpha(
+                    mode == 6 ? 1.0f : 0.72f);
+            placeMinesCommandButton.setSelected(mode == 6);
+        }
+        if (buildTrenchesCommandButton != null) {
+            buildTrenchesCommandButton.setAlpha(
+                    mode == 7 ? 1.0f : 0.72f);
+            buildTrenchesCommandButton.setSelected(mode == 7);
         }
     }
 

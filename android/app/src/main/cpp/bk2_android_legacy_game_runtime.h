@@ -66,6 +66,13 @@ bool PerformSelectedLegacyUnitPointAction(
         int user_action,
         float world_x,
         float world_y);
+bool PerformSelectedLegacyUnitSegmentAction(
+        int user_action,
+        float start_world_x,
+        float start_world_y,
+        float end_world_x,
+        float end_world_y);
+bool CanSelectedLegacyUnitPerformAction(int user_action);
 bool AttackSelectedLegacyUnit(int target_unit_id);
 bool StopSelectedLegacyUnit();
 bool PerformSelectedLegacyUnitAction(int user_action);

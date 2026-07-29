@@ -1486,9 +1486,19 @@ bool PerformSelectedLegacyUnitPointAction(
     }
 
     EActionCommand command_type;
+    bool place_in_queue = false;
+    int command_number = 0;
     switch (user_action) {
         case NDb::USER_ACTION_ROTATE:
             command_type = ACTION_COMMAND_ROTATE_TO;
+            break;
+        case NDb::USER_ACTION_ENGINEER_PLACE_MINES:
+            command_type = ACTION_COMMAND_PLACEMINE;
+            place_in_queue = true;
+            command_number = 1;
+            break;
+        case NDb::USER_ACTION_ENGINEER_CLEAR_MINES:
+            command_type = ACTION_COMMAND_CLEARMINE;
             break;
         case NDb::USER_ACTION_SPYGLASS:
             command_type = ACTION_COMMAND_USE_SPYGLASS;
@@ -1501,7 +1511,8 @@ bool PerformSelectedLegacyUnitPointAction(
     Vis2AI(&target, world_x, world_y);
     SAIUnitCmd command(command_type, target);
     command.bFromAI = false;
-    theGroupLogic.UnitCommand(command, unit, false);
+    command.nNumber = command_number;
+    theGroupLogic.UnitCommand(command, unit, place_in_queue);
     g_android_move_active = false;
     g_android_move_log_millis = 0;
     g_attack_target_unit_id = -1;
@@ -1513,6 +1524,73 @@ bool PerformSelectedLegacyUnitPointAction(
             "; target=" + std::to_string(world_x) +
             "," + std::to_string(world_y));
     return true;
+}
+
+bool PerformSelectedLegacyUnitSegmentAction(
+        int user_action,
+        float start_world_x,
+        float start_world_y,
+        float end_world_x,
+        float end_world_y) {
+    if (!g_ready ||
+        g_selected_unit_id < 0 ||
+        user_action !=
+                NDb::USER_ACTION_ENGINEER_BUILD_ENTRENCHMENT) {
+        return false;
+    }
+    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+    if (unit == nullptr ||
+        !unit->IsAlive() ||
+        !unit->IsSelectable() ||
+        unit->GetPlayer() != 0 ||
+        !IsLegacyUnitAction(unit, user_action)) {
+        return false;
+    }
+
+    CVec2 start_target;
+    CVec2 end_target;
+    Vis2AI(&start_target, start_world_x, start_world_y);
+    Vis2AI(&end_target, end_world_x, end_world_y);
+
+    SAIUnitCmd begin_command(
+            ACTION_COMMAND_ENTRENCH_BEGIN,
+            start_target);
+    begin_command.bFromAI = false;
+    begin_command.nNumber = 1;
+    theGroupLogic.UnitCommand(begin_command, unit, false);
+
+    SAIUnitCmd end_command(
+            ACTION_COMMAND_ENTRENCH_END,
+            end_target);
+    end_command.bFromAI = false;
+    end_command.nNumber = 1;
+    theGroupLogic.UnitCommand(end_command, unit, true);
+
+    g_android_move_active = false;
+    g_android_move_log_millis = 0;
+    g_attack_target_unit_id = -1;
+    PublishPresentationEntities();
+    PlatformRuntime::instance().log_info(
+            std::string("player_unit_segment_action=") +
+            std::to_string(user_action) +
+            "; unit=" + std::to_string(g_selected_unit_id) +
+            "; start=" + std::to_string(start_world_x) +
+            "," + std::to_string(start_world_y) +
+            "; end=" + std::to_string(end_world_x) +
+            "," + std::to_string(end_world_y));
+    return true;
+}
+
+bool CanSelectedLegacyUnitPerformAction(int user_action) {
+    if (!g_ready || g_selected_unit_id < 0) {
+        return false;
+    }
+    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+    return unit != nullptr &&
+            unit->IsAlive() &&
+            unit->IsSelectable() &&
+            unit->GetPlayer() == 0 &&
+            IsLegacyUnitAction(unit, user_action);
 }
 
 bool AttackSelectedLegacyUnit(int target_unit_id) {
@@ -1692,6 +1770,12 @@ std::string SelectedLegacyUnitHudSnapshot() {
                  static_cast<int>(NDb::USER_ACTION_ROTATE),
                  static_cast<int>(NDb::USER_ACTION_ENTRENCH_SELF),
                  static_cast<int>(NDb::USER_ACTION_STAND_GROUND),
+                 static_cast<int>(
+                         NDb::USER_ACTION_ENGINEER_PLACE_MINES),
+                 static_cast<int>(
+                         NDb::USER_ACTION_ENGINEER_CLEAR_MINES),
+                 static_cast<int>(
+                         NDb::USER_ACTION_ENGINEER_BUILD_ENTRENCHMENT),
                  static_cast<int>(NDb::USER_ACTION_STOP),
                  static_cast<int>(NDb::USER_ACTION_SPYGLASS)}) {
         if (!actions.HasAction(action) ||

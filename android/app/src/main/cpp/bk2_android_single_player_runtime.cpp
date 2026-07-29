@@ -17,6 +17,7 @@
 #include "SceneB2/TerrainInfo.h"
 #include "Stats_B2_M1/DBMapInfo.h"
 #include "Stats_B2_M1/DBVisObj.h"
+#include "Stats_B2_M1/UserActions.h"
 #include "Stats_B2_M1/Vis2AI.h"
 #include "System/BinSaver.h"
 #include "System/VFSOperations.h"
@@ -115,9 +116,23 @@ enum class TouchCommandMode {
     Attack = 2,
     Rotate = 3,
     Spyglass = 4,
+    ClearMines = 5,
+    PlaceMines = 6,
+    BuildTrenches = 7,
 };
 
 TouchCommandMode g_touch_command_mode = TouchCommandMode::Contextual;
+bool g_trench_first_point_defined = false;
+float g_trench_first_world_x = 0.0f;
+float g_trench_first_world_y = 0.0f;
+int g_trench_first_unit_id = -1;
+
+void ResetPendingTrenchCommandLocked() {
+    g_trench_first_point_defined = false;
+    g_trench_first_world_x = 0.0f;
+    g_trench_first_world_y = 0.0f;
+    g_trench_first_unit_id = -1;
+}
 
 enum class ConvertedAnimationVariant {
     Base,
@@ -2980,6 +2995,7 @@ void ShutdownSinglePlayerRuntime() {
     g_muzzle_flash_texture_logged = false;
     g_destruction_effect_texture_logged = false;
     g_touch_command_mode = TouchCommandMode::Contextual;
+    ResetPendingTrenchCommandLocked();
     g_converted_geometries.clear();
     g_missing_converted_geometries.clear();
     g_move_converted_geometries.clear();
@@ -3085,6 +3101,7 @@ bool HandleSinglePlayerTap(
             return false;
         }
         g_touch_command_mode = TouchCommandMode::Contextual;
+        ResetPendingTrenchCommandLocked();
         PlatformRuntime::instance().log_info(
                 std::string(
                         "player_touch_command=attack; result=issued; target=") +
@@ -3107,6 +3124,7 @@ bool HandleSinglePlayerTap(
             return false;
         }
         g_touch_command_mode = TouchCommandMode::Contextual;
+        ResetPendingTrenchCommandLocked();
         PlatformRuntime::instance().log_info(
                 std::string(
                         "player_touch_command=move; result=issued; target=") +
@@ -3137,12 +3155,107 @@ bool HandleSinglePlayerTap(
             return false;
         }
         g_touch_command_mode = TouchCommandMode::Contextual;
+        ResetPendingTrenchCommandLocked();
         PlatformRuntime::instance().log_info(
                 std::string("player_touch_point_action=") +
                 std::to_string(user_action) +
                 "; result=issued; target=" +
                 std::to_string(world_x) + "," +
                 std::to_string(world_y));
+        return RefreshDynamicWorldMeshLocked(true);
+    }
+    if (g_touch_command_mode == TouchCommandMode::ClearMines ||
+        g_touch_command_mode == TouchCommandMode::PlaceMines) {
+        float world_x = 0.0f;
+        float world_y = 0.0f;
+        const int user_action =
+                g_touch_command_mode == TouchCommandMode::ClearMines
+                ? NDb::USER_ACTION_ENGINEER_CLEAR_MINES
+                : NDb::USER_ACTION_ENGINEER_PLACE_MINES;
+        if (!ScreenToTerrainLocked(
+                    screen_x,
+                    screen_y,
+                    viewport_width,
+                    viewport_height,
+                    &world_x,
+                    &world_y) ||
+            !PerformSelectedLegacyUnitPointAction(
+                    user_action,
+                    world_x,
+                    world_y)) {
+            PlatformRuntime::instance().log_info(
+                    std::string("player_touch_point_action=") +
+                    std::to_string(user_action) +
+                    "; result=invalid_target");
+            return false;
+        }
+        g_touch_command_mode = TouchCommandMode::Contextual;
+        ResetPendingTrenchCommandLocked();
+        PlatformRuntime::instance().log_info(
+                std::string("player_touch_point_action=") +
+                std::to_string(user_action) +
+                "; result=issued; target=" +
+                std::to_string(world_x) + "," +
+                std::to_string(world_y));
+        return RefreshDynamicWorldMeshLocked(true);
+    }
+    if (g_touch_command_mode == TouchCommandMode::BuildTrenches) {
+        float world_x = 0.0f;
+        float world_y = 0.0f;
+        if (!ScreenToTerrainLocked(
+                    screen_x,
+                    screen_y,
+                    viewport_width,
+                    viewport_height,
+                    &world_x,
+                    &world_y)) {
+            PlatformRuntime::instance().log_info(
+                    "player_touch_segment_action=21; "
+                    "result=invalid_target");
+            return false;
+        }
+        const int selected_unit_id = SelectedLegacyUnitId();
+        if (!CanSelectedLegacyUnitPerformAction(
+                    NDb::USER_ACTION_ENGINEER_BUILD_ENTRENCHMENT)) {
+            ResetPendingTrenchCommandLocked();
+            PlatformRuntime::instance().log_info(
+                    "player_touch_segment_action=21; "
+                    "result=action_unavailable");
+            return false;
+        }
+        if (!g_trench_first_point_defined ||
+            g_trench_first_unit_id != selected_unit_id) {
+            g_trench_first_point_defined = true;
+            g_trench_first_world_x = world_x;
+            g_trench_first_world_y = world_y;
+            g_trench_first_unit_id = selected_unit_id;
+            PlatformRuntime::instance().log_info(
+                    std::string("player_touch_segment_action=21; "
+                                "result=first_point; target=") +
+                    std::to_string(world_x) + "," +
+                    std::to_string(world_y));
+            return true;
+        }
+        if (!PerformSelectedLegacyUnitSegmentAction(
+                    NDb::USER_ACTION_ENGINEER_BUILD_ENTRENCHMENT,
+                    g_trench_first_world_x,
+                    g_trench_first_world_y,
+                    world_x,
+                    world_y)) {
+            PlatformRuntime::instance().log_info(
+                    "player_touch_segment_action=21; "
+                    "result=invalid_second_point");
+            return false;
+        }
+        PlatformRuntime::instance().log_info(
+                std::string("player_touch_segment_action=21; "
+                            "result=issued; start=") +
+                std::to_string(g_trench_first_world_x) + "," +
+                std::to_string(g_trench_first_world_y) +
+                "; end=" + std::to_string(world_x) + "," +
+                std::to_string(world_y));
+        g_touch_command_mode = TouchCommandMode::Contextual;
+        ResetPendingTrenchCommandLocked();
         return RefreshDynamicWorldMeshLocked(true);
     }
     const int friendly_unit = FindEntityNearScreenLocked(
@@ -3233,7 +3346,10 @@ bool HandleSinglePlayerTap(
 
 bool SetSinglePlayerTouchCommandMode(int mode) {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
-    if (!g_ready || g_user_paused || mode < 0 || mode > 4) {
+    if (!g_ready ||
+        g_user_paused ||
+        mode < 0 ||
+        mode > static_cast<int>(TouchCommandMode::BuildTrenches)) {
         return false;
     }
     const TouchCommandMode requested =
@@ -3244,16 +3360,52 @@ bool SetSinglePlayerTouchCommandMode(int mode) {
                 "player_touch_command_mode=rejected; reason=no_selection");
         return false;
     }
+    int required_action = NDb::USER_ACTION_UNKNOWN;
+    if (requested == TouchCommandMode::ClearMines) {
+        required_action = NDb::USER_ACTION_ENGINEER_CLEAR_MINES;
+    } else if (requested == TouchCommandMode::PlaceMines) {
+        required_action = NDb::USER_ACTION_ENGINEER_PLACE_MINES;
+    } else if (requested == TouchCommandMode::BuildTrenches) {
+        required_action =
+                NDb::USER_ACTION_ENGINEER_BUILD_ENTRENCHMENT;
+    }
+    if (required_action != NDb::USER_ACTION_UNKNOWN &&
+        !CanSelectedLegacyUnitPerformAction(required_action)) {
+        PlatformRuntime::instance().log_info(
+                "player_touch_command_mode=rejected; "
+                "reason=action_unavailable");
+        return false;
+    }
+    if (requested != g_touch_command_mode) {
+        ResetPendingTrenchCommandLocked();
+    }
     g_touch_command_mode = requested;
-    const char* name = requested == TouchCommandMode::Move
-            ? "move"
-            : requested == TouchCommandMode::Attack
-                    ? "attack"
-                    : requested == TouchCommandMode::Rotate
-                            ? "rotate"
-                            : requested == TouchCommandMode::Spyglass
-                                    ? "spyglass"
-                                    : "contextual";
+    const char* name = "contextual";
+    switch (requested) {
+        case TouchCommandMode::Move:
+            name = "move";
+            break;
+        case TouchCommandMode::Attack:
+            name = "attack";
+            break;
+        case TouchCommandMode::Rotate:
+            name = "rotate";
+            break;
+        case TouchCommandMode::Spyglass:
+            name = "spyglass";
+            break;
+        case TouchCommandMode::ClearMines:
+            name = "clear_mines";
+            break;
+        case TouchCommandMode::PlaceMines:
+            name = "place_mines";
+            break;
+        case TouchCommandMode::BuildTrenches:
+            name = "build_trenches";
+            break;
+        case TouchCommandMode::Contextual:
+            break;
+    }
     PlatformRuntime::instance().log_info(
             std::string("player_touch_command_mode=") + name);
     return true;
@@ -3270,6 +3422,7 @@ bool StopSelectedSinglePlayerUnit() {
         return false;
     }
     g_touch_command_mode = TouchCommandMode::Contextual;
+    ResetPendingTrenchCommandLocked();
     return RefreshDynamicWorldMeshLocked(true);
 }
 
@@ -3281,6 +3434,7 @@ bool PerformSelectedSinglePlayerUnitAction(int user_action) {
         return false;
     }
     g_touch_command_mode = TouchCommandMode::Contextual;
+    ResetPendingTrenchCommandLocked();
     return RefreshDynamicWorldMeshLocked(true);
 }
 
@@ -3291,6 +3445,7 @@ void SetSinglePlayerPaused(bool paused) {
     }
     g_user_paused = paused;
     g_touch_command_mode = TouchCommandMode::Contextual;
+    ResetPendingTrenchCommandLocked();
     AudioBackend().set_paused(paused);
     if (paused) {
         AudioOutput().pause();

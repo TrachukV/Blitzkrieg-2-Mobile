@@ -45,10 +45,11 @@ grid and hides enemies the player's party cannot see, and uses the shipped
 mission HUD, minimap, unit portraits, and hit bars. Its original 4x3 command
 grid is rebuilt from the selected legacy unit's available actions instead of a
 fixed mobile button row; Move, Attack, Rotate, Stop, Entrench, Stand Ground,
-and Spyglass reach the original simulation, while commands without a ported
-handler use their original disabled artwork. Original combat textures now
-provide tracer ribbons, muzzle flashes, and animated fire/smoke on destroyed
-mechanized units. See
+Spyglass, Clear Mines, Place Mines, and the original two-point Build Trenches
+command reach the original simulation, while commands without a ported handler
+use their original disabled artwork. Original combat textures now provide
+tracer ribbons, muzzle flashes, and animated fire/smoke on destroyed mechanized
+units. See
 [`android/README.md`](android/README.md) for build, content-staging, verification,
 and remaining-port details.
 

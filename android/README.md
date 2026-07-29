@@ -32,12 +32,14 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   mission HUD, minimap, selected-unit cards, hit bars, and the original 4x3
   command grid are active. The grid is populated from the selected legacy
   unit's `CUserActions`; Move, Attack, Rotate, Stop, Entrench, Stand Ground,
-  and Spyglass have native command round trips. Rotate and Spyglass enter
-  forced-point modes and send the next terrain tap through the original
-  `ACTION_COMMAND_ROTATE_TO` or `ACTION_COMMAND_USE_SPYGLASS` path. Unavailable
-  handlers render the shipped disabled icons. General runtime skinning,
-  remaining action-specific clips, command subpanels, briefings, and the rest
-  of the legacy UI are still pending.
+  Spyglass, Clear Mines, Place Mines, and Build Trenches have native command
+  round trips. Rotate, Spyglass, Clear Mines, and Place Mines consume the next
+  terrain tap. Build Trenches preserves the desktop two-point interaction and
+  sends `ACTION_COMMAND_ENTRENCH_BEGIN` followed by
+  `ACTION_COMMAND_ENTRENCH_END`. Unavailable handlers render the shipped
+  disabled icons. General runtime skinning, remaining action-specific clips,
+  command subpanels, briefings, and the rest of the legacy UI are still
+  pending.
 - `BK2_ENABLE_LEGACY_TEXTURE_RUNTIME=ON` links the Android
   `NGfx::CTexture`/`I2DBuffer` contract. Legacy callers can allocate textures,
   lock mip levels with `CTextureLock`, write the original pixel formats into CPU
@@ -602,6 +604,11 @@ Touch controls currently implemented:
   command mode, then tap its terrain destination or hostile target;
 - tap the original Stop HUD button to send `ACTION_COMMAND_STOP` immediately
   through `CGroupLogic`;
+- tap Clear Mines or Place Mines and then terrain to send the original
+  `ACTION_COMMAND_CLEARMINE` or `ACTION_COMMAND_PLACEMINE`; mine placement
+  retains the desktop command's visualization/queue flag;
+- tap Build Trenches, then tap its start and end points to queue the original
+  `ACTION_COMMAND_ENTRENCH_BEGIN` and `ACTION_COMMAND_ENTRENCH_END` pair;
 - tap the original F10 button to pause the legacy simulation and audio, show
   the prominent orange `PAUSED` indicator, and open the mission menu; closing
   the menu resumes both;
