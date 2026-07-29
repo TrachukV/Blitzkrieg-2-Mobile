@@ -140,10 +140,13 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   campaign mission with objective/reward preference, applies objective XP,
   statistics, a reinforcement call, leader assignment, Android-side unit kill
   events, leader XP/debt, favorite reinforcement tracking, and mission win, then
-  restores the previous state. The real simulation/`MapObj` kill feed is not
-  wired into this bridge yet; reinforcement XP-level mutations for non-leader
-  units, the munchkin medal check, UI statistics screen, and legacy tracker
-  object graph are also still not linked.
+  restores the previous state. Real AI combat now forwards the original
+  `CStatistics::UnitKilled` payload into this Android state as well, preserving
+  killer/victim players, reinforcement types, infantry classification, and
+  experience price for campaign matrices, player XP, and leader progress.
+  Reinforcement XP-level mutations for non-leader units, the munchkin medal
+  check, UI statistics screen, and the final legacy save object graph are still
+  not linked.
   The bridge can now continue the current campaign/chapter state into another
   enabled mission with `StartCurrentCampaignMissionState()` or
   `StartFirstEnabledCampaignMissionState()` without resetting player XP, won
@@ -588,9 +591,10 @@ Debug APKs also accept keyboard `F` to select the closest valid player/enemy
 pair and issue the real legacy attack command. Keyboard `T` emits a debug-only
 combat-effect payload between that pair to smoke-test the tracer renderer
 without pretending that an AI shot occurred. Keyboard `K` then kills a hostile
-infantry member through the real `CAIUnit::Die` path so the death presentation
-bridge can be smoke-tested. Keyboard `V` sends the same `local_win` event used
-by mission Lua, allowing campaign autosave and continuation to be tested without
+infantry member through the original `CStatistics::UnitKilled` and
+`CAIUnit::Die` paths so campaign statistics and death presentation can be
+smoke-tested together. Keyboard `V` sends the same `local_win` event used by
+mission Lua, allowing campaign autosave and continuation to be tested without
 completing a full battle. All four shortcuts are absent from release builds.
 
 `Data/Weapons` is required runtime DB payload. Without it, mine descriptors keep

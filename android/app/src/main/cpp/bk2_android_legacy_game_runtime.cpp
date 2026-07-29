@@ -14,6 +14,7 @@
 #include "AILogic/AIMap.h"
 #include "AILogic/AIUnit.h"
 #include "AILogic/NewUpdater.h"
+#include "AILogic/Statistics.h"
 #include "AILogic/UnitStates.h"
 #include "AILogic/UnitsIterators.h"
 #include "B2_M1_Terrain/DBTerrain.h"
@@ -64,6 +65,7 @@ extern int bk2_android_ai_debug_other_case;
 }
 
 extern CGroupLogic theGroupLogic;
+extern CStatistics theStatistics;
 
 namespace bk2::android {
 namespace {
@@ -106,6 +108,8 @@ struct TimedCombatEffect {
 std::vector<TimedCombatEffect> g_combat_effects;
 uint64_t g_infantry_shot_effect_count = 0;
 uint64_t g_mechanized_shot_effect_count = 0;
+uint64_t g_forwarded_unit_kill_count = 0;
+uint64_t g_forwarded_unit_kill_error_count = 0;
 struct PresentationCorpse {
     Bk2PresentationEntity entity{};
     uint64_t expires_millis = 0;
@@ -997,6 +1001,8 @@ void ResetReportState() {
     g_combat_effects.clear();
     g_infantry_shot_effect_count = 0;
     g_mechanized_shot_effect_count = 0;
+    g_forwarded_unit_kill_count = 0;
+    g_forwarded_unit_kill_error_count = 0;
     g_last_presentation_entities.clear();
     g_presentation_corpses.clear();
     g_presentation_death_count = 0;
@@ -1014,6 +1020,52 @@ void Bk2AndroidOnUnitDead(CCommonUnit* unit) {
     bk2::android::CapturePresentationCorpse(
             unit->GetUniqueIdQU(),
             unit->GetCenter());
+}
+
+void Bk2AndroidOnUnitKilled(
+        int player,
+        int killed_player,
+        float experience_price,
+        int killer_reinforcement_type,
+        int killed_reinforcement_type,
+        bool infantry_kill) {
+    const int rounded_experience_price = static_cast<int>(
+            std::lround(std::max(0.0f, experience_price)));
+    const MissionRuntimeResult result = RegisterUnitKill(
+            player,
+            -1,
+            killer_reinforcement_type,
+            killed_player,
+            -1,
+            killed_reinforcement_type,
+            rounded_experience_price,
+            infantry_kill);
+    if (result.ok) {
+        ++g_forwarded_unit_kill_count;
+        if (g_forwarded_unit_kill_count == 1) {
+            PlatformRuntime::instance().log_info(
+                    std::string("campaign_kill_forwarded=true; player=") +
+                    std::to_string(player) +
+                    "; killed_player=" +
+                    std::to_string(killed_player) +
+                    "; experience=" +
+                    std::to_string(rounded_experience_price) +
+                    "; mission_kills=" +
+                    std::to_string(result.state.mission_kill_events) +
+                    "; campaign_units_killed=" +
+                    std::to_string(result.state.campaign_units_killed) +
+                    "; player_xp_added=" +
+                    std::to_string(result.state.player_xp_added));
+        }
+        return;
+    }
+
+    ++g_forwarded_unit_kill_error_count;
+    if (g_forwarded_unit_kill_error_count == 1) {
+        PlatformRuntime::instance().log_info(
+                std::string("campaign_kill_forwarded=false; error=") +
+                result.error);
+    }
 }
 
 bool InitializeLegacyGameRuntime(
@@ -1383,9 +1435,23 @@ void HandleLegacyInputEvent(const char* event_name) {
             }
         }
         if (target != nullptr && target->IsAlive()) {
+            CAIUnit* attacker =
+                    CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
             PlatformRuntime::instance().log_info(
                     std::string("debug_kill_attack_target=") +
                     std::to_string(target->GetUniqueIdQU()));
+            if (attacker != nullptr &&
+                attacker->IsAlive() &&
+                attacker->GetPlayer() != target->GetPlayer() &&
+                target->GetStats() != nullptr) {
+                theStatistics.UnitKilled(
+                        attacker->GetPlayer(),
+                        target->GetPlayer(),
+                        target->GetStats()->fExpPrice,
+                        attacker->GetReinforcementType(),
+                        target->GetReinforcementType(),
+                        target->IsInfantry());
+            }
             target->Die(false, target->GetHitPoints() + 1.0f);
         }
 #endif
@@ -1442,6 +1508,8 @@ void ShutdownLegacyGameRuntime() {
     g_combat_effects.clear();
     g_infantry_shot_effect_count = 0;
     g_mechanized_shot_effect_count = 0;
+    g_forwarded_unit_kill_count = 0;
+    g_forwarded_unit_kill_error_count = 0;
     g_mission_outcome.store(kLegacyMissionRunning);
     g_pending_mission_outcome.store(kLegacyMissionRunning);
     g_android_move_active = false;
@@ -1482,6 +1550,10 @@ std::string LegacyGameRuntimeReport() {
            << "; mechanized_shot_effects="
            << g_mechanized_shot_effect_count
            << "; active_combat_effects=" << g_combat_effects.size()
+           << "; forwarded_unit_kills="
+           << g_forwarded_unit_kill_count
+           << "; forwarded_unit_kill_errors="
+           << g_forwarded_unit_kill_error_count
            << "; presented_deaths=" << g_presentation_death_count
            << "; active_corpses=" << g_presentation_corpses.size()
            << "; normalized_rpg_stats=" << g_normalized_rpg_stats_count

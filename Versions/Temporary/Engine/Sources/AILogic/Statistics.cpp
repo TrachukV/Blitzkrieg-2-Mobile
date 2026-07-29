@@ -10,6 +10,13 @@
 #if defined(BK2_ANDROID)
 namespace bk2::android {
 void Bk2AndroidOnUnitDead(CCommonUnit* unit);
+void Bk2AndroidOnUnitKilled(
+		int player,
+		int killedPlayer,
+		float experiencePrice,
+		int killerReinforcementType,
+		int killedReinforcementType,
+		bool infantryKill);
 }
 #endif
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -70,6 +77,16 @@ void CStatistics::UnitKilled( const int nPlayer, const int nKilledUnitsPlayer, c
 	info.eKilledReinfType = eDeadType;
 	info.fExpPrice = fTotalAIPrice;
 	info.bInfantryKill = bInfantry;
+
+#if defined(BK2_ANDROID)
+	bk2::android::Bk2AndroidOnUnitKilled(
+			nPlayer,
+			nKilledUnitsPlayer,
+			fTotalAIPrice,
+			static_cast<int>( eKillerType ),
+			static_cast<int>( eDeadType ),
+			bInfantry );
+#endif
 
 	if ( nPlayer == theDipl.GetMyNumber() )
 		updater.AddUpdate( EFB_GAIN_EXP, eKillerType, 0 );
