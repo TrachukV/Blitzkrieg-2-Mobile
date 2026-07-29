@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from functools import lru_cache
 import re
+import struct
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -24,6 +25,12 @@ LEGACY_RELOCATED_PREFIXES = (
     "scene/texandmats/all/",
 )
 
+RESOURCE_UUID_PATTERN = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
 MISSING_MODEL_FALLBACKS = {
     (
         "units/technics/german/tanks/pz_iv_f2/"
@@ -36,6 +43,15 @@ MISSING_MODEL_FALLBACKS = {
         "buildings/common/concretedot_2/1_1_model.xdb"
     ): (
         "buildings/common/concretedot/summer_whole_model.xdb"
+    ),
+}
+
+UNSUPPORTED_MODEL_FALLBACKS = {
+    (
+        "units/technics/gb/ships/lst_lsi_gb/1_model.xdb"
+    ): (
+        "units/technics/gb/ships/elko/summer_whole_model.xdb",
+        1.6,
     ),
 }
 
@@ -52,6 +68,107 @@ def canonical_legacy_stem(value: str) -> str:
     value = value.lower().removesuffix("_visobj")
     value = re.sub(r"(?<![0-9])0+([0-9]+)", r"\1", value)
     return re.sub(r"[^a-z0-9]", "", value)
+
+
+def runtime_geometry_id(value: str) -> int | None:
+    if value.isdigit():
+        return int(value)
+    if not RESOURCE_UUID_PATTERN.fullmatch(value):
+        return None
+    result = 0x811C9DC5
+    for byte in value.upper().encode("ascii"):
+        result ^= byte
+        result = (result * 0x01000193) & 0xFFFFFFFF
+    return 0x40000000 | (result & 0x3FFFFFFF)
+
+
+def geometry_resource_key(root: ET.Element) -> str | None:
+    record = root.attrib.get("ObjectRecordID", "").strip()
+    if record.isdigit():
+        return record
+    uid = child(root, "uid")
+    value = (uid.text or "").strip().upper() if uid is not None else ""
+    return value if RESOURCE_UUID_PATTERN.fullmatch(value) else None
+
+
+def geometry_resource_path(data_root: Path, value: str) -> Path | None:
+    direct = data_root / "bin" / "Geometries" / value
+    if direct.is_file():
+        return direct
+    resolved = resolve_relative_path(
+        str(data_root),
+        f"bin/Geometries/{value}",
+    )
+    return resolved if resolved is not None and resolved.is_file() else None
+
+
+@lru_cache(maxsize=None)
+def granny_resource_supported(resource_value: str) -> bool:
+    """Return whether the open converter can decode every Granny section."""
+    try:
+        resource = Path(resource_value)
+        with resource.open("rb") as stream:
+            header = stream.read(52)
+            if len(header) != 52:
+                return False
+            version, _, _, section_offset, section_count = struct.unpack_from(
+                "<IIIII",
+                header,
+                32,
+            )
+            if version not in (6, 7) or section_count > 64:
+                return False
+            stream.seek(32 + section_offset)
+            sections = stream.read(section_count * 44)
+    except OSError:
+        return False
+    if len(sections) != section_count * 44:
+        return False
+    return all(
+        struct.unpack_from("<I", sections, section_index * 44)[0] in (0, 1)
+        for section_index in range(section_count)
+    )
+
+
+def geometry_resource_supported(data_root: Path, value: str) -> bool:
+    resource = geometry_resource_path(data_root, value)
+    return (
+        resource is not None
+        and granny_resource_supported(str(resource.resolve()))
+    )
+
+
+def converted_geometry_exists(
+    converted_geometry_root: Path | None,
+    runtime_id: int,
+) -> bool:
+    return (
+        converted_geometry_root is None
+        or (converted_geometry_root / f"{runtime_id}.bk2mesh").is_file()
+    )
+
+
+def validate_geometry_resource_ids(data_root: Path) -> None:
+    geometry_root = resolve_relative_path(
+        str(data_root),
+        "bin/Geometries",
+    )
+    if geometry_root is None or not geometry_root.is_dir():
+        return
+    runtime_ids: dict[int, str] = {}
+    for resource in geometry_root.iterdir():
+        if not resource.is_file():
+            continue
+        runtime_id = runtime_geometry_id(resource.name)
+        if runtime_id is None:
+            continue
+        previous = runtime_ids.get(runtime_id)
+        if previous is not None and previous != resource.name:
+            raise ValueError(
+                "Runtime geometry ID collision: "
+                f"{previous} and {resource.name} -> {runtime_id}"
+            )
+        runtime_ids[runtime_id] = resource.name
 
 
 @lru_cache(maxsize=None)
@@ -199,6 +316,7 @@ def model_path(data_root: Path, vis_path: Path) -> Path | None:
 def geometry_info(
     data_root: Path,
     model: Path,
+    converted_geometry_root: Path | None,
 ) -> tuple[int, list[int], float] | None:
     model_root = parse_root(model)
     if model_root is None:
@@ -209,12 +327,20 @@ def geometry_info(
     geometry = parse_root(geometry_path)
     if geometry is None:
         return None
-    value = geometry.attrib.get("ObjectRecordID", "")
-    if not value.isdigit():
+    value = geometry_resource_key(geometry)
+    if value is None:
         return None
-    geometry_record_id = int(value)
+    geometry_record_id = runtime_geometry_id(value)
+    if geometry_record_id is None:
+        return None
     geometry_scale = 1.0
-    if not (data_root / "bin" / "Geometries" / value).is_file():
+    if (
+        not geometry_resource_supported(data_root, value)
+        or not converted_geometry_exists(
+            converted_geometry_root,
+            geometry_record_id,
+        )
+    ):
         ai_geometry_path = href_child_path(
             data_root,
             geometry_path,
@@ -227,15 +353,23 @@ def geometry_info(
             else None
         )
         ai_record = (
-            ai_geometry.attrib.get("ObjectRecordID", "")
+            geometry_resource_key(ai_geometry)
             if ai_geometry is not None
-            else ""
+            else None
         )
         if (
-            ai_record.isdigit()
-            and (data_root / "bin" / "Geometries" / ai_record).is_file()
+            ai_record is not None
+            and geometry_resource_supported(data_root, ai_record)
         ):
-            geometry_record_id = int(ai_record)
+            geometry_record_id = runtime_geometry_id(ai_record)
+            if (
+                geometry_record_id is None
+                or not converted_geometry_exists(
+                    converted_geometry_root,
+                    geometry_record_id,
+                )
+            ):
+                return None
             # Matches AI_TO_VIS from Stats_B2_M1/Vis2AI.h.
             geometry_scale = 2.75 / 64.0
         else:
@@ -297,16 +431,28 @@ def texture_paths(data_root: Path, model: Path) -> list[str]:
 def binding_from_vis_path(
     data_root: Path,
     vis_path: Path,
+    converted_geometry_root: Path | None,
 ) -> tuple[int, list[int], list[str], float] | None:
     model = model_path(data_root, vis_path)
     if model is None:
         return None
-    geometry = geometry_info(data_root, model)
+    try:
+        model_key = model.relative_to(data_root).as_posix().lower()
+    except ValueError:
+        model_key = ""
+    geometry_scale_multiplier = 1.0
+    unsupported_fallback = UNSUPPORTED_MODEL_FALLBACKS.get(model_key)
+    if unsupported_fallback is not None:
+        fallback_value, fallback_scale = unsupported_fallback
+        fallback_model = resolve_relative_path(
+            str(data_root),
+            fallback_value,
+        )
+        if fallback_model is not None:
+            model = fallback_model
+            geometry_scale_multiplier = fallback_scale
+    geometry = geometry_info(data_root, model, converted_geometry_root)
     if geometry is None:
-        try:
-            model_key = model.relative_to(data_root).as_posix().lower()
-        except ValueError:
-            model_key = ""
         fallback_value = MISSING_MODEL_FALLBACKS.get(model_key)
         fallback_model = (
             resolve_relative_path(str(data_root), fallback_value)
@@ -315,10 +461,15 @@ def binding_from_vis_path(
         )
         if fallback_model is not None:
             model = fallback_model
-            geometry = geometry_info(data_root, model)
+            geometry = geometry_info(
+                data_root,
+                model,
+                converted_geometry_root,
+            )
     if geometry is None:
         return None
     geometry_record_id, material_quantities, geometry_scale = geometry
+    geometry_scale *= geometry_scale_multiplier
     return (
         geometry_record_id,
         material_quantities,
@@ -341,7 +492,9 @@ def fnv1a64(value: str) -> int:
 
 def build_index(
     data_root: Path,
+    converted_geometry_root: Path | None = None,
 ) -> dict[tuple[int, int], tuple[int, int, list[int], list[str], float]]:
+    validate_geometry_resource_ids(data_root)
     result: dict[
         tuple[int, int],
         tuple[int, int, list[int], list[str], float],
@@ -362,7 +515,11 @@ def build_index(
                 visual.attrib.get("href", ""),
             )
             binding = (
-                binding_from_vis_path(data_root, vis_path)
+                binding_from_vis_path(
+                    data_root,
+                    vis_path,
+                    converted_geometry_root,
+                )
                 if vis_path is not None
                 else None
             )
@@ -392,7 +549,11 @@ def build_index(
                     vis.attrib.get("href", ""),
                 )
                 binding = (
-                    binding_from_vis_path(data_root, vis_path)
+                    binding_from_vis_path(
+                        data_root,
+                        vis_path,
+                        converted_geometry_root,
+                    )
                     if vis_path is not None
                     else None
                 )
@@ -428,7 +589,11 @@ def build_index(
                     visual_object.attrib.get("href", ""),
                 )
                 binding = (
-                    binding_from_vis_path(data_root, vis_path)
+                    binding_from_vis_path(
+                        data_root,
+                        vis_path,
+                        converted_geometry_root,
+                    )
                     if vis_path is not None
                     else None
                 )
@@ -485,7 +650,11 @@ def build_index(
                     vis.attrib.get("href", ""),
                 )
                 binding = (
-                    binding_from_vis_path(data_root, vis_path)
+                    binding_from_vis_path(
+                        data_root,
+                        vis_path,
+                        converted_geometry_root,
+                    )
                     if vis_path is not None
                     else None
                 )
@@ -510,11 +679,17 @@ def build_index(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument("--converted-geometry-root", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
     data_root = args.data_root.resolve()
-    index = build_index(data_root)
+    converted_geometry_root = (
+        args.converted_geometry_root.resolve()
+        if args.converted_geometry_root is not None
+        else None
+    )
+    index = build_index(data_root, converted_geometry_root)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "# path_hash, stats_id, geometry_id, material_quantities, texture_paths, frame_index, geometry_scale",

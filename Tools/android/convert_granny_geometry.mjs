@@ -9,6 +9,24 @@ const MAGIC = Buffer.from([0x42, 0x4b, 0x32, 0x4d, 0x53, 0x48, 0x31, 0x00]);
 const FORMAT_VERSION = 3;
 const VERTEX_FLOAT_COUNT = 8;
 const DEFAULT_ANIMATION_FRAME_COUNT = 16;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isResourceId(value) {
+  return /^\d+$/.test(value) || UUID_PATTERN.test(value);
+}
+
+function runtimeGeometryId(value) {
+  if (/^\d+$/.test(value)) {
+    return Number.parseInt(value, 10);
+  }
+  let hash = 0x811c9dc5;
+  for (const byte of Buffer.from(value.toUpperCase(), "ascii")) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return (0x40000000 | (hash & 0x3fffffff)) >>> 0;
+}
 
 function usage() {
   process.stderr.write(
@@ -16,6 +34,7 @@ function usage() {
       "--input <Data/bin/Geometries> --output <Converted/Geometries> " +
       "[--idle-animation <Data/bin/Animations/resource>] " +
       "[--animation-frames <count>] " +
+      "[--skip-unsupported] " +
       "[--all | <resource-id> ...]\n",
   );
 }
@@ -26,6 +45,7 @@ function parseArguments(argv) {
   let idleAnimation = "";
   let animationFrames = DEFAULT_ANIMATION_FRAME_COUNT;
   let all = false;
+  let skipUnsupported = false;
   const ids = [];
   for (let index = 0; index < argv.length; ++index) {
     const argument = argv[index];
@@ -39,7 +59,9 @@ function parseArguments(argv) {
       animationFrames = Number.parseInt(argv[++index] ?? "", 10);
     } else if (argument === "--all") {
       all = true;
-    } else if (/^\d+$/.test(argument)) {
+    } else if (argument === "--skip-unsupported") {
+      skipUnsupported = true;
+    } else if (isResourceId(argument)) {
       ids.push(argument);
     } else {
       throw new Error(`Unknown argument: ${argument}`);
@@ -63,6 +85,7 @@ function parseArguments(argv) {
     idleAnimation: idleAnimation ? resolve(idleAnimation) : "",
     animationFrames,
     all,
+    skipUnsupported,
     ids,
   };
 }
@@ -287,19 +310,31 @@ function serializeGeometry(parsed, animation, animationFrameCount) {
 }
 
 async function resourceIds(options) {
-  if (!options.all) {
-    return [...new Set(options.ids)].sort((left, right) => Number(left) - Number(right));
+  const ids = options.all
+    ? (await readdir(options.input, { withFileTypes: true }))
+        .filter((entry) => entry.isFile() && isResourceId(entry.name))
+        .map((entry) => entry.name)
+    : [...new Set(options.ids)];
+  const runtimeIds = new Map();
+  for (const id of ids) {
+    const runtimeId = runtimeGeometryId(id);
+    const previous = runtimeIds.get(runtimeId);
+    if (previous !== undefined && previous !== id) {
+      throw new Error(
+        `Runtime geometry ID collision: ${previous} and ${id} -> ${runtimeId}`,
+      );
+    }
+    runtimeIds.set(runtimeId, id);
   }
-  const entries = await readdir(options.input, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isFile() && /^\d+$/.test(entry.name))
-    .map((entry) => entry.name)
-    .sort((left, right) => Number(left) - Number(right));
+  return ids.sort((left, right) =>
+    left.localeCompare(right, "en", { numeric: true }),
+  );
 }
 
 async function convertOne(options, id, animation) {
   const source = join(options.input, id);
-  const target = join(options.output, `${id}.bk2mesh`);
+  const runtimeId = runtimeGeometryId(id);
+  const target = join(options.output, `${runtimeId}.bk2mesh`);
   const sourceBytes = await readFile(source);
   // Geometry conversion does not need embedded Granny textures. Avoiding the
   // texture path also keeps unrelated legacy IGC payloads from blocking a mesh.
@@ -312,6 +347,7 @@ async function convertOne(options, id, animation) {
   await writeFile(target, output);
   return {
     id,
+    runtimeId,
     sourceBytes: sourceBytes.length,
     outputBytes: output.length,
     meshes: meshes.length,
@@ -340,6 +376,7 @@ async function main() {
   const ids = await resourceIds(options);
   let converted = 0;
   let skipped = 0;
+  let blocked = 0;
   let failed = 0;
   let vertices = 0;
   let triangles = 0;
@@ -355,15 +392,21 @@ async function main() {
       animatedMeshes += result.animatedMeshes;
       if (!options.all) {
         process.stdout.write(
-          `geometry=${result.id}; meshes=${result.meshes}; ` +
+          `geometry=${result.id}; runtime_id=${result.runtimeId}; ` +
+            `meshes=${result.meshes}; ` +
             `animated_meshes=${result.animatedMeshes}; ` +
             `vertices=${result.vertices}; triangles=${result.triangles}; ` +
-            `output=${basename(join(options.output, `${id}.bk2mesh`))}\n`,
+            `output=${basename(join(options.output, `${result.runtimeId}.bk2mesh`))}\n`,
         );
       }
     } catch (error) {
       if (error.message === "resource has no renderable meshes") {
         ++skipped;
+      } else if (
+        options.skipUnsupported &&
+        /^unsupported compression \d+$/.test(error.message)
+      ) {
+        ++blocked;
       } else {
         ++failed;
         process.stderr.write(`geometry=${id}; error=${error.message}\n`);
@@ -372,7 +415,8 @@ async function main() {
   }
   process.stdout.write(
     `geometry_conversion_complete=1; requested=${ids.length}; ` +
-      `converted=${converted}; skipped=${skipped}; failed=${failed}; vertices=${vertices}; ` +
+      `converted=${converted}; skipped=${skipped}; blocked=${blocked}; ` +
+      `failed=${failed}; vertices=${vertices}; ` +
       `triangles=${triangles}; animated_meshes=${animatedMeshes}; ` +
       `output_bytes=${outputBytes}\n`,
   );

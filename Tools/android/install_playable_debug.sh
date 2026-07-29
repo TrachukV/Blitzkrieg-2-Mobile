@@ -33,15 +33,17 @@ if [[ "${BK2_SKIP_GEOMETRY_CONVERSION:-0}" != "1" ]]; then
     fi
     (
         cd "${SCRIPT_DIR}"
-        python3 build_geometry_index.py \
-            --data-root "${DATA_SOURCE}/Data" \
-            --output "${DATA_SOURCE}/Converted/geometry_index.tsv"
         npm install --ignore-scripts
         node convert_granny_geometry.mjs \
             --input "${GEOMETRY_SOURCE}" \
             --output "${CONVERTED_GEOMETRY}" \
             --idle-animation "${DATA_SOURCE}/Data/bin/Animations/3977" \
+            --skip-unsupported \
             --all
+        python3 build_geometry_index.py \
+            --data-root "${DATA_SOURCE}/Data" \
+            --converted-geometry-root "${CONVERTED_GEOMETRY}" \
+            --output "${DATA_SOURCE}/Converted/geometry_index.tsv"
     )
 fi
 

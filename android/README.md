@@ -282,10 +282,6 @@ python3 tools/android/prepare_data_android.py \
   --output DataAndroid \
   --mode symlink
 
-python3 Tools/android/build_geometry_index.py \
-  --data-root Versions/Current/Data \
-  --output DataAndroid/Converted/geometry_index.tsv
-
 (
   cd Tools/android
   npm install --ignore-scripts
@@ -293,8 +289,14 @@ python3 Tools/android/build_geometry_index.py \
     --input ../../Versions/Current/Data/bin/Geometries \
     --output ../../DataAndroid/Converted/Geometries \
     --idle-animation ../../Versions/Current/Data/bin/Animations/3977 \
+    --skip-unsupported \
     --all
 )
+
+python3 Tools/android/build_geometry_index.py \
+  --data-root Versions/Current/Data \
+  --converted-geometry-root DataAndroid/Converted/Geometries \
+  --output DataAndroid/Converted/geometry_index.tsv
 
 clang++ -std=c++17 -Wall -Wextra -Werror \
   -Iandroid/app/src/main/cpp \
@@ -489,6 +491,27 @@ These are original game assets but are documented stand-ins, not recovered
 missing meshes. On GER1.0 this takes `missing_converted_geometry` from four to
 zero, removes the only dynamic proxy, and reduces diagnostic fallbacks from 95
 to 91.
+
+Granny resources can use either numeric filenames or UUID filenames. The
+converter and index now assign the latter the same stable positive runtime ID
+and reject collisions before conversion. The current complete pass requests
+2,817 resources: 2,510 convert, 44 contain no renderable mesh, 263 are reported
+as blocked, and none fail unexpectedly. The blocked UUID files use Granny
+Oodle1 compression; the bundled open decoder supports Oodle0, while the
+repository's Oodle1 implementation is only present in the original 32-bit
+Windows `granny2.dll`. Unsupported files are not reported as converted.
+The offline index reads the Granny section table as well and omits those
+blocked resources, so a mission cannot resolve an Oodle1 descriptor to a
+nonexistent Android cache file. It is also generated against the completed
+cache directory, which removes streams that decoded successfully but contained
+no renderable mesh.
+
+USA1.0's LST/LSI is one of those Oodle1 resources. Until a Windows offline
+conversion stage is added, it uses the shipped ELKO hull at 1.6 scale as an
+explicit naval stand-in. This removes the last USA1.0 dynamic proxy and reduces
+its diagnostic fallbacks from 17 to 15. The original LST descriptor, texture,
+and compressed geometry remain untouched so the stand-in can be removed when
+that conversion stage is available.
 
 The Android VFS resolves legacy asset paths case-insensitively while preserving
 the actual on-disk spelling. This is required for content such as GB3.1 whose
