@@ -27,6 +27,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <fstream>
+#include <jni.h>
 #include <limits>
 #include <mutex>
 #include <sstream>
@@ -64,6 +65,10 @@ std::vector<CObj<NGfx::CTexture> > g_terrain_layer_textures;
 std::vector<std::string> g_terrain_layer_texture_paths;
 size_t g_terrain_layer_count = 0;
 size_t g_terrain_layer_texture_count = 0;
+std::vector<int> g_terrain_type_map;
+std::vector<uint32_t> g_terrain_type_colors;
+int g_terrain_type_width = 0;
+int g_terrain_type_height = 0;
 size_t g_converted_geometry_instance_count = 0;
 size_t g_converted_geometry_fallback_count = 0;
 
@@ -444,22 +449,33 @@ bool BuildTerrainLayers(
 
     mesh->layers.clear();
     mesh->layers.resize(terra_set->terraTypes.size());
+    g_terrain_type_colors.resize(terra_set->terraTypes.size(), 0xff42583du);
     for (size_t index = 0; index < mesh->layers.size(); ++index) {
         TerrainLayer& layer = mesh->layers[index];
         layer.terrain_type_index = static_cast<int>(index);
         const NDb::STGTerraType* type = terra_set->terraTypes[index].GetPtr();
         if (type != nullptr) {
             layer.fallback_argb = static_cast<uint32_t>(type->nColor);
+            g_terrain_type_colors[index] = layer.fallback_argb;
         }
     }
 
     const int width = HeightWidth(info);
     const int height = HeightHeight(info);
+    g_terrain_type_width = width - 1;
+    g_terrain_type_height = height - 1;
+    g_terrain_type_map.assign(
+            static_cast<size_t>(g_terrain_type_width) *
+                    g_terrain_type_height,
+            -1);
     for (int y = 0; y < height - 1; ++y) {
         for (int x = 0; x < width - 1; ++x) {
             const int map_x = std::min(x, info.tileTerraMap.GetSizeX() - 1);
             const int map_y = std::min(y, info.tileTerraMap.GetSizeY() - 1);
             const int type_index = info.tileTerraMap[map_y][map_x];
+            g_terrain_type_map[
+                    static_cast<size_t>(y * g_terrain_type_width + x)] =
+                    type_index;
             if (type_index < 0 ||
                 type_index >= static_cast<int>(mesh->layers.size())) {
                 continue;
@@ -1925,6 +1941,10 @@ void ShutdownSinglePlayerRuntime() {
     g_terrain_texture_path.clear();
     g_terrain_layer_count = 0;
     g_terrain_layer_texture_count = 0;
+    g_terrain_type_map.clear();
+    g_terrain_type_colors.clear();
+    g_terrain_type_width = 0;
+    g_terrain_type_height = 0;
     g_converted_geometry_instance_count = 0;
     g_converted_geometry_fallback_count = 0;
     g_converted_geometries.clear();
@@ -2136,4 +2156,110 @@ std::string SinglePlayerRuntimeReport() {
     return report.str();
 }
 
+std::vector<int32_t> MissionMinimapArgb(int width, int height) {
+    std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    if (!g_ready ||
+        width <= 0 ||
+        height <= 0 ||
+        width > 1024 ||
+        height > 1024 ||
+        g_terrain_type_width <= 0 ||
+        g_terrain_type_height <= 0 ||
+        g_terrain_type_map.empty()) {
+        return {};
+    }
+    std::vector<int32_t> pixels(
+            static_cast<size_t>(width) * height,
+            static_cast<int32_t>(0xff1d3027u));
+    for (int y = 0; y < height; ++y) {
+        const int source_y = std::min(
+                g_terrain_type_height - 1,
+                (height - 1 - y) * g_terrain_type_height / height);
+        for (int x = 0; x < width; ++x) {
+            const int source_x = std::min(
+                    g_terrain_type_width - 1,
+                    x * g_terrain_type_width / width);
+            const int type_index = g_terrain_type_map[
+                    static_cast<size_t>(
+                            source_y * g_terrain_type_width + source_x)];
+            if (type_index >= 0 &&
+                type_index <
+                        static_cast<int>(g_terrain_type_colors.size())) {
+                uint32_t color = g_terrain_type_colors[type_index];
+                color = 0xff000000u | (color & 0x00ffffffu);
+                pixels[static_cast<size_t>(y * width + x)] =
+                        static_cast<int32_t>(color);
+            }
+        }
+    }
+
+    const Bk2PresentationSnapshotInfo snapshot =
+            bk2_presentation_snapshot_info();
+    std::vector<Bk2PresentationEntity> entities(snapshot.entity_count);
+    if (!entities.empty() &&
+        bk2_presentation_copy_entities(
+                entities.data(),
+                entities.size()) == entities.size()) {
+        const float world_size = std::max(g_terrain_mesh.world_size, 1.0f);
+        for (const Bk2PresentationEntity& entity : entities) {
+            if ((entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) == 0) {
+                continue;
+            }
+            const int center_x = std::clamp(
+                    static_cast<int>(
+                            entity.x / world_size * static_cast<float>(width)),
+                    0,
+                    width - 1);
+            const int center_y = std::clamp(
+                    height - 1 -
+                            static_cast<int>(
+                                    entity.y / world_size *
+                                    static_cast<float>(height)),
+                    0,
+                    height - 1);
+            const int radius =
+                    (entity.flags & BK2_PRESENTATION_ENTITY_MECHANIZED) != 0
+                    ? 2
+                    : 1;
+            const uint32_t color = entity.player == 0
+                    ? 0xff70e08au
+                    : 0xffe55f54u;
+            for (int dy = -radius; dy <= radius; ++dy) {
+                for (int dx = -radius; dx <= radius; ++dx) {
+                    const int px = center_x + dx;
+                    const int py = center_y + dy;
+                    if (px >= 0 && px < width && py >= 0 && py < height) {
+                        pixels[static_cast<size_t>(py * width + px)] =
+                                static_cast<int32_t>(color);
+                    }
+                }
+            }
+        }
+    }
+    return pixels;
+}
+
 }  // namespace bk2::android
+
+extern "C" JNIEXPORT jintArray JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_getMissionMinimapArgb(
+        JNIEnv* env,
+        jclass,
+        jint width,
+        jint height) {
+    const std::vector<int32_t> pixels =
+            bk2::android::MissionMinimapArgb(width, height);
+    if (pixels.empty()) {
+        return nullptr;
+    }
+    jintArray result = env->NewIntArray(
+            static_cast<jsize>(pixels.size()));
+    if (result != nullptr) {
+        env->SetIntArrayRegion(
+                result,
+                0,
+                static_cast<jsize>(pixels.size()),
+                reinterpret_cast<const jint*>(pixels.data()));
+    }
+    return result;
+}

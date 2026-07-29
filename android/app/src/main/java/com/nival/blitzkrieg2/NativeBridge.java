@@ -22,6 +22,7 @@ final class NativeBridge {
     static native String runMissionCheckpointProbe();
     static native String getMissionOutcome();
     static native String getMissionHudStatus();
+    static native int[] getMissionMinimapArgb(int width, int height);
     static native void forfeitMission();
 
     static void attachActivity(Blitzkrieg2Activity activity) {

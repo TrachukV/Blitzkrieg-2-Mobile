@@ -484,16 +484,21 @@ Touch controls currently implemented:
 - pinch to zoom;
 - rotate with a two-finger twist.
 
-The in-game Android HUD shows the active mission and these controls. Its
-`Missions` button returns to the native single-player mission list without
-terminating the app process. It also shows completed, active, and failed
-objective counts and the localized header of the current primary objective.
-The header is decoded directly from the shipped UTF-16 text resource through
-the case-insensitive Android VFS instead of relying on the legacy
-16-bit-`wchar_t` assumption. The Android client now drains the original AI
-update stream every simulation tick instead of allowing visual/client updates
-to accumulate. `EFB_OBJECTIVE_CHANGED` updates are applied to both the original
-scenario tracker and the Android campaign checkpoint state.
+The in-game Android HUD now uses the shipped `MissionMain.tga` panel,
+`MiniMap/foreground.tga`, and original Move, Attack, Stop, Objectives, and F10
+button art instead of the temporary top debug card. A compact Android TGA
+decoder reads these assets directly from staged `Complete/UI`. The minimap is
+generated from the live terrain-type map and presentation entities, then
+clipped into the original diamond frame. The F10 menu returns to the native
+single-player mission list without terminating the app process. The center
+panel shows completed, active, and failed objective counts and the localized
+header of the current primary objective. The header is decoded directly from
+the shipped UTF-16 text resource through the case-insensitive Android VFS
+instead of relying on the legacy 16-bit-`wchar_t` assumption. The Android
+client now drains the original AI update stream every simulation tick instead
+of allowing visual/client updates to accumulate. `EFB_OBJECTIVE_CHANGED`
+updates are applied to both the original scenario tracker and the Android
+campaign checkpoint state.
 
 Original Lua `Win()`/`Loose()` calls now cross the Android input bridge.
 They freeze the finished simulation, commit the corresponding campaign
@@ -511,8 +516,8 @@ green/red proxies. The camera starts focused on the player's formation.
 This is a playable runtime milestone, not a complete visual port. Terrain now
 uses original game materials and the first runtime model path uses original
 Granny geometry and DDS materials. Multi-part attachment transforms, skeleton
-skinning, animations, combat effects, briefing/game HUD, and the complete
-campaign-selection/progression UI remain unfinished.
+skinning, animations, combat effects, complete briefing HUD behavior, and the
+complete campaign-selection/progression UI remain unfinished.
 
 The video transcode manifest now writes Android-canonical runtime paths. A Bink
 ref such as `Movies\Nival.bik` maps to `DataAndroid/Movies/Nival.mp4`, not to a

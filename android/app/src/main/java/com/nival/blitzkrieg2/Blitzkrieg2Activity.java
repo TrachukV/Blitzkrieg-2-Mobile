@@ -2,6 +2,7 @@ package com.nival.blitzkrieg2;
 
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
@@ -11,6 +12,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -25,9 +27,12 @@ public final class Blitzkrieg2Activity extends GameActivity {
     public static final String EXTRA_DIFFICULTY = "com.nival.blitzkrieg2.DIFFICULTY";
     private final Handler outcomeHandler = new Handler(Looper.getMainLooper());
     private LinearLayout outcomePanel;
+    private LinearLayout missionMenu;
     private TextView outcomeTitle;
     private TextView missionStatus;
+    private OriginalMissionHudView originalHud;
     private boolean outcomePolling;
+    private int hudPollCount;
     private final Runnable outcomePoll = new Runnable() {
         @Override
         public void run() {
@@ -36,6 +41,12 @@ public final class Blitzkrieg2Activity extends GameActivity {
             }
             if (missionStatus != null) {
                 missionStatus.setText(NativeBridge.getMissionHudStatus());
+            }
+            if (originalHud != null && (hudPollCount++ & 3) == 0) {
+                int[] pixels = NativeBridge.getMissionMinimapArgb(192, 192);
+                if (pixels != null) {
+                    originalHud.setMinimapPixels(pixels, 192, 192);
+                }
             }
             String outcome = NativeBridge.getMissionOutcome();
             if ("won".equals(outcome)) {
@@ -86,80 +97,140 @@ public final class Blitzkrieg2Activity extends GameActivity {
         root.setClickable(false);
         root.setFocusable(false);
 
-        LinearLayout info = new LinearLayout(this);
-        info.setOrientation(LinearLayout.VERTICAL);
-        info.setPadding(dp(14), dp(9), dp(14), dp(9));
-        GradientDrawable infoBackground = new GradientDrawable();
-        infoBackground.setColor(0xb80b1110);
-        infoBackground.setCornerRadius(dp(8));
-        info.setBackground(infoBackground);
+        File dataRoot = new File(getFilesDir(), "DataAndroid");
+        int hudHeight = dp(112);
+        FrameLayout hud = new FrameLayout(this);
+        originalHud = new OriginalMissionHudView(this, dataRoot);
+        hud.addView(
+                originalHud,
+                new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT));
+
+        LinearLayout missionInfo = new LinearLayout(this);
+        missionInfo.setOrientation(LinearLayout.VERTICAL);
+        missionInfo.setGravity(Gravity.CENTER_VERTICAL);
 
         TextView mission = new TextView(this);
-        mission.setTextColor(0xfff0e7ca);
-        mission.setTextSize(16.0f);
+        mission.setTextColor(0xffe5d9ad);
+        mission.setTextSize(12.0f);
         mission.setText(missionLabel());
-        info.addView(
+        mission.setSingleLine(true);
+        missionInfo.addView(
                 mission,
                 new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        TextView controls = new TextView(this);
-        controls.setTextColor(0xffc7d0c7);
-        controls.setTextSize(12.0f);
-        controls.setText(
-                "Tap unit: select   Tap ground: move   Tap enemy: attack\n"
-                        + "Drag: pan   Pinch: zoom   Two-finger twist: rotate");
-        info.addView(
-                controls,
-                new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
 
         missionStatus = new TextView(this);
-        missionStatus.setTextColor(0xffd9c46b);
-        missionStatus.setTextSize(12.0f);
+        missionStatus.setTextColor(0xffd4c580);
+        missionStatus.setTextSize(10.0f);
         missionStatus.setText("Objectives: loading");
-        info.addView(
+        missionStatus.setMaxLines(3);
+        missionInfo.addView(
                 missionStatus,
                 new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        FrameLayout.LayoutParams infoParams = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP | Gravity.START);
-        infoParams.setMargins(dp(16), dp(14), dp(16), dp(14));
-        root.addView(info, infoParams);
+        FrameLayout.LayoutParams missionInfoParams =
+                new FrameLayout.LayoutParams(
+                        dp(360),
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        Gravity.CENTER);
+        missionInfoParams.setMargins(0, dp(10), 0, dp(10));
+        hud.addView(missionInfo, missionInfoParams);
 
-        LinearLayout missionActions = new LinearLayout(this);
-        missionActions.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout commandButtons = new LinearLayout(this);
+        commandButtons.setOrientation(LinearLayout.HORIZONTAL);
+        commandButtons.setGravity(Gravity.CENTER);
+        commandButtons.addView(
+                originalImageButton(
+                        dataRoot,
+                        "Complete/UI/Buttons/Move/MoveNormal.tga",
+                        null),
+                new LinearLayout.LayoutParams(dp(38), dp(38)));
+        commandButtons.addView(
+                originalImageButton(
+                        dataRoot,
+                        "Complete/UI/Buttons/Attack/AttackNormal.tga",
+                        null),
+                new LinearLayout.LayoutParams(dp(38), dp(38)));
+        commandButtons.addView(
+                originalImageButton(
+                        dataRoot,
+                        "Complete/UI/Buttons/Stop/StopNormal.tga",
+                        null),
+                new LinearLayout.LayoutParams(dp(38), dp(38)));
+
+        ImageButton objectives = originalImageButton(
+                dataRoot,
+                "Complete/UI/Buttons/Objectives/ObjectivesNormal.tga",
+                view -> missionStatus.setVisibility(
+                        missionStatus.getVisibility() == View.VISIBLE
+                                ? View.INVISIBLE
+                                : View.VISIBLE));
+        commandButtons.addView(
+                objectives,
+                new LinearLayout.LayoutParams(dp(82), dp(34)));
+
+        ImageButton menu = originalImageButton(
+                dataRoot,
+                "Complete/UI/Buttons/F10Menu/fake_F10MenuNormal.tga",
+                view -> missionMenu.setVisibility(
+                        missionMenu.getVisibility() == View.VISIBLE
+                                ? View.GONE
+                                : View.VISIBLE));
+        commandButtons.addView(
+                menu,
+                new LinearLayout.LayoutParams(dp(82), dp(34)));
+
+        FrameLayout.LayoutParams commandParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER_VERTICAL | Gravity.END);
+        commandParams.setMargins(0, 0, dp(8), 0);
+        hud.addView(commandButtons, commandParams);
+
+        FrameLayout.LayoutParams hudParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                hudHeight,
+                Gravity.BOTTOM);
+        root.addView(hud, hudParams);
+
+        missionMenu = new LinearLayout(this);
+        missionMenu.setOrientation(LinearLayout.VERTICAL);
+        missionMenu.setPadding(dp(14), dp(12), dp(14), dp(12));
+        missionMenu.setClickable(true);
+        GradientDrawable menuBackground = new GradientDrawable();
+        menuBackground.setColor(0xee211f17);
+        menuBackground.setStroke(dp(1), 0xff8a8058);
+        missionMenu.setBackground(menuBackground);
+        missionMenu.setVisibility(View.GONE);
 
         Button forfeit = new Button(this);
         forfeit.setAllCaps(false);
         forfeit.setText("Surrender");
         forfeit.setTextColor(Color.WHITE);
         forfeit.setOnClickListener(view -> NativeBridge.forfeitMission());
-        missionActions.addView(
+        missionMenu.addView(
                 forfeit,
-                new LinearLayout.LayoutParams(dp(112), dp(48)));
+                new LinearLayout.LayoutParams(dp(150), dp(44)));
 
         Button missions = new Button(this);
         missions.setAllCaps(false);
-        missions.setText("Missions");
+        missions.setText("Return to missions");
         missions.setTextColor(Color.WHITE);
         missions.setOnClickListener(view -> finish());
-        missionActions.addView(
+        missionMenu.addView(
                 missions,
-                new LinearLayout.LayoutParams(dp(112), dp(48)));
+                new LinearLayout.LayoutParams(dp(150), dp(44)));
 
-        FrameLayout.LayoutParams actionParams = new FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams menuParams = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP | Gravity.END);
-        actionParams.setMargins(dp(16), dp(12), dp(16), dp(12));
-        root.addView(missionActions, actionParams);
+                Gravity.CENTER);
+        root.addView(missionMenu, menuParams);
 
         outcomePanel = new LinearLayout(this);
         outcomePanel.setOrientation(LinearLayout.VERTICAL);
@@ -198,6 +269,29 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 Gravity.CENTER);
         root.addView(outcomePanel, outcomeParams);
         return root;
+    }
+
+    private ImageButton originalImageButton(
+            File dataRoot,
+            String relativePath,
+            View.OnClickListener listener) {
+        ImageButton button = new ImageButton(this);
+        button.setPadding(0, 0, 0, 0);
+        button.setBackgroundColor(Color.TRANSPARENT);
+        button.setScaleType(ImageButton.ScaleType.FIT_CENTER);
+        android.graphics.Bitmap bitmap =
+                TgaDecoder.decode(new File(dataRoot, relativePath));
+        if (bitmap != null) {
+            button.setImageDrawable(
+                    new BitmapDrawable(getResources(), bitmap));
+        }
+        if (listener == null) {
+            button.setClickable(false);
+            button.setFocusable(false);
+        } else {
+            button.setOnClickListener(listener);
+        }
+        return button;
     }
 
     private void showOutcome(String title, int color) {
