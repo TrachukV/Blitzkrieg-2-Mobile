@@ -47,7 +47,17 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 }
             }
             if (missionStatus != null) {
-                missionStatus.setText(NativeBridge.getMissionHudStatus());
+                String status = NativeBridge.getMissionHudStatus();
+                if (status == null) {
+                    status = "";
+                }
+                String selectedUnitStatus =
+                        NativeBridge.getSelectedUnitHudStatus();
+                if (selectedUnitStatus != null
+                        && !selectedUnitStatus.isEmpty()) {
+                    status += "\n" + selectedUnitStatus;
+                }
+                missionStatus.setText(status);
             }
             if (originalHud != null && (hudPollCount++ & 3) == 0) {
                 int[] pixels = NativeBridge.getMissionMinimapArgb(192, 192);
@@ -133,7 +143,7 @@ public final class Blitzkrieg2Activity extends GameActivity {
         missionStatus.setTextColor(0xffd4c580);
         missionStatus.setTextSize(10.0f);
         missionStatus.setText("Objectives: loading");
-        missionStatus.setMaxLines(3);
+        missionStatus.setMaxLines(4);
         missionInfo.addView(
                 missionStatus,
                 new LinearLayout.LayoutParams(

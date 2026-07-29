@@ -2756,6 +2756,11 @@ std::string CurrentSinglePlayerMissionId() {
     return g_mission_id;
 }
 
+std::string SelectedSinglePlayerUnitHudStatus() {
+    std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    return SelectedLegacyUnitHudStatus();
+}
+
 std::string SinglePlayerRuntimeReport() {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
     size_t terrain_layer_triangles = 0;
@@ -2969,6 +2974,15 @@ Java_com_nival_blitzkrieg2_NativeBridge_getCurrentMissionId(
     const std::string mission_id =
             bk2::android::CurrentSinglePlayerMissionId();
     return env->NewStringUTF(mission_id.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_getSelectedUnitHudStatus(
+        JNIEnv* env,
+        jclass) {
+    const std::string status =
+            bk2::android::SelectedSinglePlayerUnitHudStatus();
+    return env->NewStringUTF(status.c_str());
 }
 
 extern "C" JNIEXPORT jintArray JNICALL

@@ -1,7 +1,7 @@
 extends Node3D
 
 const SNAPSHOT_PATH := "res://data/presentation_snapshot.json"
-const API_VERSION := 1
+const API_VERSION := 3
 
 @onready var camera_rig: Node3D = $CameraRig
 @onready var camera: Camera3D = $CameraRig/Camera3D

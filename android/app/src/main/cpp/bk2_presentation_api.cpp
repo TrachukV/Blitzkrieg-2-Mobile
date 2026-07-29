@@ -260,6 +260,7 @@ extern "C" int bk2_presentation_write_json(const char* path) {
                << entity.x << ',' << entity.y << ',' << entity.z << ']'
                << ",\"heading\":" << entity.heading_radians
                << ",\"hit_points\":" << entity.hit_points
+               << ",\"max_hit_points\":" << entity.max_hit_points
                << ",\"rpg_stats_path_hash\":" << entity.rpg_stats_path_hash
                << ",\"rpg_stats_record_id\":" << entity.rpg_stats_record_id
                << ",\"geometry_record_id\":" << entity.geometry_record_id

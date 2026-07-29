@@ -97,6 +97,7 @@ int main(int argc, char** argv) {
                 88.0f + row * 14.0f,
                 4.0f,
                 row == 0 ? 0.0f : kPi,
+                100.0f,
                 100.0f});
     }
 

@@ -39,7 +39,7 @@ int main(int argc, char** argv) {
     bk2::presentation::PublishEntities(
             {{42, 2, BK2_PRESENTATION_ENTITY_ALIVE,
               8.0f, 9.0f, 10.0f, 1.25f, 75.0f,
-              0x123456789abcdef0ull, 116, 1069, 1.0f}});
+              100.0f, 0x123456789abcdef0ull, 116, 1069, 1.0f}});
 
     const Bk2PresentationSnapshotInfo info =
             bk2_presentation_snapshot_info();
@@ -68,7 +68,8 @@ int main(int argc, char** argv) {
         entity.rpg_stats_record_id != 116 ||
         entity.geometry_record_id != 1069 ||
         !Near(entity.visual_scale, 1.0f) ||
-        !Near(entity.hit_points, 75.0f)) {
+        !Near(entity.hit_points, 75.0f) ||
+        !Near(entity.max_hit_points, 100.0f)) {
         return Fail("entity_copy");
     }
 

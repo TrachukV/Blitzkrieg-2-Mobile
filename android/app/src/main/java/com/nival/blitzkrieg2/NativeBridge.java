@@ -23,6 +23,7 @@ final class NativeBridge {
     static native String getMissionOutcome();
     static native String getCurrentMissionId();
     static native String getMissionHudStatus();
+    static native String getSelectedUnitHudStatus();
     static native int[] getMissionMinimapArgb(int width, int height);
     static native void forfeitMission();
 

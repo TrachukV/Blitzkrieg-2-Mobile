@@ -47,6 +47,7 @@ bool SelectLegacyUnit(int unit_id, int player);
 bool MoveSelectedLegacyUnit(float world_x, float world_y);
 bool AttackSelectedLegacyUnit(int target_unit_id);
 int SelectedLegacyUnitId();
+std::string SelectedLegacyUnitHudStatus();
 void HandleLegacyInputEvent(const char* event_name);
 const char* LegacyMissionOutcome();
 std::vector<AndroidCombatEffect> CopyActiveAndroidCombatEffects();

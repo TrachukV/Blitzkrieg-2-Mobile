@@ -21,6 +21,7 @@ bool HandleSinglePlayerTap(
 
 bool IsSinglePlayerRuntimeReady();
 std::string CurrentSinglePlayerMissionId();
+std::string SelectedSinglePlayerUnitHudStatus();
 std::string SinglePlayerRuntimeReport();
 
 }  // namespace bk2::android

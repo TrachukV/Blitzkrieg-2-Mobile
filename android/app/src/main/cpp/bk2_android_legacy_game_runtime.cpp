@@ -739,6 +739,7 @@ void PublishPresentationEntities() {
                 AI2Vis(unit->GetVisZ()),
                 unit->GetDir(),
                 unit->GetHitPoints(),
+                stats == nullptr ? 1.0f : stats->fMaxHP,
                 StatsPathHash(stats),
                 stats == nullptr ? -1 : stats->GetRecordID(),
                 GeometryRecordId(stats),
@@ -1335,6 +1336,30 @@ bool AttackSelectedLegacyUnit(int target_unit_id) {
 
 int SelectedLegacyUnitId() {
     return g_selected_unit_id;
+}
+
+std::string SelectedLegacyUnitHudStatus() {
+    if (!g_ready || g_selected_unit_id < 0) {
+        return std::string();
+    }
+    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+    if (unit == nullptr || !unit->IsAlive()) {
+        return std::string();
+    }
+    const NDb::SUnitBaseRPGStats* stats = unit->GetStats();
+    if (stats == nullptr ||
+        !std::isfinite(unit->GetHitPoints()) ||
+        !std::isfinite(stats->fMaxHP) ||
+        stats->fMaxHP <= 0.0f) {
+        return std::string();
+    }
+    std::ostringstream text;
+    text << "Selected unit HP: "
+         << static_cast<int>(std::round(
+                    std::max(unit->GetHitPoints(), 0.0f)))
+         << " / "
+         << static_cast<int>(std::round(stats->fMaxHP));
+    return text.str();
 }
 
 void HandleLegacyInputEvent(const char* event_name) {
