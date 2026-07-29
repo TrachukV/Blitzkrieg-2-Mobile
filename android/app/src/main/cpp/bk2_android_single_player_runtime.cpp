@@ -42,6 +42,10 @@ constexpr float kPackedHeightScale = 0.01f;
 constexpr float kMinCameraDistance = 24.0f;
 constexpr float kInitialCameraMinDistance = 72.0f;
 constexpr float kCameraMaxTerrainFraction = 0.48f;
+constexpr const char* kInfantryTraceTexture =
+        "Scene/TexAndMats/All/Units/Weapons/GunShotTraceBlue_Texture.dds";
+constexpr const char* kMechanizedTraceTexture =
+        "Scene/TexAndMats/All/Units/Weapons/GunShotTraceOrange_texture.dds";
 
 std::mutex g_runtime_mutex;
 bool g_ready = false;
@@ -84,6 +88,7 @@ size_t g_lying_attack_animation_instance_count = 0;
 size_t g_combat_effect_render_count = 0;
 size_t g_active_combat_effect_count = 0;
 size_t g_active_unit_indicator_count = 0;
+bool g_combat_effect_trace_texture_logged = false;
 
 enum class ConvertedAnimationVariant {
     Base,
@@ -1739,9 +1744,21 @@ void AppendCombatEffectRibbon(
             1.0f,
             0.0f,
             color});
+    WorldObjectMesh::Layer* trace_layer = FindOrAddWorldObjectLayer(
+            mesh,
+            effect.type == AndroidCombatEffectType::InfantryShot
+                    ? kInfantryTraceTexture
+                    : kMechanizedTraceTexture);
+    if (trace_layer != nullptr) {
+        trace_layer->alpha_blended = true;
+    }
+    std::vector<uint32_t>* trace_indices =
+            trace_layer == nullptr
+                    ? &mesh->triangle_indices
+                    : &trace_layer->triangle_indices;
     const uint32_t ribbon_indices[] = {0, 2, 1, 0, 3, 2};
     for (uint32_t index : ribbon_indices) {
-        mesh->triangle_indices.push_back(ribbon_base + index);
+        trace_indices->push_back(ribbon_base + index);
     }
 
     if (effect.age_millis <= 80u) {
@@ -1762,7 +1779,11 @@ void AppendCombatEffectRibbon(
     if (g_combat_effect_render_count == 1) {
         PlatformRuntime::instance().log_info(
                 std::string("combat_effect_render=active; source=") +
-                std::to_string(effect.source_unit_id));
+                std::to_string(effect.source_unit_id) +
+                "; trace_texture=" +
+                (effect.type == AndroidCombatEffectType::InfantryShot
+                         ? kInfantryTraceTexture
+                         : kMechanizedTraceTexture));
     }
 }
 
@@ -2373,6 +2394,16 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
     for (WorldObjectMesh::Layer& layer : mesh->layers) {
         layer.texture_handle =
                 ModelTextureHandle(layer.texture_path);
+        if (layer.alpha_blended &&
+            !g_combat_effect_trace_texture_logged) {
+            PlatformRuntime::instance().log_info(
+                    std::string("combat_effect_trace_texture=") +
+                    (layer.texture_handle == UINT16_MAX
+                             ? "unavailable"
+                             : "ready") +
+                    "; path=" + layer.texture_path);
+            g_combat_effect_trace_texture_logged = true;
+        }
     }
 }
 
@@ -2629,6 +2660,7 @@ void ShutdownSinglePlayerRuntime() {
     g_combat_effect_render_count = 0;
     g_active_combat_effect_count = 0;
     g_active_unit_indicator_count = 0;
+    g_combat_effect_trace_texture_logged = false;
     g_converted_geometries.clear();
     g_missing_converted_geometries.clear();
     g_move_converted_geometries.clear();

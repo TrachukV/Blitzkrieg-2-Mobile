@@ -759,7 +759,10 @@ private:
             bgfx::setTexture(0, texture_sampler_, texture);
             bgfx::setVertexBuffer(0, world_object_vertex_buffer_);
             bgfx::setIndexBuffer(index_buffer);
-            bgfx::setState(state);
+            bgfx::setState(
+                    world_object_mesh_.layers[index].alpha_blended
+                    ? state | BGFX_STATE_BLEND_ALPHA
+                    : state);
             bgfx::submit(kTerrainView, textured_rect_program_);
             ++submitted_primitives_;
         }

@@ -42,6 +42,7 @@ struct WorldObjectMesh {
         std::vector<uint32_t> triangle_indices;
         std::string texture_path;
         uint16_t texture_handle = UINT16_MAX;
+        bool alpha_blended = false;
     };
 
     std::vector<TerrainVertex> vertices;

@@ -11,6 +11,9 @@ APK="${ANDROID_DIR}/app/build/outputs/apk/debug/app-debug.apk"
 GEOMETRY_SOURCE="${DATA_SOURCE}/Data/bin/Geometries"
 CONVERTED_ROOT="${DATA_SOURCE}/Converted"
 CONVERTED_GEOMETRY="${CONVERTED_ROOT}/Geometries"
+TRACE_ASSET_ROOT="Scene/TexAndMats/All/Units/Weapons"
+INFANTRY_TRACE="${TRACE_ASSET_ROOT}/GunShotTraceBlue_Texture.dds"
+MECHANIZED_TRACE="${TRACE_ASSET_ROOT}/GunShotTraceOrange_texture.dds"
 
 if [[ -z "${ANDROID_HOME:-}" &&
       -d "${HOME}/Library/Android/sdk" ]]; then
@@ -95,6 +98,20 @@ else
     COPYFILE_DISABLE=1 tar -chf - -C "${DATA_SOURCE}" . |
         "${ADB_BIN}" shell run-as "${PACKAGE}" tar -xf - -C files/DataAndroid
 fi
+
+if [[ ! -r "${DATA_SOURCE}/Data/${INFANTRY_TRACE}" ||
+      ! -r "${DATA_SOURCE}/Data/${MECHANIZED_TRACE}" ]]; then
+    echo "Original tracer textures are missing from DataAndroid." >&2
+    echo "Add Versions/Current/Data/${TRACE_ASSET_ROOT} to the sparse checkout." >&2
+    exit 1
+fi
+echo "Staging original tracer textures into app-private storage."
+"${ADB_BIN}" shell run-as "${PACKAGE}" \
+    mkdir -p "files/DataAndroid/Data/${TRACE_ASSET_ROOT}"
+COPYFILE_DISABLE=1 tar -chf - -C "${DATA_SOURCE}/Data" \
+    "${INFANTRY_TRACE}" "${MECHANIZED_TRACE}" |
+    "${ADB_BIN}" shell run-as "${PACKAGE}" tar -xf - \
+        -C files/DataAndroid/Data
 
 if [[ -d "${CONVERTED_GEOMETRY}" &&
       -f "${CONVERTED_ROOT}/geometry_index.tsv" ]]; then

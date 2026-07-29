@@ -287,6 +287,7 @@ git sparse-checkout add \
   Versions/Current/Data/Scenario \
   Versions/Current/Data/Consts \
   Versions/Current/Data/Other/Text \
+  Versions/Current/Data/Scene/TexAndMats/All/Units/Weapons \
   Versions/Current/Data/Weapons
 
 python3 tools/android/prepare_data_android.py \
@@ -673,15 +674,19 @@ uses original game materials and the first runtime model path uses original
 Granny geometry and DDS materials. Compatible rifle infantry now uses original
 bone weights plus standing idle/move/shoot/death and prone
 idle/crawl/shoot animation frames selected from live AI state. Real
-`SAIInfantryShotUpdate` and `SAIMechShotUpdate` events now produce
-short-lived colored muzzle flashes and moving tracer ribbons at the source and
-destination coordinates supplied by the legacy AI simulation. Multi-mesh
+`SAIInfantryShotUpdate` and `SAIMechShotUpdate` events now produce moving tracer
+ribbons at the source and destination coordinates supplied by the legacy AI
+simulation. Infantry ribbons use the shipped DXT3
+`GunShotTraceBlue_Texture.dds`; mechanized ribbons use the shipped
+`GunShotTraceOrange_texture.dds`. These effect-only layers enable alpha blending
+without changing the opaque model layers. Multi-mesh
 Granny models preserve all of their model mesh bindings;
 global `InitialPlacement` is intentionally not reapplied because shipped
 infantry geometry already contains the correct root placement. Standing-to-prone
-and prone-to-standing transition clips, GPU/runtime skinning,
-projectile/explosion asset effects, complete briefing HUD behavior, and the
-original chapter-map/statistics/progression UI remain unfinished.
+and prone-to-standing transition clips, GPU/runtime skinning, original
+muzzle-flash/explosion particles and projectile geometry, complete briefing HUD
+behavior, and the original chapter-map/statistics/progression UI remain
+unfinished.
 
 The video transcode manifest now writes Android-canonical runtime paths. A Bink
 ref such as `Movies\Nival.bik` maps to `DataAndroid/Movies/Nival.mp4`, not to a
