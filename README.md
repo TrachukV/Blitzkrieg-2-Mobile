@@ -49,7 +49,10 @@ Spyglass, Clear Mines, Place Mines, and the original two-point Build Trenches
 command reach the original simulation, while commands without a ported handler
 use their original disabled artwork. Original combat textures now provide
 tracer ribbons, muzzle flashes, and animated fire/smoke on destroyed mechanized
-units. See
+units. Double-tapping a selected unit expands the selection to nearby units of
+the same legacy type (up to twelve), gives each unit an original selection
+marker and HUD card, and sends Move, Attack, Stop, and supported abilities
+through one legacy AI command group. See
 [`android/README.md`](android/README.md) for build, content-staging, verification,
 and remaining-port details.
 

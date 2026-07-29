@@ -126,12 +126,23 @@ bool g_trench_first_point_defined = false;
 float g_trench_first_world_x = 0.0f;
 float g_trench_first_world_y = 0.0f;
 int g_trench_first_unit_id = -1;
+uint64_t g_last_friendly_tap_millis = 0;
+int g_last_friendly_tap_unit_id = -1;
+float g_last_friendly_tap_x = 0.0f;
+float g_last_friendly_tap_y = 0.0f;
 
 void ResetPendingTrenchCommandLocked() {
     g_trench_first_point_defined = false;
     g_trench_first_world_x = 0.0f;
     g_trench_first_world_y = 0.0f;
     g_trench_first_unit_id = -1;
+}
+
+void ResetFriendlyDoubleTapLocked() {
+    g_last_friendly_tap_millis = 0;
+    g_last_friendly_tap_unit_id = -1;
+    g_last_friendly_tap_x = 0.0f;
+    g_last_friendly_tap_y = 0.0f;
 }
 
 enum class ConvertedAnimationVariant {
@@ -2996,6 +3007,7 @@ void ShutdownSinglePlayerRuntime() {
     g_destruction_effect_texture_logged = false;
     g_touch_command_mode = TouchCommandMode::Contextual;
     ResetPendingTrenchCommandLocked();
+    ResetFriendlyDoubleTapLocked();
     g_converted_geometries.clear();
     g_missing_converted_geometries.clear();
     g_move_converted_geometries.clear();
@@ -3266,10 +3278,41 @@ bool HandleSinglePlayerTap(
             0,
             false,
             kEntityTapRadiusPixels);
-    if (friendly_unit >= 0 && SelectLegacyUnit(friendly_unit, 0)) {
+    if (friendly_unit >= 0) {
+        const uint64_t now_millis =
+                PlatformRuntime::instance().monotonic_millis();
+        const float tap_delta_x =
+                screen_x - g_last_friendly_tap_x;
+        const float tap_delta_y =
+                screen_y - g_last_friendly_tap_y;
+        const bool double_tap =
+                friendly_unit == g_last_friendly_tap_unit_id &&
+                now_millis >= g_last_friendly_tap_millis &&
+                now_millis - g_last_friendly_tap_millis <= 450 &&
+                tap_delta_x * tap_delta_x +
+                        tap_delta_y * tap_delta_y <=
+                        64.0f * 64.0f;
+        const int selected_count = double_tap
+                ? SelectLegacyUnitsByTypeNear(
+                        friendly_unit,
+                        std::max(
+                                g_camera.distance * 1.35f,
+                                VIS_TILE_SIZE * 8.0f),
+                        0)
+                : (SelectLegacyUnit(friendly_unit, 0) ? 1 : 0);
+        g_last_friendly_tap_millis = now_millis;
+        g_last_friendly_tap_unit_id = friendly_unit;
+        g_last_friendly_tap_x = screen_x;
+        g_last_friendly_tap_y = screen_y;
+        if (selected_count <= 0) {
+            return false;
+        }
         std::ostringstream report;
         report << "player_tap=select_screen"
                << "; unit=" << friendly_unit
+               << "; count=" << selected_count
+               << "; double_tap="
+               << (double_tap ? "true" : "false")
                << "; radius_pixels=" << kEntityTapRadiusPixels;
         PlatformRuntime::instance().log_info(report.str());
         return RefreshDynamicWorldMeshLocked(true);

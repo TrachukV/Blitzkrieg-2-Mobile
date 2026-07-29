@@ -10,8 +10,25 @@ import android.graphics.RectF;
 import android.view.View;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 
 final class OriginalMissionHudView extends View {
+    private static final class SelectedMember {
+        final String kind;
+        final int hitPoints;
+        final int maxHitPoints;
+
+        SelectedMember(
+                String kind,
+                int hitPoints,
+                int maxHitPoints) {
+            this.kind = kind;
+            this.hitPoints = hitPoints;
+            this.maxHitPoints = maxHitPoints;
+        }
+    }
+
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG |
             Paint.FILTER_BITMAP_FLAG);
     private final Bitmap panel;
@@ -27,6 +44,9 @@ final class OriginalMissionHudView extends View {
     private String selectedKind = "";
     private int selectedHitPoints;
     private int selectedMaxHitPoints;
+    private String selectedMembersValue = "";
+    private final List<SelectedMember> selectedMembers =
+            new ArrayList<>();
 
     OriginalMissionHudView(Context context, File dataRoot) {
         super(context);
@@ -81,6 +101,7 @@ final class OriginalMissionHudView extends View {
         String kind = "";
         int hitPoints = 0;
         int maxHitPoints = 0;
+        String membersValue = "";
         if (snapshot != null && !snapshot.isEmpty()) {
             String[] fields = snapshot.split(";");
             for (String field : fields) {
@@ -96,15 +117,38 @@ final class OriginalMissionHudView extends View {
                     hitPoints = parseInt(value);
                 } else if ("max_hp".equals(key)) {
                     maxHitPoints = parseInt(value);
+                } else if ("members".equals(key)) {
+                    membersValue = value;
                 }
             }
         }
         if (!kind.equals(selectedKind)
                 || hitPoints != selectedHitPoints
-                || maxHitPoints != selectedMaxHitPoints) {
+                || maxHitPoints != selectedMaxHitPoints
+                || !membersValue.equals(selectedMembersValue)) {
             selectedKind = kind;
             selectedHitPoints = hitPoints;
             selectedMaxHitPoints = maxHitPoints;
+            selectedMembersValue = membersValue;
+            selectedMembers.clear();
+            for (String memberValue : membersValue.split(",")) {
+                String[] parts = memberValue.split(":");
+                if (parts.length != 4) {
+                    continue;
+                }
+                selectedMembers.add(
+                        new SelectedMember(
+                                parts[1],
+                                parseInt(parts[2]),
+                                parseInt(parts[3])));
+            }
+            if (selectedMembers.isEmpty() && !kind.isEmpty()) {
+                selectedMembers.add(
+                        new SelectedMember(
+                                kind,
+                                hitPoints,
+                                maxHitPoints));
+            }
             invalidate();
         }
     }
@@ -204,10 +248,53 @@ final class OriginalMissionHudView extends View {
                         previewIconTop + previewIconSize),
                 paint);
 
-        float cardSize = 58.0f * scale;
+        float cardSize = 48.0f * scale;
         float cardLeft = previewLeft + previewWidth + 18.0f * scale;
-        float cardTop = 30.0f * scale;
+        float cardTop = 20.0f * scale;
         if (cardLeft + cardSize >= centerRight) {
+            return;
+        }
+        float cardGap = 6.0f * scale;
+        int columns = Math.max(
+                1,
+                (int) ((centerRight - cardLeft + cardGap)
+                        / (cardSize + cardGap)));
+        for (int index = 0;
+             index < selectedMembers.size() && index < 12;
+             ++index) {
+            SelectedMember member = selectedMembers.get(index);
+            int row = index / columns;
+            int column = index % columns;
+            float left =
+                    cardLeft + column * (cardSize + cardGap);
+            float top =
+                    cardTop + row * (cardSize + 10.0f * scale);
+            if (top + cardSize + 8.0f * scale > getHeight()) {
+                break;
+            }
+            drawSelectedMemberCard(
+                    canvas,
+                    scale,
+                    left,
+                    top,
+                    cardSize,
+                    member);
+        }
+    }
+
+    private void drawSelectedMemberCard(
+            Canvas canvas,
+            float scale,
+            float cardLeft,
+            float cardTop,
+            float cardSize,
+            SelectedMember member) {
+        Bitmap icon = "tank".equals(member.kind)
+                ? tankIcon
+                : soldierIcon;
+        if (icon == null ||
+            unitIconBackground == null ||
+            member.maxHitPoints <= 0) {
             return;
         }
         RectF card = new RectF(
@@ -227,14 +314,12 @@ final class OriginalMissionHudView extends View {
                         card.bottom - inset),
                 paint);
 
-        float healthRatio = selectedMaxHitPoints <= 0
-                ? 0.0f
-                : Math.max(
-                        0.0f,
-                        Math.min(
-                                1.0f,
-                                (float) selectedHitPoints
-                                        / (float) selectedMaxHitPoints));
+        float healthRatio = Math.max(
+                0.0f,
+                Math.min(
+                        1.0f,
+                        (float) member.hitPoints
+                                / (float) member.maxHitPoints));
         Bitmap hitBar = healthRatio > 0.6f
                 ? greenHitBar
                 : (healthRatio > 0.3f ? yellowHitBar : redHitBar);

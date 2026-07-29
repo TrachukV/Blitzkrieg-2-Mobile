@@ -37,9 +37,13 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   terrain tap. Build Trenches preserves the desktop two-point interaction and
   sends `ACTION_COMMAND_ENTRENCH_BEGIN` followed by
   `ACTION_COMMAND_ENTRENCH_END`. Unavailable handlers render the shipped
-  disabled icons. General runtime skinning, remaining action-specific clips,
-  command subpanels, briefings, and the rest of the legacy UI are still
-  pending.
+  disabled icons. Double-tapping a selected unit expands selection to as many
+  as twelve nearby units with matching legacy stats/type. All selected units
+  receive world markers and individual HUD cards, while supported commands are
+  registered and dispatched through `CGroupLogic::GroupCommand`. Drag-box
+  selection, mixed-type ability groups, general runtime skinning, remaining
+  action-specific clips, command subpanels, briefings, and the rest of the
+  legacy UI are still pending.
 - `BK2_ENABLE_LEGACY_TEXTURE_RUNTIME=ON` links the Android
   `NGfx::CTexture`/`I2DBuffer` contract. Legacy callers can allocate textures,
   lock mip levels with `CTextureLock`, write the original pixel formats into CPU
@@ -596,6 +600,8 @@ from 377 to 33.
 Touch controls currently implemented:
 
 - tap a green player unit or formation to select it;
+- double-tap a selected player unit to select up to twelve nearby units of the
+  same legacy type; the HUD shows one health card per selected unit;
 - tap a red hostile unit while a player unit is selected to issue the original
   legacy attack command;
 - tap terrain to issue the original legacy move command and move the selected
@@ -609,6 +615,9 @@ Touch controls currently implemented:
   retains the desktop command's visualization/queue flag;
 - tap Build Trenches, then tap its start and end points to queue the original
   `ACTION_COMMAND_ENTRENCH_BEGIN` and `ACTION_COMMAND_ENTRENCH_END` pair;
+- Move, Attack, Stop, and supported ability commands use one registered legacy
+  AI group when multiple units are selected, preserving the original
+  subgroup/formation command path;
 - tap the original F10 button to pause the legacy simulation and audio, show
   the prominent orange `PAUSED` indicator, and open the mission menu; closing
   the menu resumes both;

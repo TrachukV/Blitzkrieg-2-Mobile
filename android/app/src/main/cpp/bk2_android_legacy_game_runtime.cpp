@@ -97,7 +97,10 @@ int g_normalized_unit_stats_count = 0;
 int g_normalized_squad_stats_count = 0;
 int g_normalize_skipped_no_visual_count = 0;
 int g_selected_unit_id = -1;
+std::vector<int> g_selected_unit_ids;
 int g_attack_target_unit_id = -1;
+bool g_android_command_group_registered = false;
+WORD g_android_command_group = 0;
 uint64_t g_player_move_command_count = 0;
 uint64_t g_player_attack_command_count = 0;
 uint64_t g_player_stop_command_count = 0;
@@ -146,6 +149,13 @@ std::set<std::string> g_missing_squad_payload_refs;
 std::string g_stage = "not_started";
 
 CUserActions LegacyUnitActions(CAIUnit* unit);
+
+bool IsSelectedLegacyUnitId(int unit_id) {
+    return std::find(
+            g_selected_unit_ids.begin(),
+            g_selected_unit_ids.end(),
+            unit_id) != g_selected_unit_ids.end();
+}
 
 bool IsLegacyUnitAction(CAIUnit* unit, int user_action) {
     return unit != nullptr &&
@@ -201,6 +211,46 @@ CUserActions LegacyUnitActions(CAIUnit* unit) {
         }
     }
     return actions;
+}
+
+bool RegisterSelectedLegacyCommandGroup(
+        int user_action,
+        bool movable_only,
+        WORD* group,
+        size_t* unit_count) {
+    if (!g_ready || group == nullptr || unit_count == nullptr) {
+        return false;
+    }
+    vector<int> command_units;
+    command_units.reserve(g_selected_unit_ids.size());
+    for (int unit_id : g_selected_unit_ids) {
+        CAIUnit* unit = CAIUnit::GetUnitByUniqueID(unit_id);
+        if (unit == nullptr ||
+            !unit->IsAlive() ||
+            !unit->IsSelectable() ||
+            unit->GetPlayer() != 0 ||
+            (movable_only && !unit->CanMove()) ||
+            (user_action != NDb::USER_ACTION_UNKNOWN &&
+             !IsLegacyUnitAction(unit, user_action))) {
+            continue;
+        }
+        command_units.push_back(unit_id);
+    }
+    if (command_units.empty()) {
+        return false;
+    }
+    if (g_android_command_group_registered) {
+        theGroupLogic.UnregisterGroup(g_android_command_group);
+        g_android_command_group_registered = false;
+    }
+    g_android_command_group = theGroupLogic.GenerateGroupNumber();
+    theGroupLogic.RegisterGroup(
+            command_units,
+            g_android_command_group);
+    g_android_command_group_registered = true;
+    *group = g_android_command_group;
+    *unit_count = command_units.size();
+    return true;
 }
 
 bool UpdateWarFogSnapshot() {
@@ -859,7 +909,7 @@ void PublishPresentationEntities() {
         if (unit->CanMove()) {
             flags |= BK2_PRESENTATION_ENTITY_MOVABLE;
         }
-        if (unit->GetUniqueIdQU() == g_selected_unit_id) {
+        if (IsSelectedLegacyUnitId(unit->GetUniqueIdQU())) {
             flags |= BK2_PRESENTATION_ENTITY_SELECTED;
         }
         if (unit->GetUniqueIdQU() == g_attack_target_unit_id) {
@@ -882,7 +932,7 @@ void PublishPresentationEntities() {
         const EUnitStateNames state_name =
                 state == nullptr ? EUSN_ERROR : state->GetName();
         if ((state != nullptr && state->IsAttackingState()) ||
-            (unit->GetUniqueIdQU() == g_selected_unit_id &&
+            (IsSelectedLegacyUnitId(unit->GetUniqueIdQU()) &&
              g_attack_target_unit_id >= 0)) {
             flags |= BK2_PRESENTATION_ENTITY_ATTACKING;
         }
@@ -1427,6 +1477,8 @@ bool SelectLegacyUnit(int unit_id, int player) {
         return false;
     }
     g_selected_unit_id = unit_id;
+    g_selected_unit_ids.clear();
+    g_selected_unit_ids.push_back(unit_id);
     g_attack_target_unit_id = -1;
     g_android_move_active = false;
     g_android_move_log_millis = 0;
@@ -1437,33 +1489,112 @@ bool SelectLegacyUnit(int unit_id, int player) {
     return true;
 }
 
-bool MoveSelectedLegacyUnit(float world_x, float world_y) {
-    if (!g_ready || g_selected_unit_id < 0) {
-        return false;
+int SelectLegacyUnitsByTypeNear(
+        int seed_unit_id,
+        float max_radius,
+        int player) {
+    if (!g_ready || seed_unit_id < 0 || max_radius <= 0.0f) {
+        return 0;
     }
-    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
-    if (unit == nullptr ||
-        !unit->IsAlive() ||
-        !unit->IsSelectable() ||
-        !unit->CanMove() ||
-        unit->GetPlayer() != 0) {
-        g_selected_unit_id = -1;
-        PublishPresentationEntities();
+    CAIUnit* seed = CAIUnit::GetUnitByUniqueID(seed_unit_id);
+    if (seed == nullptr ||
+        !seed->IsAlive() ||
+        !seed->IsSelectable() ||
+        static_cast<int>(seed->GetPlayer()) != player ||
+        seed->GetStats() == nullptr) {
+        return 0;
+    }
+    struct Candidate {
+        float distance_squared;
+        int unit_id;
+    };
+    std::vector<Candidate> candidates;
+    const CVec3& seed_center = seed->GetCenter();
+    const float max_distance_squared = max_radius * max_radius;
+    for (CGlobalIter iter(0, ANY_PARTY);
+         !iter.IsFinished();
+         iter.Iterate()) {
+        CAIUnit* unit = *iter;
+        if (unit == nullptr ||
+            unit == seed ||
+            !unit->IsAlive() ||
+            !unit->IsSelectable() ||
+            static_cast<int>(unit->GetPlayer()) != player ||
+            unit->GetStats() != seed->GetStats() ||
+            unit->IsFormation() != seed->IsFormation() ||
+            unit->IsMech() != seed->IsMech() ||
+            unit->IsInfantry() != seed->IsInfantry()) {
+            continue;
+        }
+        const CVec3& center = unit->GetCenter();
+        const float delta_x = AI2Vis(center.x - seed_center.x);
+        const float delta_y = AI2Vis(center.y - seed_center.y);
+        const float distance_squared =
+                delta_x * delta_x + delta_y * delta_y;
+        if (distance_squared <= max_distance_squared) {
+            candidates.push_back(
+                    Candidate{
+                            distance_squared,
+                            unit->GetUniqueIdQU()});
+        }
+    }
+    std::sort(
+            candidates.begin(),
+            candidates.end(),
+            [](const Candidate& left, const Candidate& right) {
+                if (left.distance_squared != right.distance_squared) {
+                    return left.distance_squared <
+                            right.distance_squared;
+                }
+                return left.unit_id < right.unit_id;
+            });
+    constexpr size_t kMaximumMobileSelection = 12;
+    g_selected_unit_id = seed_unit_id;
+    g_selected_unit_ids.clear();
+    g_selected_unit_ids.push_back(seed_unit_id);
+    for (const Candidate& candidate : candidates) {
+        if (g_selected_unit_ids.size() >=
+            kMaximumMobileSelection) {
+            break;
+        }
+        g_selected_unit_ids.push_back(candidate.unit_id);
+    }
+    g_attack_target_unit_id = -1;
+    g_android_move_active = false;
+    g_android_move_log_millis = 0;
+    PublishPresentationEntities();
+    PlatformRuntime::instance().log_info(
+            std::string("player_units_selected_by_type=") +
+            std::to_string(g_selected_unit_ids.size()) +
+            "; seed=" + std::to_string(seed_unit_id) +
+            "; radius=" + std::to_string(max_radius));
+    return static_cast<int>(g_selected_unit_ids.size());
+}
+
+bool MoveSelectedLegacyUnit(float world_x, float world_y) {
+    WORD group = 0;
+    size_t unit_count = 0;
+    if (!RegisterSelectedLegacyCommandGroup(
+                NDb::USER_ACTION_MOVE,
+                true,
+                &group,
+                &unit_count)) {
         return false;
     }
     CVec2 target;
     Vis2AI(&target, world_x, world_y);
     SAIUnitCmd command(ACTION_COMMAND_MOVE_TO, target);
     command.bFromAI = false;
-    theGroupLogic.UnitCommand(command, unit, false);
+    theGroupLogic.GroupCommand(command, group, false);
     g_android_move_target = target;
-    g_android_move_active = true;
+    g_android_move_active = unit_count == 1;
     g_attack_target_unit_id = -1;
     g_android_move_log_millis = 0;
     ++g_player_move_command_count;
     PlatformRuntime::instance().log_info(
             std::string("player_move_command=") +
             std::to_string(g_selected_unit_id) +
+            "; units=" + std::to_string(unit_count) +
             "; target=" + std::to_string(world_x) +
             "," + std::to_string(world_y));
     return true;
@@ -1476,15 +1607,6 @@ bool PerformSelectedLegacyUnitPointAction(
     if (!g_ready || g_selected_unit_id < 0) {
         return false;
     }
-    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
-    if (unit == nullptr ||
-        !unit->IsAlive() ||
-        !unit->IsSelectable() ||
-        unit->GetPlayer() != 0 ||
-        !IsLegacyUnitAction(unit, user_action)) {
-        return false;
-    }
-
     EActionCommand command_type;
     bool place_in_queue = false;
     int command_number = 0;
@@ -1512,7 +1634,16 @@ bool PerformSelectedLegacyUnitPointAction(
     SAIUnitCmd command(command_type, target);
     command.bFromAI = false;
     command.nNumber = command_number;
-    theGroupLogic.UnitCommand(command, unit, place_in_queue);
+    WORD group = 0;
+    size_t unit_count = 0;
+    if (!RegisterSelectedLegacyCommandGroup(
+                user_action,
+                false,
+                &group,
+                &unit_count)) {
+        return false;
+    }
+    theGroupLogic.GroupCommand(command, group, place_in_queue);
     g_android_move_active = false;
     g_android_move_log_millis = 0;
     g_attack_target_unit_id = -1;
@@ -1521,6 +1652,7 @@ bool PerformSelectedLegacyUnitPointAction(
             std::string("player_unit_point_action=") +
             std::to_string(user_action) +
             "; unit=" + std::to_string(g_selected_unit_id) +
+            "; units=" + std::to_string(unit_count) +
             "; target=" + std::to_string(world_x) +
             "," + std::to_string(world_y));
     return true;
@@ -1538,15 +1670,6 @@ bool PerformSelectedLegacyUnitSegmentAction(
                 NDb::USER_ACTION_ENGINEER_BUILD_ENTRENCHMENT) {
         return false;
     }
-    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
-    if (unit == nullptr ||
-        !unit->IsAlive() ||
-        !unit->IsSelectable() ||
-        unit->GetPlayer() != 0 ||
-        !IsLegacyUnitAction(unit, user_action)) {
-        return false;
-    }
-
     CVec2 start_target;
     CVec2 end_target;
     Vis2AI(&start_target, start_world_x, start_world_y);
@@ -1557,14 +1680,23 @@ bool PerformSelectedLegacyUnitSegmentAction(
             start_target);
     begin_command.bFromAI = false;
     begin_command.nNumber = 1;
-    theGroupLogic.UnitCommand(begin_command, unit, false);
 
     SAIUnitCmd end_command(
             ACTION_COMMAND_ENTRENCH_END,
             end_target);
     end_command.bFromAI = false;
     end_command.nNumber = 1;
-    theGroupLogic.UnitCommand(end_command, unit, true);
+    WORD group = 0;
+    size_t unit_count = 0;
+    if (!RegisterSelectedLegacyCommandGroup(
+                user_action,
+                false,
+                &group,
+                &unit_count)) {
+        return false;
+    }
+    theGroupLogic.GroupCommand(begin_command, group, false);
+    theGroupLogic.GroupCommand(end_command, group, true);
 
     g_android_move_active = false;
     g_android_move_log_millis = 0;
@@ -1574,6 +1706,7 @@ bool PerformSelectedLegacyUnitSegmentAction(
             std::string("player_unit_segment_action=") +
             std::to_string(user_action) +
             "; unit=" + std::to_string(g_selected_unit_id) +
+            "; units=" + std::to_string(unit_count) +
             "; start=" + std::to_string(start_world_x) +
             "," + std::to_string(start_world_y) +
             "; end=" + std::to_string(end_world_x) +
@@ -1598,12 +1731,7 @@ bool AttackSelectedLegacyUnit(int target_unit_id) {
         return false;
     }
     CAIUnit* attacker = CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
-    if (attacker == nullptr ||
-        !attacker->IsAlive() ||
-        !attacker->IsSelectable() ||
-        attacker->GetPlayer() != 0) {
-        g_selected_unit_id = -1;
-        PublishPresentationEntities();
+    if (attacker == nullptr || !attacker->IsAlive()) {
         return false;
     }
     CAIUnit* target = CAIUnit::GetUnitByUniqueID(target_unit_id);
@@ -1617,7 +1745,16 @@ bool AttackSelectedLegacyUnit(int target_unit_id) {
             ACTION_COMMAND_ATTACK_UNIT,
             target->GetUniqueId());
     command.bFromAI = false;
-    theGroupLogic.UnitCommand(command, attacker, false);
+    WORD group = 0;
+    size_t unit_count = 0;
+    if (!RegisterSelectedLegacyCommandGroup(
+                NDb::USER_ACTION_ATTACK,
+                false,
+                &group,
+                &unit_count)) {
+        return false;
+    }
+    theGroupLogic.GroupCommand(command, group, false);
     g_android_move_active = false;
     g_android_move_log_millis = 0;
     g_attack_target_unit_id = target->GetUniqueIdQU();
@@ -1626,26 +1763,24 @@ bool AttackSelectedLegacyUnit(int target_unit_id) {
     PlatformRuntime::instance().log_info(
             std::string("player_attack_command=") +
             std::to_string(g_selected_unit_id) +
+            "; units=" + std::to_string(unit_count) +
             "; target=" + std::to_string(target->GetUniqueIdQU()));
     return true;
 }
 
 bool StopSelectedLegacyUnit() {
-    if (!g_ready || g_selected_unit_id < 0) {
-        return false;
-    }
-    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
-    if (unit == nullptr ||
-        !unit->IsAlive() ||
-        !unit->IsSelectable() ||
-        unit->GetPlayer() != 0) {
-        g_selected_unit_id = -1;
-        PublishPresentationEntities();
+    WORD group = 0;
+    size_t unit_count = 0;
+    if (!RegisterSelectedLegacyCommandGroup(
+                NDb::USER_ACTION_STOP,
+                false,
+                &group,
+                &unit_count)) {
         return false;
     }
     SAIUnitCmd command(ACTION_COMMAND_STOP);
     command.bFromAI = false;
-    theGroupLogic.UnitCommand(command, unit, false);
+    theGroupLogic.GroupCommand(command, group, false);
     g_android_move_active = false;
     g_android_move_log_millis = 0;
     g_attack_target_unit_id = -1;
@@ -1653,7 +1788,8 @@ bool StopSelectedLegacyUnit() {
     PublishPresentationEntities();
     PlatformRuntime::instance().log_info(
             std::string("player_stop_command=") +
-            std::to_string(g_selected_unit_id));
+            std::to_string(g_selected_unit_id) +
+            "; units=" + std::to_string(unit_count));
     return true;
 }
 
@@ -1664,15 +1800,6 @@ bool PerformSelectedLegacyUnitAction(int user_action) {
     if (user_action == NDb::USER_ACTION_STOP) {
         return StopSelectedLegacyUnit();
     }
-    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
-    if (unit == nullptr ||
-        !unit->IsAlive() ||
-        !unit->IsSelectable() ||
-        unit->GetPlayer() != 0 ||
-        !IsLegacyUnitAction(unit, user_action)) {
-        return false;
-    }
-
     EActionCommand command_type;
     switch (user_action) {
         case NDb::USER_ACTION_ENTRENCH_SELF:
@@ -1687,7 +1814,16 @@ bool PerformSelectedLegacyUnitAction(int user_action) {
 
     SAIUnitCmd command(command_type);
     command.bFromAI = false;
-    theGroupLogic.UnitCommand(command, unit, false);
+    WORD group = 0;
+    size_t unit_count = 0;
+    if (!RegisterSelectedLegacyCommandGroup(
+                user_action,
+                false,
+                &group,
+                &unit_count)) {
+        return false;
+    }
+    theGroupLogic.GroupCommand(command, group, false);
     g_android_move_active = false;
     g_android_move_log_millis = 0;
     g_attack_target_unit_id = -1;
@@ -1695,12 +1831,27 @@ bool PerformSelectedLegacyUnitAction(int user_action) {
     PlatformRuntime::instance().log_info(
             std::string("player_unit_action=") +
             std::to_string(user_action) +
-            "; unit=" + std::to_string(g_selected_unit_id));
+            "; unit=" + std::to_string(g_selected_unit_id) +
+            "; units=" + std::to_string(unit_count));
     return true;
 }
 
 int SelectedLegacyUnitId() {
     return g_selected_unit_id;
+}
+
+int SelectedLegacyUnitCount() {
+    int count = 0;
+    for (int unit_id : g_selected_unit_ids) {
+        CAIUnit* unit = CAIUnit::GetUnitByUniqueID(unit_id);
+        if (unit != nullptr &&
+            unit->IsAlive() &&
+            unit->IsSelectable() &&
+            unit->GetPlayer() == 0) {
+            ++count;
+        }
+    }
+    return count;
 }
 
 std::string SelectedLegacyUnitHudStatus() {
@@ -1749,6 +1900,38 @@ std::string SelectedLegacyUnitHudSnapshot() {
                     std::max(unit->GetHitPoints(), 0.0f)))
              << ";max_hp="
              << static_cast<int>(std::round(stats->fMaxHP));
+    snapshot << ";selection_count=" << SelectedLegacyUnitCount()
+             << ";members=";
+    bool first_member = true;
+    for (int selected_id : g_selected_unit_ids) {
+        CAIUnit* selected =
+                CAIUnit::GetUnitByUniqueID(selected_id);
+        if (selected == nullptr ||
+            !selected->IsAlive() ||
+            !selected->IsSelectable() ||
+            selected->GetPlayer() != 0 ||
+            selected->GetStats() == nullptr ||
+            !std::isfinite(selected->GetHitPoints()) ||
+            !std::isfinite(selected->GetStats()->fMaxHP) ||
+            selected->GetStats()->fMaxHP <= 0.0f) {
+            continue;
+        }
+        if (!first_member) {
+            snapshot << ",";
+        }
+        snapshot << selected_id
+                 << ":"
+                 << (selected->IsMech() ? "tank" : "soldier")
+                 << ":"
+                 << static_cast<int>(std::round(
+                            std::max(
+                                    selected->GetHitPoints(),
+                                    0.0f)))
+                 << ":"
+                 << static_cast<int>(std::round(
+                            selected->GetStats()->fMaxHP));
+        first_member = false;
+    }
     const CUserActions actions = LegacyUnitActions(unit);
     snapshot << ";actions=";
     bool first_action = true;
@@ -2029,6 +2212,11 @@ AndroidWarFogSnapshot CopyAndroidWarFogSnapshot() {
 }
 
 void ShutdownLegacyGameRuntime() {
+    if (g_android_command_group_registered) {
+        theGroupLogic.UnregisterGroup(g_android_command_group);
+        g_android_command_group_registered = false;
+        g_android_command_group = 0;
+    }
     if (g_ai_logic != nullptr) {
         g_ai_logic->Suspend();
         g_ai_logic->ClearAI();
@@ -2048,6 +2236,7 @@ void ShutdownLegacyGameRuntime() {
     SetAIMap(nullptr);
     ResetReportState();
     g_selected_unit_id = -1;
+    g_selected_unit_ids.clear();
     g_attack_target_unit_id = -1;
     g_player_move_command_count = 0;
     g_player_attack_command_count = 0;
