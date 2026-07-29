@@ -620,14 +620,17 @@ win/cancel state, and show a centered victory/defeat panel with a return to the
 mission selector. Previously those `local_win`/`local_loose` events were
 discarded because the old desktop `WorldClient` was not linked. The in-game
 `Surrender` action uses the same defeat path; it has been exercised on the
-ARM64 emulator through the result panel and back to the 75-map selector.
+ARM64 emulator through the result panel and back to the campaign selector.
 Successful missions now also persist `android_autosave.bk2checkpoint`. The
 selector exposes **Continue campaign** only when that checkpoint exists; it
 restores the campaign state, advances a completed chapter when necessary, and
-starts the next enabled mission. **Start new campaign** retains the clean
-first-campaign path and selects the enabled mission with the earliest
-recommended order instead of incorrectly launching the locked final mission at
-index zero. The raw mission list remains available for port testing.
+starts the next enabled mission. New-campaign buttons are built from the real
+`GameRoot.xdb` order and the shipped UTF-16 campaign-name resources for USA,
+Germany, and USSR. The selected campaign and one of the four original difficulty
+levels are handed to the C++ mission tracker, which selects the first mission
+whose unlock and reinforcement requirements are satisfied instead of
+incorrectly launching the locked final mission at index zero. The raw 75-map
+list is hidden behind an explicit debug browser for port testing.
 
 The selected unit is yellow, the current attack target is orange, and moving
 units follow the real terrain height. Converted original meshes use their
@@ -659,8 +662,8 @@ Granny models preserve all of their model mesh bindings;
 global `InitialPlacement` is intentionally not reapplied because shipped
 infantry geometry already contains the correct root placement. Stance animation
 selection, GPU/runtime skinning, projectile/explosion asset effects, complete
-briefing HUD behavior, and the complete campaign-selection/progression UI remain
-unfinished.
+briefing HUD behavior, and the original chapter-map/statistics/progression UI
+remain unfinished.
 
 The video transcode manifest now writes Android-canonical runtime paths. A Bink
 ref such as `Movies\Nival.bik` maps to `DataAndroid/Movies/Nival.mp4`, not to a

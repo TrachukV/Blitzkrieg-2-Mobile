@@ -321,6 +321,13 @@ MissionRuntimeResult StartConfiguredMissionState() {
     if (launch.tutorial) {
         return StartTutorialMissionState(launch.tutorial_index, launch.difficulty);
     }
+    if (launch.campaign_index >= 0 &&
+        launch.chapter_index < 0 &&
+        launch.mission_index < 0) {
+        return StartFirstCampaignMissionState(
+                launch.campaign_index,
+                launch.difficulty);
+    }
     return StartCampaignMissionState(
             launch.campaign_index,
             launch.chapter_index,

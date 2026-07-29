@@ -2077,6 +2077,71 @@ MissionRuntimeResult StartTutorialMissionState(int tutorial_index, int difficult
     return StoreState(state);
 }
 
+MissionRuntimeResult StartFirstCampaignMissionState(
+        int campaign_index,
+        int difficulty) {
+    MissionRuntimeResult result;
+    if (!EnsureDatabaseReady(&result)) {
+        return result;
+    }
+
+    const NDb::SGameRoot* game_root = NGameX::GetGameRoot();
+    if (game_root == nullptr) {
+        return ErrorResult("game_root_missing");
+    }
+    if (campaign_index < 0 ||
+        campaign_index >= game_root->campaigns.size()) {
+        return ErrorResult("campaign_index_out_of_range");
+    }
+
+    const NDb::SCampaign* campaign =
+            game_root->campaigns[campaign_index].GetPtr();
+    if (campaign == nullptr) {
+        return ErrorResult("campaign_missing");
+    }
+    for (int chapter_index = 0;
+         chapter_index < campaign->chapters.size();
+         ++chapter_index) {
+        const NDb::SChapter* chapter =
+                campaign->chapters[chapter_index].GetPtr();
+        if (chapter == nullptr) {
+            continue;
+        }
+        const std::vector<int> reinforcement_types =
+                ChapterPlayerReinforcementTypes(chapter);
+        int first_enabled_mission = -1;
+        int first_enabled_order = std::numeric_limits<int>::max();
+        for (int mission_index = 0;
+             mission_index < chapter->missionPath.size();
+             ++mission_index) {
+            const NDb::SMissionEnableInfo& mission =
+                    chapter->missionPath[mission_index];
+            const NDb::SMapInfo* map = mission.pMap.GetPtr();
+            if (map == nullptr ||
+                mission.nMissionsToEnable > 0 ||
+                !MissionReinforcementsSatisfied(
+                        map,
+                        reinforcement_types,
+                        chapter->bUseMapReinforcements)) {
+                continue;
+            }
+            if (first_enabled_mission < 0 ||
+                mission.nRecommendedOrder < first_enabled_order) {
+                first_enabled_mission = mission_index;
+                first_enabled_order = mission.nRecommendedOrder;
+            }
+        }
+        if (first_enabled_mission >= 0) {
+            return StartCampaignMissionState(
+                    campaign_index,
+                    chapter_index,
+                    first_enabled_mission,
+                    difficulty);
+        }
+    }
+    return ErrorResult("no_enabled_campaign_missions");
+}
+
 MissionRuntimeResult StartFirstCampaignMissionState() {
     MissionRuntimeResult result;
     if (!EnsureDatabaseReady(&result)) {
@@ -2087,46 +2152,12 @@ MissionRuntimeResult StartFirstCampaignMissionState() {
     if (game_root == nullptr) {
         return ErrorResult("game_root_missing");
     }
-
-    for (int campaign_index = 0; campaign_index < game_root->campaigns.size(); ++campaign_index) {
-        const NDb::SCampaign* campaign = game_root->campaigns[campaign_index].GetPtr();
-        if (campaign == nullptr) {
-            continue;
-        }
-        for (int chapter_index = 0; chapter_index < campaign->chapters.size(); ++chapter_index) {
-            const NDb::SChapter* chapter = campaign->chapters[chapter_index].GetPtr();
-            if (chapter == nullptr) {
-                continue;
-            }
-            const std::vector<int> reinforcement_types =
-                    ChapterPlayerReinforcementTypes(chapter);
-            int first_enabled_mission = -1;
-            int first_enabled_order = std::numeric_limits<int>::max();
-            for (int mission_index = 0; mission_index < chapter->missionPath.size(); ++mission_index) {
-                const NDb::SMissionEnableInfo& mission =
-                        chapter->missionPath[mission_index];
-                const NDb::SMapInfo* map = mission.pMap.GetPtr();
-                if (map == nullptr ||
-                    mission.nMissionsToEnable > 0 ||
-                    !MissionReinforcementsSatisfied(
-                            map,
-                            reinforcement_types,
-                            chapter->bUseMapReinforcements)) {
-                    continue;
-                }
-                if (first_enabled_mission < 0 ||
-                    mission.nRecommendedOrder < first_enabled_order) {
-                    first_enabled_mission = mission_index;
-                    first_enabled_order = mission.nRecommendedOrder;
-                }
-            }
-            if (first_enabled_mission >= 0) {
-                return StartCampaignMissionState(
-                        campaign_index,
-                        chapter_index,
-                        first_enabled_mission,
-                        0);
-            }
+    for (int campaign_index = 0;
+         campaign_index < game_root->campaigns.size();
+         ++campaign_index) {
+        result = StartFirstCampaignMissionState(campaign_index, 0);
+        if (result.ok) {
+            return result;
         }
     }
     return ErrorResult("no_enabled_campaign_missions");

@@ -224,6 +224,9 @@ MissionRuntimeResult StartCampaignMissionState(
 MissionRuntimeResult StartDirectMissionState(const std::string& mission_id, int difficulty);
 MissionRuntimeResult StartTutorialMissionState(int tutorial_index, int difficulty);
 MissionRuntimeResult StartFirstCampaignMissionState();
+MissionRuntimeResult StartFirstCampaignMissionState(
+        int campaign_index,
+        int difficulty);
 MissionRuntimeResult StartCurrentCampaignMissionState(int mission_index, int difficulty);
 MissionRuntimeResult StartFirstEnabledCampaignMissionState(int difficulty);
 MissionRuntimeResult SetMissionObjectiveState(int objective_index, int state);
