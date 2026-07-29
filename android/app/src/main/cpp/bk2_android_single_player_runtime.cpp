@@ -75,11 +75,13 @@ size_t g_converted_geometry_fallback_count = 0;
 size_t g_animated_geometry_part_count = 0;
 size_t g_move_animation_instance_count = 0;
 size_t g_attack_animation_instance_count = 0;
+size_t g_death_animation_instance_count = 0;
 
 enum class ConvertedAnimationVariant {
     Base,
     Move,
     Attack,
+    Death,
 };
 
 struct ConvertedGeometryVertex {
@@ -124,6 +126,9 @@ std::unordered_map<int, ConvertedGeometry> g_move_converted_geometries;
 std::unordered_set<int> g_missing_move_converted_geometries;
 std::unordered_map<int, ConvertedGeometry> g_attack_converted_geometries;
 std::unordered_set<int> g_missing_attack_converted_geometries;
+std::unordered_map<int, ConvertedGeometry> g_death_converted_geometries;
+std::unordered_set<int> g_missing_death_converted_geometries;
+std::unordered_map<int32_t, float> g_death_animation_start_seconds;
 std::unordered_map<uint64_t, GeometryBinding> g_stats_geometry_index;
 std::unordered_map<
         uint64_t,
@@ -860,6 +865,10 @@ const ConvertedGeometry* LoadConvertedGeometry(
         converted_geometries = &g_attack_converted_geometries;
         missing_converted_geometries = &g_missing_attack_converted_geometries;
         filename_suffix = ".attack.bk2mesh";
+    } else if (animation_variant == ConvertedAnimationVariant::Death) {
+        converted_geometries = &g_death_converted_geometries;
+        missing_converted_geometries = &g_missing_death_converted_geometries;
+        filename_suffix = ".death.bk2mesh";
     }
     const auto loaded = converted_geometries->find(record_id);
     if (loaded != converted_geometries->end()) {
@@ -1172,18 +1181,19 @@ bool AppendConvertedGeometry(
                               binding.geometry_record_id,
                               animation_variant);
     if (geometry != nullptr) {
-        size_t* instance_count =
-                animation_variant == ConvertedAnimationVariant::Attack
-                        ? &g_attack_animation_instance_count
-                        : &g_move_animation_instance_count;
+        size_t* instance_count = &g_move_animation_instance_count;
+        const char* diagnostic = "move_animation_runtime=active; geometry=";
+        if (animation_variant == ConvertedAnimationVariant::Attack) {
+            instance_count = &g_attack_animation_instance_count;
+            diagnostic = "attack_animation_runtime=active; geometry=";
+        } else if (animation_variant == ConvertedAnimationVariant::Death) {
+            instance_count = &g_death_animation_instance_count;
+            diagnostic = "death_animation_runtime=active; geometry=";
+        }
         ++*instance_count;
         if (*instance_count == 1) {
             PlatformRuntime::instance().log_info(
-                    std::string(
-                            animation_variant ==
-                                            ConvertedAnimationVariant::Attack
-                                    ? "attack_animation_runtime=active; geometry="
-                                    : "move_animation_runtime=active; geometry=") +
+                    std::string(diagnostic) +
                     std::to_string(binding.geometry_record_id));
         }
     } else {
@@ -1216,9 +1226,14 @@ bool AppendConvertedGeometry(
                 &part.vertices;
         if (part.animation_frames.size() > 1 &&
             part.animation_duration_seconds > 0.0f) {
-            const float animation_time = std::fmod(
-                    std::max(animation_time_seconds, 0.0f),
-                    part.animation_duration_seconds);
+            const float animation_time =
+                    animation_variant == ConvertedAnimationVariant::Death
+                    ? std::min(
+                              std::max(animation_time_seconds, 0.0f),
+                              part.animation_duration_seconds)
+                    : std::fmod(
+                              std::max(animation_time_seconds, 0.0f),
+                              part.animation_duration_seconds);
             const size_t animation_frame = std::min(
                     static_cast<size_t>(
                             animation_time /
@@ -1387,11 +1402,14 @@ void AppendEntityModel(
         WorldObjectMesh* mesh,
         const Bk2PresentationEntity& entity,
         uint32_t abgr,
-        bool selected) {
+        bool selected,
+        float animation_time_seconds) {
     ConvertedAnimationVariant animation_variant =
             ConvertedAnimationVariant::Base;
     if ((entity.flags & BK2_PRESENTATION_ENTITY_INFANTRY) != 0) {
-        if ((entity.flags & BK2_PRESENTATION_ENTITY_ATTACKING) != 0) {
+        if ((entity.flags & BK2_PRESENTATION_ENTITY_DEAD) != 0) {
+            animation_variant = ConvertedAnimationVariant::Death;
+        } else if ((entity.flags & BK2_PRESENTATION_ENTITY_ATTACKING) != 0) {
             animation_variant = ConvertedAnimationVariant::Attack;
         } else if ((entity.flags & BK2_PRESENTATION_ENTITY_MOVING) != 0) {
             animation_variant = ConvertedAnimationVariant::Move;
@@ -1408,7 +1426,7 @@ void AppendEntityModel(
                 entity.heading_radians,
                 abgr,
                 animation_variant,
-                g_animation_elapsed_seconds,
+                animation_time_seconds,
                 -1)) {
         return;
     }
@@ -1665,9 +1683,24 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
     combined.triangle_indices.reserve(
             combined.triangle_indices.size() + entities.size() * 108);
     g_dynamic_rendered_object_count = 0;
+    std::unordered_set<int32_t> visible_corpse_ids;
     for (const Bk2PresentationEntity& entity : entities) {
-        if ((entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) == 0) {
+        const bool dead =
+                (entity.flags & BK2_PRESENTATION_ENTITY_DEAD) != 0;
+        if ((entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) == 0 && !dead) {
             continue;
+        }
+        float animation_time_seconds = g_animation_elapsed_seconds;
+        if (dead) {
+            visible_corpse_ids.insert(entity.id);
+            const auto start =
+                    g_death_animation_start_seconds
+                            .emplace(
+                                    entity.id,
+                                    g_animation_elapsed_seconds)
+                            .first;
+            animation_time_seconds =
+                    g_animation_elapsed_seconds - start->second;
         }
         const bool selected =
                 (entity.flags & BK2_PRESENTATION_ENTITY_SELECTED) != 0;
@@ -1679,8 +1712,18 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
                 selected ? ArgbToAbgr(0xffffe066u)
                          : targeted ? ArgbToAbgr(0xffff8a3du)
                          : ObjectColor(entity.player, false),
-                selected || targeted);
+                selected || targeted,
+                animation_time_seconds);
         ++g_dynamic_rendered_object_count;
+    }
+    for (auto death = g_death_animation_start_seconds.begin();
+         death != g_death_animation_start_seconds.end();) {
+        if (visible_corpse_ids.find(death->first) ==
+            visible_corpse_ids.end()) {
+            death = g_death_animation_start_seconds.erase(death);
+        } else {
+            ++death;
+        }
     }
     g_world_object_mesh = std::move(combined);
     RefreshWorldObjectTextureHandles(&g_world_object_mesh);
@@ -2299,12 +2342,16 @@ void ShutdownSinglePlayerRuntime() {
     g_animated_geometry_part_count = 0;
     g_move_animation_instance_count = 0;
     g_attack_animation_instance_count = 0;
+    g_death_animation_instance_count = 0;
     g_converted_geometries.clear();
     g_missing_converted_geometries.clear();
     g_move_converted_geometries.clear();
     g_missing_move_converted_geometries.clear();
     g_attack_converted_geometries.clear();
     g_missing_attack_converted_geometries.clear();
+    g_death_converted_geometries.clear();
+    g_missing_death_converted_geometries.clear();
+    g_death_animation_start_seconds.clear();
     g_stats_geometry_index.clear();
     g_stats_geometry_variants.clear();
     g_stats_geometry_index_loaded = false;
@@ -2518,6 +2565,10 @@ std::string SinglePlayerRuntimeReport() {
            << g_attack_converted_geometries.size()
            << "; missing_attack_geometry="
            << g_missing_attack_converted_geometries.size()
+           << "; death_geometry_cache="
+           << g_death_converted_geometries.size()
+           << "; missing_death_geometry="
+           << g_missing_death_converted_geometries.size()
            << "; stats_geometry_index="
            << g_stats_geometry_index.size()
            << "; model_texture_layers="
@@ -2533,6 +2584,8 @@ std::string SinglePlayerRuntimeReport() {
            << g_move_animation_instance_count
            << "; attack_animation_instances="
            << g_attack_animation_instance_count
+           << "; death_animation_instances="
+           << g_death_animation_instance_count
            << "; static_fallback_types="
            << g_static_fallback_stats_paths.size()
            << "; dynamic_fallback_types="

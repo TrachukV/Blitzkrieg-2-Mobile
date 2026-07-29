@@ -30,6 +30,7 @@
 #include "SceneB2/TerrainInfo.h"
 #include "Stats_B2_M1/DBMapInfo.h"
 #include "Stats_B2_M1/DBVisObj.h"
+#include "Stats_B2_M1/AIUpdates.h"
 #include "Stats_B2_M1/FeedBackUpdates.h"
 #include "Stats_B2_M1/TerraAIObserver.h"
 #include "Stats_B2_M1/Vis2AI.h"
@@ -42,6 +43,7 @@
 #include <limits>
 #include <set>
 #include <sstream>
+#include <unordered_map>
 #include <vector>
 
 extern "C" {
@@ -96,6 +98,14 @@ uint64_t g_player_move_command_count = 0;
 uint64_t g_player_attack_command_count = 0;
 uint64_t g_client_update_count = 0;
 uint64_t g_objective_update_count = 0;
+struct PresentationCorpse {
+    Bk2PresentationEntity entity{};
+    uint64_t expires_millis = 0;
+};
+std::unordered_map<int32_t, Bk2PresentationEntity>
+        g_last_presentation_entities;
+std::unordered_map<int32_t, PresentationCorpse> g_presentation_corpses;
+uint64_t g_presentation_death_count = 0;
 enum LegacyMissionOutcomeValue {
     kLegacyMissionRunning = 0,
     kLegacyMissionWon = 1,
@@ -479,6 +489,44 @@ void FinalizePendingMissionOutcome() {
                     : "; progression_error=" + progression.error));
 }
 
+void CapturePresentationCorpse(
+        int32_t unit_id,
+        const CVec3& position) {
+    if (g_presentation_corpses.find(unit_id) !=
+        g_presentation_corpses.end()) {
+        return;
+    }
+    const auto previous = g_last_presentation_entities.find(unit_id);
+    if (previous == g_last_presentation_entities.end() ||
+        (previous->second.flags &
+         BK2_PRESENTATION_ENTITY_INFANTRY) == 0 ||
+        (previous->second.flags &
+         BK2_PRESENTATION_ENTITY_FORMATION) != 0) {
+        return;
+    }
+    PresentationCorpse corpse;
+    corpse.entity = previous->second;
+    corpse.entity.flags &=
+            ~(BK2_PRESENTATION_ENTITY_ALIVE |
+              BK2_PRESENTATION_ENTITY_SELECTABLE |
+              BK2_PRESENTATION_ENTITY_MOVABLE |
+              BK2_PRESENTATION_ENTITY_SELECTED |
+              BK2_PRESENTATION_ENTITY_TARGETED |
+              BK2_PRESENTATION_ENTITY_MOVING |
+              BK2_PRESENTATION_ENTITY_ATTACKING);
+    corpse.entity.flags |= BK2_PRESENTATION_ENTITY_DEAD;
+    corpse.entity.hit_points = 0.0f;
+    corpse.entity.x = AI2Vis(position.x);
+    corpse.entity.y = AI2Vis(position.y);
+    corpse.entity.z = AI2Vis(position.z);
+    corpse.expires_millis = g_timer_millis + 10000;
+    g_presentation_corpses[unit_id] = corpse;
+    ++g_presentation_death_count;
+    PlatformRuntime::instance().log_info(
+            std::string("infantry_death_presentation=") +
+            std::to_string(unit_id));
+}
+
 void DrainLegacyClientUpdates() {
     if (g_ai_logic == nullptr) {
         return;
@@ -486,6 +534,20 @@ void DrainLegacyClientUpdates() {
     g_ai_logic->PrepareUpdates();
     while (CPtr<CObjectBase> update = g_ai_logic->GetUpdate()) {
         ++g_client_update_count;
+        SAIDeadUnitUpdate* dead =
+                dynamic_cast<SAIDeadUnitUpdate*>(update.GetPtr());
+        if (dead != nullptr) {
+            const SAINotifyPlacement& placement = dead->placement;
+            CapturePresentationCorpse(
+                    dead->nDeadObj,
+                    placement.bNewFormat
+                            ? placement.vPlacement
+                            : CVec3(
+                                      placement.center.x,
+                                      placement.center.y,
+                                      placement.z));
+            continue;
+        }
         SAIFeedbackUpdate* feedback =
                 dynamic_cast<SAIFeedbackUpdate*>(update.GetPtr());
         if (feedback == nullptr ||
@@ -525,7 +587,9 @@ void DrainLegacyClientUpdates() {
 
 void PublishPresentationEntities() {
     std::vector<Bk2PresentationEntity> entities;
-    entities.reserve(static_cast<size_t>(std::max(g_ai_unit_total_count, 0)));
+    entities.reserve(
+            static_cast<size_t>(std::max(g_ai_unit_total_count, 0)) +
+            g_presentation_corpses.size());
     for (CGlobalIter iter(0, ANY_PARTY); !iter.IsFinished(); iter.Iterate()) {
         CAIUnit* unit = *iter;
         if (unit == nullptr) {
@@ -576,7 +640,7 @@ void PublishPresentationEntities() {
         }
         const CVec3& center = unit->GetCenter();
         const NDb::SUnitBaseRPGStats* stats = unit->GetStats();
-        entities.push_back(Bk2PresentationEntity{
+        Bk2PresentationEntity entity{
                 unit->GetUniqueIdQU(),
                 static_cast<int32_t>(unit->GetPlayer()),
                 flags,
@@ -588,7 +652,20 @@ void PublishPresentationEntities() {
                 StatsPathHash(stats),
                 stats == nullptr ? -1 : stats->GetRecordID(),
                 GeometryRecordId(stats),
-                stats == nullptr ? 1.0f : stats->fSelectionScale});
+                stats == nullptr ? 1.0f : stats->fSelectionScale};
+        entities.push_back(entity);
+        if ((entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) != 0) {
+            g_last_presentation_entities[entity.id] = entity;
+        }
+    }
+    for (auto corpse = g_presentation_corpses.begin();
+         corpse != g_presentation_corpses.end();) {
+        if (corpse->second.expires_millis <= g_timer_millis) {
+            corpse = g_presentation_corpses.erase(corpse);
+            continue;
+        }
+        entities.push_back(corpse->second.entity);
+        ++corpse;
     }
     bk2::presentation::PublishEntities(std::move(entities));
 }
@@ -831,11 +908,23 @@ void ResetReportState() {
     g_missing_squad_payload_refs.clear();
     g_client_update_count = 0;
     g_objective_update_count = 0;
+    g_last_presentation_entities.clear();
+    g_presentation_corpses.clear();
+    g_presentation_death_count = 0;
     g_mission_outcome.store(kLegacyMissionRunning);
     g_pending_mission_outcome.store(kLegacyMissionRunning);
     g_stage = "not_started";
 }
 
+}
+
+void Bk2AndroidOnUnitDead(CCommonUnit* unit) {
+    if (unit == nullptr) {
+        return;
+    }
+    bk2::android::CapturePresentationCorpse(
+            unit->GetUniqueIdQU(),
+            unit->GetCenter());
 }
 
 bool InitializeLegacyGameRuntime(
@@ -1115,6 +1204,36 @@ void HandleLegacyInputEvent(const char* event_name) {
         g_pending_mission_outcome.store(kLegacyMissionWon);
     } else if (std::strcmp(event_name, "local_loose") == 0) {
         g_pending_mission_outcome.store(kLegacyMissionLost);
+#if !defined(NDEBUG)
+    } else if (std::strcmp(event_name, "debug_kill_attack_target") == 0 &&
+               g_attack_target_unit_id >= 0) {
+        CAIUnit* target =
+                CAIUnit::GetUnitByUniqueID(g_attack_target_unit_id);
+        if (target != nullptr &&
+            (!target->IsInfantry() || target->IsFormation())) {
+            const int target_player = target->GetPlayer();
+            target = nullptr;
+            for (CGlobalIter iter(0, ANY_PARTY);
+                 !iter.IsFinished();
+                 iter.Iterate()) {
+                CAIUnit* candidate = *iter;
+                if (candidate != nullptr &&
+                    candidate->IsAlive() &&
+                    candidate->IsInfantry() &&
+                    !candidate->IsFormation() &&
+                    candidate->GetPlayer() == target_player) {
+                    target = candidate;
+                    break;
+                }
+            }
+        }
+        if (target != nullptr && target->IsAlive()) {
+            PlatformRuntime::instance().log_info(
+                    std::string("debug_kill_attack_target=") +
+                    std::to_string(target->GetUniqueIdQU()));
+            target->Die(false, target->GetHitPoints() + 1.0f);
+        }
+#endif
     }
 }
 
@@ -1147,6 +1266,9 @@ void ShutdownLegacyGameRuntime() {
     g_player_attack_command_count = 0;
     g_client_update_count = 0;
     g_objective_update_count = 0;
+    g_last_presentation_entities.clear();
+    g_presentation_corpses.clear();
+    g_presentation_death_count = 0;
     g_mission_outcome.store(kLegacyMissionRunning);
     g_pending_mission_outcome.store(kLegacyMissionRunning);
     g_android_move_active = false;
@@ -1182,6 +1304,8 @@ std::string LegacyGameRuntimeReport() {
            << "; player_attack_commands=" << g_player_attack_command_count
            << "; client_updates=" << g_client_update_count
            << "; objective_updates=" << g_objective_update_count
+           << "; presented_deaths=" << g_presentation_death_count
+           << "; active_corpses=" << g_presentation_corpses.size()
            << "; normalized_rpg_stats=" << g_normalized_rpg_stats_count
            << "; normalized_unit_stats=" << g_normalized_unit_stats_count
            << "; normalized_squad_stats=" << g_normalized_squad_stats_count

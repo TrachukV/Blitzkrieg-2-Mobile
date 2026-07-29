@@ -7,6 +7,11 @@
 #include "UnitsIterators.h"
 #include "AIUnit.h"
 #include "DBAIConsts.h"
+#if defined(BK2_ANDROID)
+namespace bk2::android {
+void Bk2AndroidOnUnitDead(CCommonUnit* unit);
+}
+#endif
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 extern CEventUpdater updater;
 extern CDiplomacy theDipl;
@@ -208,6 +213,9 @@ void CStatistics::ResourceUsed( const int nPlayer, const float fResources )
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void CStatistics::UnitDead( CCommonUnit *pUnit )
 {
+#if defined(BK2_ANDROID)
+	bk2::android::Bk2AndroidOnUnitDead( pUnit );
+#endif
 	/*
 	if ( pScenarioTracker )
 	{

@@ -36,6 +36,7 @@ function usage() {
       "[--idle-animation <Data/bin/Animations/resource>] " +
       "[--move-animation <Data/bin/Animations/resource>] " +
       "[--attack-animation <Data/bin/Animations/resource>] " +
+      "[--death-animation <Data/bin/Animations/resource>] " +
       "[--animation-frames <count>] " +
       "[--skip-unsupported] " +
       "[--all | <resource-id> ...]\n",
@@ -48,6 +49,7 @@ function parseArguments(argv) {
   let idleAnimation = "";
   let moveAnimation = "";
   let attackAnimation = "";
+  let deathAnimation = "";
   let animationFrames = DEFAULT_ANIMATION_FRAME_COUNT;
   let all = false;
   let skipUnsupported = false;
@@ -64,6 +66,8 @@ function parseArguments(argv) {
       moveAnimation = argv[++index] ?? "";
     } else if (argument === "--attack-animation") {
       attackAnimation = argv[++index] ?? "";
+    } else if (argument === "--death-animation") {
+      deathAnimation = argv[++index] ?? "";
     } else if (argument === "--animation-frames") {
       animationFrames = Number.parseInt(argv[++index] ?? "", 10);
     } else if (argument === "--all") {
@@ -94,6 +98,7 @@ function parseArguments(argv) {
     idleAnimation: idleAnimation ? resolve(idleAnimation) : "",
     moveAnimation: moveAnimation ? resolve(moveAnimation) : "",
     attackAnimation: attackAnimation ? resolve(attackAnimation) : "",
+    deathAnimation: deathAnimation ? resolve(deathAnimation) : "",
     animationFrames,
     all,
     skipUnsupported,
@@ -373,6 +378,7 @@ async function convertOne(
   idleAnimation,
   moveAnimation,
   attackAnimation,
+  deathAnimation,
 ) {
   const source = join(options.input, id);
   const runtimeId = runtimeGeometryId(id);
@@ -408,6 +414,12 @@ async function convertOne(
     options.animationFrames,
     join(options.output, `${runtimeId}.attack.bk2mesh`),
   );
+  const death = await writeAnimationVariant(
+    parsed,
+    deathAnimation,
+    options.animationFrames,
+    join(options.output, `${runtimeId}.death.bk2mesh`),
+  );
   return {
     id,
     runtimeId,
@@ -415,6 +427,7 @@ async function convertOne(
     outputBytes: primary.output.length,
     moveOutputBytes: move.outputBytes,
     attackOutputBytes: attack.outputBytes,
+    deathOutputBytes: death.outputBytes,
     meshes: primary.meshes.length,
     vertices: primary.meshes.reduce(
       (sum, mesh) => sum + mesh.vertexCount,
@@ -427,6 +440,7 @@ async function convertOne(
     animatedMeshes,
     moveAnimatedMeshes: move.animatedMeshes,
     attackAnimatedMeshes: attack.animatedMeshes,
+    deathAnimatedMeshes: death.animatedMeshes,
   };
 }
 
@@ -463,6 +477,15 @@ async function main() {
       throw new Error("attack animation resource has no animation");
     }
   }
+  let deathAnimation = null;
+  if (options.deathAnimation) {
+    const animationBytes = await readFile(options.deathAnimation);
+    deathAnimation =
+      parseAnimated(toArrayBuffer(animationBytes)).animations[0] ?? null;
+    if (deathAnimation === null) {
+      throw new Error("death animation resource has no animation");
+    }
+  }
   const ids = await resourceIds(options);
   let converted = 0;
   let skipped = 0;
@@ -473,11 +496,14 @@ async function main() {
   let outputBytes = 0;
   let moveOutputBytes = 0;
   let attackOutputBytes = 0;
+  let deathOutputBytes = 0;
   let animatedMeshes = 0;
   let moveAnimatedMeshes = 0;
   let attackAnimatedMeshes = 0;
+  let deathAnimatedMeshes = 0;
   let moveCacheFiles = 0;
   let attackCacheFiles = 0;
+  let deathCacheFiles = 0;
   for (const id of ids) {
     try {
       const result = await convertOne(
@@ -486,6 +512,7 @@ async function main() {
         idleAnimation,
         moveAnimation,
         attackAnimation,
+        deathAnimation,
       );
       ++converted;
       vertices += result.vertices;
@@ -493,11 +520,14 @@ async function main() {
       outputBytes += result.outputBytes;
       moveOutputBytes += result.moveOutputBytes;
       attackOutputBytes += result.attackOutputBytes;
+      deathOutputBytes += result.deathOutputBytes;
       animatedMeshes += result.animatedMeshes;
       moveAnimatedMeshes += result.moveAnimatedMeshes;
       attackAnimatedMeshes += result.attackAnimatedMeshes;
+      deathAnimatedMeshes += result.deathAnimatedMeshes;
       moveCacheFiles += result.moveOutputBytes > 0 ? 1 : 0;
       attackCacheFiles += result.attackOutputBytes > 0 ? 1 : 0;
+      deathCacheFiles += result.deathOutputBytes > 0 ? 1 : 0;
       if (!options.all) {
         process.stdout.write(
           `geometry=${result.id}; runtime_id=${result.runtimeId}; ` +
@@ -505,10 +535,12 @@ async function main() {
             `animated_meshes=${result.animatedMeshes}; ` +
             `move_animated_meshes=${result.moveAnimatedMeshes}; ` +
             `attack_animated_meshes=${result.attackAnimatedMeshes}; ` +
+            `death_animated_meshes=${result.deathAnimatedMeshes}; ` +
             `vertices=${result.vertices}; triangles=${result.triangles}; ` +
             `output=${basename(join(options.output, `${result.runtimeId}.bk2mesh`))}; ` +
             `move_output=${result.moveOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.move.bk2mesh`)) : "<none>"}; ` +
-            `attack_output=${result.attackOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.attack.bk2mesh`)) : "<none>"}\n`,
+            `attack_output=${result.attackOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.attack.bk2mesh`)) : "<none>"}; ` +
+            `death_output=${result.deathOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.death.bk2mesh`)) : "<none>"}\n`,
         );
       }
     } catch (error) {
@@ -534,8 +566,11 @@ async function main() {
       `move_cache_files=${moveCacheFiles}; ` +
       `attack_animated_meshes=${attackAnimatedMeshes}; ` +
       `attack_cache_files=${attackCacheFiles}; ` +
+      `death_animated_meshes=${deathAnimatedMeshes}; ` +
+      `death_cache_files=${deathCacheFiles}; ` +
       `output_bytes=${outputBytes}; move_output_bytes=${moveOutputBytes}; ` +
-      `attack_output_bytes=${attackOutputBytes}\n`,
+      `attack_output_bytes=${attackOutputBytes}; ` +
+      `death_output_bytes=${deathOutputBytes}\n`,
   );
   if (failed > 0) {
     process.exitCode = 1;

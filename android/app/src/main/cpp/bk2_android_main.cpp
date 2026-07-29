@@ -1,6 +1,7 @@
 #include "bk2_android_audio_backend.h"
 #include "bk2_android_audio_output.h"
 #include "bk2_android_database.h"
+#include "bk2_android_legacy_game_runtime.h"
 #include "bk2_android_platform.h"
 #include "bk2_android_single_player_runtime.h"
 #include "bk2_android_vfs.h"
@@ -255,6 +256,12 @@ void PollInput(android_app* app) {
             case AKEYCODE_E:
                 bk2::android::RotateSinglePlayerCamera(0.08f);
                 break;
+#if !defined(NDEBUG)
+            case AKEYCODE_K:
+                bk2::android::HandleLegacyInputEvent(
+                        "debug_kill_attack_target");
+                break;
+#endif
             default:
                 break;
         }
