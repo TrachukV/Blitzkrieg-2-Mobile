@@ -18,6 +18,7 @@ struct TerrainVertex {
 };
 
 struct TerrainLayer {
+    std::vector<TerrainVertex> vertices;
     std::vector<uint32_t> triangle_indices;
     int terrain_type_index = -1;
     uint16_t texture_handle = UINT16_MAX;

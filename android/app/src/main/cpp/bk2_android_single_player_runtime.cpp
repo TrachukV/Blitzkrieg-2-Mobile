@@ -457,21 +457,41 @@ bool BuildTerrainLayers(
         return false;
     }
 
-    mesh->layers.clear();
-    mesh->layers.resize(terra_set->terraTypes.size());
+    struct OrderedTerrainType {
+        int terrain_type_index = -1;
+        int priority = 0;
+    };
+    std::vector<OrderedTerrainType> ordered_types;
+    ordered_types.reserve(terra_set->terraTypes.size());
     g_terrain_type_colors.resize(terra_set->terraTypes.size(), 0xff42583du);
-    for (size_t index = 0; index < mesh->layers.size(); ++index) {
-        TerrainLayer& layer = mesh->layers[index];
-        layer.terrain_type_index = static_cast<int>(index);
+    for (size_t index = 0; index < terra_set->terraTypes.size(); ++index) {
         const NDb::STGTerraType* type = terra_set->terraTypes[index].GetPtr();
+        int priority = 0;
         if (type != nullptr) {
-            layer.fallback_argb = static_cast<uint32_t>(type->nColor);
-            g_terrain_type_colors[index] = layer.fallback_argb;
+            g_terrain_type_colors[index] =
+                    static_cast<uint32_t>(type->nColor);
+            if (type->pMaterial) {
+                priority = type->pMaterial->nPriority;
+            }
         }
+        ordered_types.push_back(
+                OrderedTerrainType{static_cast<int>(index), priority});
     }
+    std::stable_sort(
+            ordered_types.begin(),
+            ordered_types.end(),
+            [](const OrderedTerrainType& left,
+               const OrderedTerrainType& right) {
+                return left.priority < right.priority;
+            });
 
     const int width = HeightWidth(info);
     const int height = HeightHeight(info);
+    const int mask_width = info.tileTerraMap.GetSizeX();
+    const int mask_height = info.tileTerraMap.GetSizeY();
+    if (mask_width < 2 || mask_height < 2) {
+        return false;
+    }
     g_terrain_type_width = width - 1;
     g_terrain_type_height = height - 1;
     g_terrain_type_map.assign(
@@ -480,28 +500,198 @@ bool BuildTerrainLayers(
             -1);
     for (int y = 0; y < height - 1; ++y) {
         for (int x = 0; x < width - 1; ++x) {
-            const int map_x = std::min(x, info.tileTerraMap.GetSizeX() - 1);
-            const int map_y = std::min(y, info.tileTerraMap.GetSizeY() - 1);
+            const int map_x = std::min(x, mask_width - 1);
+            const int map_y = std::min(y, mask_height - 1);
             const int type_index = info.tileTerraMap[map_y][map_x];
             g_terrain_type_map[
                     static_cast<size_t>(y * g_terrain_type_width + x)] =
                     type_index;
-            if (type_index < 0 ||
-                type_index >= static_cast<int>(mesh->layers.size())) {
+        }
+    }
+
+    const size_t mask_size =
+            static_cast<size_t>(mask_width) * mask_height;
+    std::vector<std::vector<uint8_t> > masks(
+            terra_set->terraTypes.size(),
+            std::vector<uint8_t>(mask_size, 0));
+    constexpr int kBlurWeights[3][3] = {
+            {1, 2, 1},
+            {2, 4, 2},
+            {1, 2, 1}};
+    for (const OrderedTerrainType& ordered : ordered_types) {
+        std::vector<uint8_t>& mask = masks[ordered.terrain_type_index];
+        for (int y = 0; y < mask_height; ++y) {
+            for (int x = 0; x < mask_width; ++x) {
+                int weighted_value = 0;
+                int weight_sum = 0;
+                for (int offset_y = -1; offset_y <= 1; ++offset_y) {
+                    const int source_y = y + offset_y;
+                    if (source_y < 0 || source_y >= mask_height) {
+                        continue;
+                    }
+                    for (int offset_x = -1; offset_x <= 1; ++offset_x) {
+                        const int source_x = x + offset_x;
+                        if (source_x < 0 || source_x >= mask_width) {
+                            continue;
+                        }
+                        const int weight =
+                                kBlurWeights[offset_y + 1][offset_x + 1];
+                        weight_sum += weight;
+                        if (info.tileTerraMap[source_y][source_x] ==
+                            ordered.terrain_type_index) {
+                            weighted_value += weight * 255;
+                        }
+                    }
+                }
+                mask[static_cast<size_t>(y * mask_width + x)] =
+                        static_cast<uint8_t>(
+                                weight_sum > 0
+                                        ? weighted_value / weight_sum
+                                        : 0);
+            }
+        }
+    }
+
+    mesh->layers.clear();
+    mesh->layers.resize(ordered_types.size());
+    std::vector<int> type_to_layer(ordered_types.size(), -1);
+    std::vector<std::vector<int> > shared_to_local(
+            ordered_types.size(),
+            std::vector<int>(mesh->vertices.size(), -1));
+    for (size_t layer_index = 0;
+         layer_index < ordered_types.size();
+         ++layer_index) {
+        TerrainLayer& layer = mesh->layers[layer_index];
+        layer.terrain_type_index =
+                ordered_types[layer_index].terrain_type_index;
+        type_to_layer[layer.terrain_type_index] =
+                static_cast<int>(layer_index);
+        const NDb::STGTerraType* type =
+                terra_set->terraTypes[layer.terrain_type_index].GetPtr();
+        if (type != nullptr) {
+            layer.fallback_argb = static_cast<uint32_t>(type->nColor);
+        }
+    }
+
+    auto add_layer_vertex =
+            [&](int layer_index,
+                uint32_t shared_index,
+                uint8_t alpha) -> uint32_t {
+        std::vector<int>& remap = shared_to_local[layer_index];
+        int& local_index = remap[shared_index];
+        TerrainLayer& layer = mesh->layers[layer_index];
+        if (local_index < 0) {
+            TerrainVertex vertex = mesh->vertices[shared_index];
+            const NDb::STGTerraType* type =
+                    terra_set
+                            ->terraTypes[layer.terrain_type_index]
+                            .GetPtr();
+            const float texture_scale =
+                    type != nullptr ? type->fScaleCoeff : 1.0f;
+            vertex.u *= texture_scale;
+            vertex.v *= texture_scale;
+            vertex.abgr =
+                    (static_cast<uint32_t>(alpha) << 24) | 0x00ffffffu;
+            local_index = static_cast<int>(layer.vertices.size());
+            layer.vertices.push_back(vertex);
+        } else {
+            TerrainVertex& vertex = layer.vertices[local_index];
+            const uint8_t old_alpha =
+                    static_cast<uint8_t>(vertex.abgr >> 24);
+            if (alpha > old_alpha) {
+                vertex.abgr =
+                        (static_cast<uint32_t>(alpha) << 24) |
+                        (vertex.abgr & 0x00ffffffu);
+            }
+        }
+        return static_cast<uint32_t>(local_index);
+    };
+
+    for (int y = 0; y < height - 1; ++y) {
+        for (int x = 0; x < width - 1; ++x) {
+            const int mask_x = std::min(x, mask_width - 2);
+            const int mask_y = std::min(y, mask_height - 2);
+            const size_t top_left_mask =
+                    static_cast<size_t>(mask_y * mask_width + mask_x);
+            const size_t top_right_mask = top_left_mask + 1;
+            const size_t bottom_left_mask =
+                    top_left_mask + static_cast<size_t>(mask_width);
+            const size_t bottom_right_mask = bottom_left_mask + 1;
+            std::vector<int> present_types;
+            for (auto ordered = ordered_types.rbegin();
+                 ordered != ordered_types.rend();
+                 ++ordered) {
+                const std::vector<uint8_t>& mask =
+                        masks[ordered->terrain_type_index];
+                if (mask[top_left_mask] > 0 ||
+                    mask[top_right_mask] > 0 ||
+                    mask[bottom_left_mask] > 0 ||
+                    mask[bottom_right_mask] > 0) {
+                    present_types.push_back(
+                            ordered->terrain_type_index);
+                }
+            }
+            if (present_types.empty()) {
                 continue;
             }
-            const uint32_t top_left = static_cast<uint32_t>(y * width + x);
+
+            const uint32_t top_left =
+                    static_cast<uint32_t>(y * width + x);
             const uint32_t top_right = top_left + 1;
             const uint32_t bottom_left =
                     top_left + static_cast<uint32_t>(width);
             const uint32_t bottom_right = bottom_left + 1;
-            TerrainLayer& layer = mesh->layers[type_index];
-            layer.triangle_indices.push_back(top_left);
-            layer.triangle_indices.push_back(bottom_left);
-            layer.triangle_indices.push_back(top_right);
-            layer.triangle_indices.push_back(top_right);
-            layer.triangle_indices.push_back(bottom_left);
-            layer.triangle_indices.push_back(bottom_right);
+            int accumulated[4] = {0, 0, 0, 0};
+            for (size_t present_index = 0;
+                 present_index < present_types.size();
+                 ++present_index) {
+                const int terrain_type = present_types[present_index];
+                if (present_index + 1 < present_types.size()) {
+                    const std::vector<uint8_t>& mask =
+                            masks[terrain_type];
+                    accumulated[0] = std::min(
+                            accumulated[0] + mask[top_left_mask],
+                            255);
+                    accumulated[1] = std::min(
+                            accumulated[1] + mask[top_right_mask],
+                            255);
+                    accumulated[2] = std::min(
+                            accumulated[2] + mask[bottom_left_mask],
+                            255);
+                    accumulated[3] = std::min(
+                            accumulated[3] + mask[bottom_right_mask],
+                            255);
+                } else {
+                    std::fill(
+                            std::begin(accumulated),
+                            std::end(accumulated),
+                            255);
+                }
+                const int layer_index = type_to_layer[terrain_type];
+                TerrainLayer& layer = mesh->layers[layer_index];
+                const uint32_t local_top_left = add_layer_vertex(
+                        layer_index,
+                        top_left,
+                        static_cast<uint8_t>(accumulated[0]));
+                const uint32_t local_top_right = add_layer_vertex(
+                        layer_index,
+                        top_right,
+                        static_cast<uint8_t>(accumulated[1]));
+                const uint32_t local_bottom_left = add_layer_vertex(
+                        layer_index,
+                        bottom_left,
+                        static_cast<uint8_t>(accumulated[2]));
+                const uint32_t local_bottom_right = add_layer_vertex(
+                        layer_index,
+                        bottom_right,
+                        static_cast<uint8_t>(accumulated[3]));
+                layer.triangle_indices.push_back(local_top_left);
+                layer.triangle_indices.push_back(local_bottom_left);
+                layer.triangle_indices.push_back(local_top_right);
+                layer.triangle_indices.push_back(local_top_right);
+                layer.triangle_indices.push_back(local_bottom_left);
+                layer.triangle_indices.push_back(local_bottom_right);
+            }
         }
     }
 

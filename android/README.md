@@ -446,8 +446,11 @@ It no longer stretches the minimap across the heightfield or draws the
 diagnostic radar grid. Terrain textures use an opaque, base-level Android GPU
 upload because their legacy DXT3 alpha and mip chain were authored for the
 original multi-layer terrain shader and otherwise produced black distant
-terrain in the current bgfx path. The current renderer assigns one dominant
-material per tile; the original soft terrain-mask blending is still pending.
+terrain in the current bgfx path. Terrain transitions now follow the original
+`TileMasks.cpp` rules: material priority, the 3x3 Gaussian mask, cumulative
+alpha layers, and each terrain type's `ScaleCoeff` are applied to
+layer-specific vertices. USA 1.0, GB3.1, and GER1.0 have been exercised on the
+ARM64 emulator with all 19, 20, and 19 terrain textures respectively.
 
 The Android content step now decodes the shipped Granny format-6/Oodle0
 geometry into a small native `BK2MSH1` cache. The current checkout yields 1,457

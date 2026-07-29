@@ -420,6 +420,13 @@ private:
     }
 
     void destroy_terrain_buffers() {
+        for (bgfx::VertexBufferHandle handle :
+             terrain_layer_vertex_buffers_) {
+            if (bgfx::isValid(handle)) {
+                bgfx::destroy(handle);
+            }
+        }
+        terrain_layer_vertex_buffers_.clear();
         for (bgfx::IndexBufferHandle handle :
              terrain_layer_index_buffers_) {
             if (bgfx::isValid(handle)) {
@@ -489,15 +496,25 @@ private:
                                     sizeof(uint32_t))),
                     BGFX_BUFFER_INDEX32);
         }
+        terrain_layer_vertex_buffers_.reserve(terrain_mesh_.layers.size());
         terrain_layer_index_buffers_.reserve(terrain_mesh_.layers.size());
         for (const TerrainLayer& layer : terrain_mesh_.layers) {
+            bgfx::VertexBufferHandle vertex_handle =
+                    bgfx::createVertexBuffer(
+                            bgfx::copy(
+                                    layer.vertices.data(),
+                                    static_cast<uint32_t>(
+                                            layer.vertices.size() *
+                                            sizeof(TerrainVertex))),
+                            terrain_layout_);
             bgfx::IndexBufferHandle handle = bgfx::createIndexBuffer(
                     bgfx::copy(
                             layer.triangle_indices.data(),
-                            static_cast<uint32_t>(
-                                    layer.triangle_indices.size() *
-                                    sizeof(uint32_t))),
+                        static_cast<uint32_t>(
+                                layer.triangle_indices.size() *
+                                sizeof(uint32_t))),
                     BGFX_BUFFER_INDEX32);
+            terrain_layer_vertex_buffers_.push_back(vertex_handle);
             terrain_layer_index_buffers_.push_back(handle);
         }
         if (!bgfx::isValid(terrain_vertex_buffer_) ||
@@ -616,10 +633,13 @@ private:
                 BGFX_STATE_WRITE_RGB |
                 BGFX_STATE_WRITE_A |
                 BGFX_STATE_WRITE_Z |
-                BGFX_STATE_DEPTH_TEST_LESS |
-                BGFX_STATE_MSAA;
+                BGFX_STATE_DEPTH_TEST_LEQUAL |
+                BGFX_STATE_MSAA |
+                BGFX_STATE_BLEND_ALPHA;
         const bool has_layers =
                 !terrain_mesh_.layers.empty() &&
+                terrain_layer_vertex_buffers_.size() ==
+                        terrain_mesh_.layers.size() &&
                 terrain_layer_index_buffers_.size() ==
                         terrain_mesh_.layers.size();
         if (has_layers) {
@@ -627,13 +647,16 @@ private:
                  index < terrain_mesh_.layers.size();
                  ++index) {
                 const TerrainLayer& layer = terrain_mesh_.layers[index];
+                const bgfx::VertexBufferHandle vertex_buffer =
+                        terrain_layer_vertex_buffers_[index];
                 const bgfx::IndexBufferHandle index_buffer =
                         terrain_layer_index_buffers_[index];
-                if (!bgfx::isValid(index_buffer)) {
+                if (!bgfx::isValid(vertex_buffer) ||
+                    !bgfx::isValid(index_buffer)) {
                     continue;
                 }
                 bgfx::setTransform(kIdentityMatrix);
-                bgfx::setVertexBuffer(0, terrain_vertex_buffer_);
+                bgfx::setVertexBuffer(0, vertex_buffer);
                 bgfx::setIndexBuffer(index_buffer);
                 bgfx::setState(terrain_state);
                 const bgfx::TextureHandle texture = {
@@ -893,6 +916,8 @@ private:
     bgfx::VertexBufferHandle terrain_vertex_buffer_ = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle terrain_index_buffer_ = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle terrain_line_index_buffer_ = BGFX_INVALID_HANDLE;
+    std::vector<bgfx::VertexBufferHandle>
+            terrain_layer_vertex_buffers_;
     std::vector<bgfx::IndexBufferHandle>
             terrain_layer_index_buffers_;
     bgfx::VertexBufferHandle world_object_vertex_buffer_ =
