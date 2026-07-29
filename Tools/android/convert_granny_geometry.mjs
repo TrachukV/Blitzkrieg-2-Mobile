@@ -9,6 +9,7 @@ const MAGIC = Buffer.from([0x42, 0x4b, 0x32, 0x4d, 0x53, 0x48, 0x31, 0x00]);
 const FORMAT_VERSION = 3;
 const VERTEX_FLOAT_COUNT = 8;
 const DEFAULT_ANIMATION_FRAME_COUNT = 16;
+const MAX_MESH_COUNT = 128;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -338,7 +339,12 @@ async function convertOne(options, id, animation) {
   const sourceBytes = await readFile(source);
   // Geometry conversion does not need embedded Granny textures. Avoiding the
   // texture path also keeps unrelated legacy IGC payloads from blocking a mesh.
-  const parsed = parseModel(toArrayBuffer(sourceBytes));
+  // The decoder defaults to 32 meshes, but shipped bridges and large ships
+  // contain up to 60. Match the Android cache reader's validated limit so
+  // multi-part original models are not silently truncated.
+  const parsed = parseModel(toArrayBuffer(sourceBytes), {
+    maxMeshes: MAX_MESH_COUNT,
+  });
   const { output, meshes } = serializeGeometry(
     parsed,
     animation,

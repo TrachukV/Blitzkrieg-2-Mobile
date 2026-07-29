@@ -455,9 +455,10 @@ layer-specific vertices. USA 1.0, GB3.1, and GER1.0 have been exercised on the
 ARM64 emulator with all 19, 20, and 19 terrain textures respectively.
 
 The Android content step now decodes the shipped Granny format-6/Oodle0
-geometry into a small native `BK2MSH1` cache. The current checkout yields 1,457
-renderable geometry files (640,989 vertices and 414,400 triangles); 26 geometry
-records contain no renderable mesh and are skipped. An offline index follows
+geometry into a small native `BK2MSH1` cache. The complete current pass yields
+2,510 renderable geometry files (1,126,692 vertices and 731,200 triangles);
+44 geometry records contain no renderable mesh and are skipped, while 263
+Oodle1 resources remain blocked. An offline index follows
 the original `RPGStats -> VisObj -> Model -> Geometry` XDB chain, preferring the
 Asia season and falling back through the other seasons. The runtime keys this
 index by a stable normalized DB-path hash because the current Android DB bridge
@@ -465,6 +466,12 @@ does not preserve `ObjectRecordID` on loaded RPG resources. On the first USA
 mission, the verified runtime loads 31 distinct original geometries with no
 missing converted file. Unmapped objects retain the temporary proxy instead of
 disappearing.
+
+The converter raises the open decoder's default 32-mesh ceiling to the cache
+reader's validated 128-mesh limit. Four referenced original resources exceed
+the old ceiling: the railway center span, both large wooden bridge spans, and
+the Erebus ship. Their complete 46, 55, 60, and 50 mesh sets are now preserved
+instead of silently dropping the remaining model parts.
 
 The same offline index resolves each selected Model's material list and each
 Texture descriptor's original DDS `DestName`. Version 3 of the `BK2MSH1` cache
