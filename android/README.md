@@ -523,8 +523,12 @@ resolved original DDS material. The geometry index also resolves frame-specific
 entrenchments. If a referenced visual Granny stream is absent but its original
 AI geometry is available, the converter uses the legacy `AI_TO_VIS` scale from
 `Vis2AI.h`. On USA 1.0 this replaces all 142 entrenchment proxies with the
-original segment meshes and materials. Unmapped formations and objects remain
-green/red proxies. The camera starts focused on the player's formation.
+original segment meshes and materials. Fence frames follow the original
+`GetSegmentsByFrameIndex` order across center, both damaged, and destroyed
+segment lists; minor fence objects are now included in the presentation mesh.
+On GB3.1 this reduces converted-geometry fallbacks from 1,263 to 377, and on
+GER1.0 from 905 to 95. Unmapped formations and objects remain green/red
+proxies. The camera starts focused on the player's formation.
 
 This is a playable runtime milestone, not a complete visual port. Terrain now
 uses original game materials and the first runtime model path uses original

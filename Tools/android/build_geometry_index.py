@@ -248,37 +248,77 @@ def build_index(
                     geometry_scale,
                 )
         segments = child(stats, "segments")
-        if segments is None:
-            continue
-        for frame_index, item in enumerate(segments):
-            vis = child(item, "VisObj")
-            if vis is None:
-                continue
-            vis_path = reference_path(
-                data_root,
-                stats_path,
-                vis.attrib.get("href", ""),
-            )
-            binding = (
-                binding_from_vis_path(data_root, vis_path)
-                if vis_path is not None
+        if segments is not None:
+            for frame_index, item in enumerate(segments):
+                vis = child(item, "VisObj")
+                if vis is None:
+                    continue
+                vis_path = reference_path(
+                    data_root,
+                    stats_path,
+                    vis.attrib.get("href", ""),
+                )
+                binding = (
+                    binding_from_vis_path(data_root, vis_path)
+                    if vis_path is not None
+                    else None
+                )
+                if binding is None:
+                    continue
+                (
+                    geometry_record_id,
+                    material_quantities,
+                    textures,
+                    geometry_scale,
+                ) = binding
+                result[(path_hash, frame_index)] = (
+                    int(record),
+                    geometry_record_id,
+                    material_quantities,
+                    textures,
+                    geometry_scale,
+                )
+        fence_frame_index = 0
+        for group_name in (
+            "CenterSegments",
+            "DamagedSegmentsOtherSide",
+            "DamagedSegments",
+            "DestroyedSegments",
+        ):
+            group = child(stats, group_name)
+            vis_objects = (
+                child(group, "VisObjes")
+                if group is not None
                 else None
             )
-            if binding is None:
+            if vis_objects is None:
                 continue
-            (
-                geometry_record_id,
-                material_quantities,
-                textures,
-                geometry_scale,
-            ) = binding
-            result[(path_hash, frame_index)] = (
-                int(record),
-                geometry_record_id,
-                material_quantities,
-                textures,
-                geometry_scale,
-            )
+            for vis in vis_objects:
+                vis_path = reference_path(
+                    data_root,
+                    stats_path,
+                    vis.attrib.get("href", ""),
+                )
+                binding = (
+                    binding_from_vis_path(data_root, vis_path)
+                    if vis_path is not None
+                    else None
+                )
+                if binding is not None:
+                    (
+                        geometry_record_id,
+                        material_quantities,
+                        textures,
+                        geometry_scale,
+                    ) = binding
+                    result[(path_hash, fence_frame_index)] = (
+                        int(record),
+                        geometry_record_id,
+                        material_quantities,
+                        textures,
+                        geometry_scale,
+                    )
+                fence_frame_index += 1
     return result
 
 

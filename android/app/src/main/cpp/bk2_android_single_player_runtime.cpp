@@ -1529,7 +1529,7 @@ void BuildPresentationStaticWorldMesh(
             terrain_info,
             false,
             false,
-            false,
+            true,
             false,
             mesh);
     AppendMapObjects(
@@ -1537,7 +1537,7 @@ void BuildPresentationStaticWorldMesh(
             terrain_info,
             true,
             false,
-            false,
+            true,
             false,
             mesh);
 }
