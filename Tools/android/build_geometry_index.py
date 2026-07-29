@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+from functools import lru_cache
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -17,6 +19,11 @@ SEASON_PRIORITY = (
     "SEASON_AFRICA",
 )
 
+LEGACY_RELOCATED_PREFIXES = (
+    "scene/geoms/all/",
+    "scene/texandmats/all/",
+)
+
 
 def child(element: ET.Element, name: str) -> ET.Element | None:
     wanted = name.lower()
@@ -26,13 +33,87 @@ def child(element: ET.Element, name: str) -> ET.Element | None:
     return None
 
 
+def canonical_legacy_stem(value: str) -> str:
+    value = value.lower().removesuffix("_visobj")
+    value = re.sub(r"(?<![0-9])0+([0-9]+)", r"\1", value)
+    return re.sub(r"[^a-z0-9]", "", value)
+
+
+@lru_cache(maxsize=None)
+def resolve_relative_path(
+    data_root_value: str,
+    relative_value: str,
+) -> Path | None:
+    data_root = Path(data_root_value)
+    relative = Path(relative_value)
+    current = data_root
+    parts = relative.parts
+    for part_index, part in enumerate(parts):
+        direct = current / part
+        if direct.exists():
+            current = direct
+            continue
+        try:
+            children = tuple(current.iterdir())
+        except OSError:
+            return None
+        match = next(
+            (
+                child_path
+                for child_path in children
+                if child_path.name.casefold() == part.casefold()
+            ),
+            None,
+        )
+        if match is None and part_index + 1 == len(parts):
+            wanted = canonical_legacy_stem(Path(part).stem)
+            suffix = Path(part).suffix.casefold()
+            match = next(
+                (
+                    child_path
+                    for child_path in children
+                    if child_path.suffix.casefold() == suffix
+                    and canonical_legacy_stem(child_path.stem) == wanted
+                ),
+                None,
+            )
+        if match is None:
+            return None
+        current = match
+    return current
+
+
 def reference_path(data_root: Path, owner: Path, href: str) -> Path | None:
     value = href.split("#", 1)[0].strip().replace("\\", "/")
     if not value:
         return None
     if value.startswith("/"):
-        return data_root / value.lstrip("/")
-    return owner.parent / value
+        relative = value.lstrip("/")
+        candidates = [relative]
+        lowered = relative.lower()
+        for prefix in LEGACY_RELOCATED_PREFIXES:
+            if lowered.startswith(prefix):
+                candidates.append(relative[len(prefix):])
+        for candidate in candidates:
+            resolved = resolve_relative_path(
+                str(data_root),
+                candidate,
+            )
+            if resolved is not None:
+                return resolved
+        return data_root / relative
+    direct = owner.parent / value
+    if direct.exists():
+        return direct
+    try:
+        relative = direct.relative_to(data_root)
+    except ValueError:
+        return direct
+    resolved = resolve_relative_path(
+        str(data_root),
+        relative.as_posix(),
+    )
+    return resolved if resolved is not None else direct
 
 
 def parse_root(path: Path) -> ET.Element | None:

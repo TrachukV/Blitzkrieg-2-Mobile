@@ -481,6 +481,13 @@ XML uses `units/.../mechunitrpgstats.xdb` while the staged files use
 ready game stage with 358 live units and six script segments; GER1.0 reaches it
 with 969 game units, 975 presentation units, and six script segments.
 
+The offline geometry index applies the same compatibility to content that the
+open repository relocated out of `/Scene/Geoms/All` and
+`/Scene/TexAndMats/All`. It resolves case differences and legacy aliases such
+as `damaged1_visobj.xdb` to the available `damaged01.xdb`. This restores the
+original building meshes on GB3.1 and reduces its remaining geometry fallbacks
+from 377 to 33.
+
 Touch controls currently implemented:
 
 - tap a green player unit or formation to select it;
