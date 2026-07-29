@@ -572,8 +572,10 @@ Touch controls currently implemented:
 
 Debug APKs also accept keyboard `K` after an attack target is selected. It
 kills a hostile infantry member through the real `CAIUnit::Die` path so the
-death presentation bridge can be smoke-tested; this shortcut is absent from
-release builds.
+death presentation bridge can be smoke-tested. Keyboard `V` sends the same
+`local_win` event used by mission Lua, allowing campaign autosave and
+continuation to be tested without completing a full battle. Both shortcuts are
+absent from release builds.
 
 The in-game Android HUD now uses the shipped `MissionMain.tga` panel,
 `MiniMap/foreground.tga`, and original Move, Attack, Stop, Objectives, and F10
@@ -598,6 +600,13 @@ mission selector. Previously those `local_win`/`local_loose` events were
 discarded because the old desktop `WorldClient` was not linked. The in-game
 `Surrender` action uses the same defeat path; it has been exercised on the
 ARM64 emulator through the result panel and back to the 75-map selector.
+Successful missions now also persist `android_autosave.bk2checkpoint`. The
+selector exposes **Continue campaign** only when that checkpoint exists; it
+restores the campaign state, advances a completed chapter when necessary, and
+starts the next enabled mission. **Start new campaign** retains the clean
+first-campaign path and selects the enabled mission with the earliest
+recommended order instead of incorrectly launching the locked final mission at
+index zero. The raw mission list remains available for port testing.
 
 The selected unit is yellow, the current attack target is orange, and moving
 units follow the real terrain height. Converted original meshes use their

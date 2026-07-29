@@ -40,6 +40,7 @@ public final class MissionSelectActivity extends AppCompatActivity {
 
     private final ArrayList<MissionEntry> missions = new ArrayList<>();
     private ArrayAdapter<String> adapter;
+    private Button continueButton;
     private TextView status;
 
     @Override
@@ -47,6 +48,12 @@ public final class MissionSelectActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(createContentView());
         loadMissions();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refreshContinueButton();
     }
 
     private LinearLayout createContentView() {
@@ -63,11 +70,26 @@ public final class MissionSelectActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        continueButton = new Button(this);
+        continueButton.setText("Continue campaign");
+        continueButton.setVisibility(View.GONE);
+        continueButton.setOnClickListener(view -> {
+            if (!writeContinueSelection()) {
+                status.setText("Cannot prepare campaign autosave.");
+                return;
+            }
+            status.setText("Loading campaign autosave...");
+            startActivity(new Intent(this, Blitzkrieg2Activity.class));
+        });
+        root.addView(continueButton, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
         Button defaultButton = new Button(this);
-        defaultButton.setText("Start first campaign mission");
+        defaultButton.setText("Start new campaign");
         defaultButton.setOnClickListener(view -> {
             deleteSelection();
-            status.setText("Launching first campaign mission...");
+            status.setText("Launching a new campaign...");
             startActivity(new Intent(this, Blitzkrieg2Activity.class));
         });
         root.addView(defaultButton, new LinearLayout.LayoutParams(
@@ -108,6 +130,36 @@ public final class MissionSelectActivity extends AppCompatActivity {
                 1.0f));
 
         return root;
+    }
+
+    private void refreshContinueButton() {
+        if (continueButton != null) {
+            continueButton.setVisibility(
+                    campaignAutosave().canRead() ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    private File campaignAutosave() {
+        return new File(
+                getFilesDir(),
+                "Profiles/default/Saves/android_autosave.bk2checkpoint");
+    }
+
+    private boolean writeContinueSelection() {
+        boolean wrote = false;
+        for (File target : selectionTargets()) {
+            File parent = target.getParentFile();
+            if (parent != null) {
+                parent.mkdirs();
+            }
+            try (FileWriter writer = new FileWriter(target, false)) {
+                writer.write("continue=1\n");
+                writer.write("difficulty=0\n");
+                wrote = true;
+            } catch (IOException ignored) {
+            }
+        }
+        return wrote;
     }
 
     private void loadMissions() {

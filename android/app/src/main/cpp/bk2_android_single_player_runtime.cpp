@@ -144,6 +144,7 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh);
 struct MissionLaunchOverride {
     bool present = false;
     bool tutorial = false;
+    bool continue_campaign = false;
     int campaign_index = -1;
     int chapter_index = -1;
     int mission_index = -1;
@@ -263,6 +264,8 @@ MissionLaunchOverride ReadMissionLaunchOverride() {
             result.chapter_index = parsed;
         } else if (key == "mission") {
             result.mission_index = parsed;
+        } else if (key == "continue") {
+            result.continue_campaign = parsed != 0;
         } else if (key == "tutorial") {
             result.tutorial = true;
             result.tutorial_index = parsed;
@@ -285,6 +288,30 @@ MissionRuntimeResult StartConfiguredMissionState() {
     }
     if (!launch.present) {
         return StartFirstCampaignMissionState();
+    }
+    if (launch.continue_campaign) {
+        MissionRuntimeResult result =
+                LoadMissionRuntimeCheckpoint("android_autosave");
+        if (!result.ok) {
+            return result;
+        }
+        if (result.state.mission_active) {
+            result.ok = false;
+            result.error = "autosave_contains_active_mission";
+            return result;
+        }
+        if (result.state.campaign_finished) {
+            result.ok = false;
+            result.error = "autosave_campaign_finished";
+            return result;
+        }
+        if (result.state.chapter_finished) {
+            result = AdvanceToNextChapter();
+            if (!result.ok) {
+                return result;
+            }
+        }
+        return StartFirstEnabledCampaignMissionState(launch.difficulty);
     }
     if (!launch.mission_id.empty()) {
         return StartDirectMissionState(launch.mission_id, launch.difficulty);

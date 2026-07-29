@@ -470,6 +470,15 @@ void FinalizePendingMissionOutcome() {
             g_scenario_tracker->MissionWin();
         }
         progression = MarkMissionWon();
+        if (progression.ok) {
+            const MissionRuntimeResult autosave =
+                    SaveMissionRuntimeCheckpoint("android_autosave");
+            PlatformRuntime::instance().log_info(
+                    autosave.ok
+                            ? "mission_autosave=saved"
+                            : std::string("mission_autosave=failed; error=") +
+                                      autosave.error);
+        }
     } else {
         if (g_scenario_tracker != nullptr) {
             g_scenario_tracker->MissionCancel();

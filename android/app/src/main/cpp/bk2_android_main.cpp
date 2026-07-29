@@ -257,6 +257,9 @@ void PollInput(android_app* app) {
                 bk2::android::RotateSinglePlayerCamera(0.08f);
                 break;
 #if !defined(NDEBUG)
+            case AKEYCODE_V:
+                bk2::android::HandleLegacyInputEvent("local_win");
+                break;
             case AKEYCODE_K:
                 bk2::android::HandleLegacyInputEvent(
                         "debug_kill_attack_target");

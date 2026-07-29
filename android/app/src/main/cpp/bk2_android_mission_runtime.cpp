@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <jni.h>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -2097,14 +2098,38 @@ MissionRuntimeResult StartFirstCampaignMissionState() {
             if (chapter == nullptr) {
                 continue;
             }
+            const std::vector<int> reinforcement_types =
+                    ChapterPlayerReinforcementTypes(chapter);
+            int first_enabled_mission = -1;
+            int first_enabled_order = std::numeric_limits<int>::max();
             for (int mission_index = 0; mission_index < chapter->missionPath.size(); ++mission_index) {
-                if (chapter->missionPath[mission_index].pMap.GetPtr() != nullptr) {
-                    return StartCampaignMissionState(campaign_index, chapter_index, mission_index, 0);
+                const NDb::SMissionEnableInfo& mission =
+                        chapter->missionPath[mission_index];
+                const NDb::SMapInfo* map = mission.pMap.GetPtr();
+                if (map == nullptr ||
+                    mission.nMissionsToEnable > 0 ||
+                    !MissionReinforcementsSatisfied(
+                            map,
+                            reinforcement_types,
+                            chapter->bUseMapReinforcements)) {
+                    continue;
                 }
+                if (first_enabled_mission < 0 ||
+                    mission.nRecommendedOrder < first_enabled_order) {
+                    first_enabled_mission = mission_index;
+                    first_enabled_order = mission.nRecommendedOrder;
+                }
+            }
+            if (first_enabled_mission >= 0) {
+                return StartCampaignMissionState(
+                        campaign_index,
+                        chapter_index,
+                        first_enabled_mission,
+                        0);
             }
         }
     }
-    return ErrorResult("no_campaign_missions");
+    return ErrorResult("no_enabled_campaign_missions");
 }
 
 MissionRuntimeResult StartCurrentCampaignMissionState(int mission_index, int difficulty) {
