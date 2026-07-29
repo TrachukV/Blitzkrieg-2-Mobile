@@ -61,10 +61,14 @@ int SelectLegacyUnitNear(
         float max_radius,
         int player);
 bool SelectLegacyUnit(int unit_id, int player);
+int SelectLegacyUnits(
+        const std::vector<int>& unit_ids,
+        int player);
 int SelectLegacyUnitsByTypeNear(
         int seed_unit_id,
         float max_radius,
         int player);
+bool ActivateSelectedLegacyUnit(int unit_id);
 bool MoveSelectedLegacyUnit(float world_x, float world_y);
 bool PerformSelectedLegacyUnitPointAction(
         int user_action,

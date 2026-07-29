@@ -7,6 +7,7 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.view.MotionEvent;
 import android.view.View;
 
 import java.io.File;
@@ -15,17 +16,30 @@ import java.util.List;
 
 final class OriginalMissionHudView extends View {
     private static final class SelectedMember {
+        final int id;
         final String kind;
         final int hitPoints;
         final int maxHitPoints;
 
         SelectedMember(
+                int id,
                 String kind,
                 int hitPoints,
                 int maxHitPoints) {
+            this.id = id;
             this.kind = kind;
             this.hitPoints = hitPoints;
             this.maxHitPoints = maxHitPoints;
+        }
+    }
+
+    private static final class MemberCardTarget {
+        final RectF bounds;
+        final int unitId;
+
+        MemberCardTarget(RectF bounds, int unitId) {
+            this.bounds = bounds;
+            this.unitId = unitId;
         }
     }
 
@@ -47,10 +61,13 @@ final class OriginalMissionHudView extends View {
     private String selectedMembersValue = "";
     private final List<SelectedMember> selectedMembers =
             new ArrayList<>();
+    private final List<MemberCardTarget> memberCardTargets =
+            new ArrayList<>();
+    private int pressedMemberId = -1;
 
     OriginalMissionHudView(Context context, File dataRoot) {
         super(context);
-        setClickable(false);
+        setClickable(true);
         panel = TgaDecoder.decode(
                 new File(dataRoot, "Complete/UI/Panels/MissionMain.tga"));
         minimapFrame = TgaDecoder.decode(
@@ -138,6 +155,7 @@ final class OriginalMissionHudView extends View {
                 }
                 selectedMembers.add(
                         new SelectedMember(
+                                parseInt(parts[0]),
                                 parts[1],
                                 parseInt(parts[2]),
                                 parseInt(parts[3])));
@@ -145,17 +163,68 @@ final class OriginalMissionHudView extends View {
             if (selectedMembers.isEmpty() && !kind.isEmpty()) {
                 selectedMembers.add(
                         new SelectedMember(
+                                -1,
                                 kind,
                                 hitPoints,
                                 maxHitPoints));
             }
+            memberCardTargets.clear();
+            pressedMemberId = -1;
             invalidate();
         }
     }
 
     @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            pressedMemberId = findMemberCard(
+                    event.getX(),
+                    event.getY());
+            return pressedMemberId >= 0;
+        }
+        if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+            int releasedMemberId = findMemberCard(
+                    event.getX(),
+                    event.getY());
+            boolean handled = pressedMemberId >= 0;
+            boolean activate =
+                    handled &&
+                    releasedMemberId == pressedMemberId;
+            int unitId = pressedMemberId;
+            pressedMemberId = -1;
+            if (activate) {
+                performClick();
+                NativeBridge.setActiveSelectedUnit(unitId);
+            }
+            return handled;
+        }
+        if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+            boolean handled = pressedMemberId >= 0;
+            pressedMemberId = -1;
+            return handled;
+        }
+        return pressedMemberId >= 0;
+    }
+
+    @Override
+    public boolean performClick() {
+        super.performClick();
+        return true;
+    }
+
+    private int findMemberCard(float x, float y) {
+        for (MemberCardTarget target : memberCardTargets) {
+            if (target.bounds.contains(x, y)) {
+                return target.unitId;
+            }
+        }
+        return -1;
+    }
+
+    @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
+        memberCardTargets.clear();
         if (panel == null || minimapFrame == null) {
             canvas.drawColor(0xd91e241d);
             return;
@@ -278,7 +347,18 @@ final class OriginalMissionHudView extends View {
                     left,
                     top,
                     cardSize,
-                    member);
+                    member,
+                    index == 0);
+            if (member.id >= 0) {
+                memberCardTargets.add(
+                        new MemberCardTarget(
+                                new RectF(
+                                        left,
+                                        top,
+                                        left + cardSize,
+                                        top + cardSize + 8.0f * scale),
+                                member.id));
+            }
         }
     }
 
@@ -288,7 +368,8 @@ final class OriginalMissionHudView extends View {
             float cardLeft,
             float cardTop,
             float cardSize,
-            SelectedMember member) {
+            SelectedMember member,
+            boolean active) {
         Bitmap icon = "tank".equals(member.kind)
                 ? tankIcon
                 : soldierIcon;
@@ -313,6 +394,18 @@ final class OriginalMissionHudView extends View {
                         card.right - inset,
                         card.bottom - inset),
                 paint);
+        if (active) {
+            Paint.Style previousStyle = paint.getStyle();
+            float previousStrokeWidth = paint.getStrokeWidth();
+            int previousColor = paint.getColor();
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(Math.max(2.0f, 2.0f * scale));
+            paint.setColor(0xffe5d94c);
+            canvas.drawRect(card, paint);
+            paint.setColor(previousColor);
+            paint.setStrokeWidth(previousStrokeWidth);
+            paint.setStyle(previousStyle);
+        }
 
         float healthRatio = Math.max(
                 0.0f,

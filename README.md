@@ -52,7 +52,11 @@ tracer ribbons, muzzle flashes, and animated fire/smoke on destroyed mechanized
 units. Double-tapping a selected unit expands the selection to nearby units of
 the same legacy type (up to twelve), gives each unit an original selection
 marker and HUD card, and sends Move, Attack, Stop, and supported abilities
-through one legacy AI command group. See
+through one legacy AI command group. Holding for 350 ms and then dragging draws
+an original-style selection rectangle and selects up to twelve friendly units
+of any type inside it; a quick drag still pans the camera. Tapping a member card
+makes that unit active, so its type-specific actions replace the command grid
+while common commands continue to address the whole selection. See
 [`android/README.md`](android/README.md) for build, content-staging, verification,
 and remaining-port details.
 

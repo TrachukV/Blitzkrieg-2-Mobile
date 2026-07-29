@@ -18,8 +18,12 @@ Double-tapping a selected unit expands the selection to up to twelve nearby
 units with the same legacy stats/type. The renderer marks every selected
 `CAIUnit`, the HUD shows a health card for every member, and commands are sent
 through a registered `CGroupLogic` group so the original subgroup movement
-logic remains active. Drag-box selection and mixed-type active-ability groups
-remain to be ported.
+logic remains active. A 350 ms hold followed by a one-finger drag draws a
+screen-space selection rectangle and selects up to twelve friendly `CAIUnit`
+instances of any type inside it; a quick one-finger drag remains camera pan.
+Tapping a member card moves that unit to the active slot. Common desktop
+actions address the full selection, while type-specific actions are derived
+from and dispatched to the active unit's matching legacy stats group.
 
 ## Implemented In This Slice
 

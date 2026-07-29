@@ -157,6 +157,15 @@ bool IsSelectedLegacyUnitId(int unit_id) {
             unit_id) != g_selected_unit_ids.end();
 }
 
+bool IsAllUnitsSelectionAction(int user_action) {
+    return user_action == NDb::USER_ACTION_MOVE ||
+            user_action == NDb::USER_ACTION_ATTACK ||
+            user_action == NDb::USER_ACTION_ROTATE ||
+            user_action == NDb::USER_ACTION_ENTRENCH_SELF ||
+            user_action == NDb::USER_ACTION_STAND_GROUND ||
+            user_action == NDb::USER_ACTION_STOP;
+}
+
 bool IsLegacyUnitAction(CAIUnit* unit, int user_action) {
     return unit != nullptr &&
             user_action >= 0 &&
@@ -213,6 +222,45 @@ CUserActions LegacyUnitActions(CAIUnit* unit) {
     return actions;
 }
 
+CUserActions SelectedLegacyActions(CAIUnit* active_unit) {
+    CUserActions actions = LegacyUnitActions(active_unit);
+    CUserActions common_actions;
+    for (int unit_id : g_selected_unit_ids) {
+        CAIUnit* unit = CAIUnit::GetUnitByUniqueID(unit_id);
+        if (unit == nullptr ||
+            !unit->IsAlive() ||
+            !unit->IsSelectable() ||
+            unit->GetPlayer() != 0) {
+            continue;
+        }
+        const CUserActions unit_actions = LegacyUnitActions(unit);
+        for (int action : {
+                     static_cast<int>(NDb::USER_ACTION_MOVE),
+                     static_cast<int>(NDb::USER_ACTION_ATTACK),
+                     static_cast<int>(NDb::USER_ACTION_STOP)}) {
+            if (unit_actions.HasAction(action)) {
+                common_actions.SetAction(action);
+            }
+        }
+    }
+    actions |= common_actions;
+    return actions;
+}
+
+bool AnySelectedLegacyUnitCanMove() {
+    for (int unit_id : g_selected_unit_ids) {
+        CAIUnit* unit = CAIUnit::GetUnitByUniqueID(unit_id);
+        if (unit != nullptr &&
+            unit->IsAlive() &&
+            unit->IsSelectable() &&
+            unit->GetPlayer() == 0 &&
+            unit->CanMove()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool RegisterSelectedLegacyCommandGroup(
         int user_action,
         bool movable_only,
@@ -223,6 +271,10 @@ bool RegisterSelectedLegacyCommandGroup(
     }
     vector<int> command_units;
     command_units.reserve(g_selected_unit_ids.size());
+    CAIUnit* active_unit =
+            CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+    const bool all_units_action =
+            IsAllUnitsSelectionAction(user_action);
     for (int unit_id : g_selected_unit_ids) {
         CAIUnit* unit = CAIUnit::GetUnitByUniqueID(unit_id);
         if (unit == nullptr ||
@@ -230,7 +282,11 @@ bool RegisterSelectedLegacyCommandGroup(
             !unit->IsSelectable() ||
             unit->GetPlayer() != 0 ||
             (movable_only && !unit->CanMove()) ||
-            (user_action != NDb::USER_ACTION_UNKNOWN &&
+            (!all_units_action &&
+             active_unit != nullptr &&
+             unit->GetStats() != active_unit->GetStats()) ||
+            (!all_units_action &&
+             user_action != NDb::USER_ACTION_UNKNOWN &&
              !IsLegacyUnitAction(unit, user_action))) {
             continue;
         }
@@ -1489,6 +1545,52 @@ bool SelectLegacyUnit(int unit_id, int player) {
     return true;
 }
 
+int SelectLegacyUnits(
+        const std::vector<int>& unit_ids,
+        int player) {
+    if (!g_ready || unit_ids.empty()) {
+        return 0;
+    }
+    constexpr size_t kMaximumMobileSelection = 12;
+    std::vector<int> selected_ids;
+    selected_ids.reserve(
+            std::min(unit_ids.size(), kMaximumMobileSelection));
+    for (int unit_id : unit_ids) {
+        CAIUnit* unit = CAIUnit::GetUnitByUniqueID(unit_id);
+        if (unit == nullptr ||
+            !unit->IsAlive() ||
+            !unit->IsSelectable() ||
+            static_cast<int>(unit->GetPlayer()) != player) {
+            continue;
+        }
+        const int selected_id = unit->GetUniqueIdQU();
+        if (std::find(
+                    selected_ids.begin(),
+                    selected_ids.end(),
+                    selected_id) != selected_ids.end()) {
+            continue;
+        }
+        selected_ids.push_back(selected_id);
+        if (selected_ids.size() >= kMaximumMobileSelection) {
+            break;
+        }
+    }
+    if (selected_ids.empty()) {
+        return 0;
+    }
+    g_selected_unit_ids = std::move(selected_ids);
+    g_selected_unit_id = g_selected_unit_ids.front();
+    g_attack_target_unit_id = -1;
+    g_android_move_active = false;
+    g_android_move_log_millis = 0;
+    PublishPresentationEntities();
+    PlatformRuntime::instance().log_info(
+            std::string("player_units_selected=") +
+            std::to_string(g_selected_unit_ids.size()) +
+            "; active=" + std::to_string(g_selected_unit_id));
+    return static_cast<int>(g_selected_unit_ids.size());
+}
+
 int SelectLegacyUnitsByTypeNear(
         int seed_unit_id,
         float max_radius,
@@ -1569,6 +1671,38 @@ int SelectLegacyUnitsByTypeNear(
             "; seed=" + std::to_string(seed_unit_id) +
             "; radius=" + std::to_string(max_radius));
     return static_cast<int>(g_selected_unit_ids.size());
+}
+
+bool ActivateSelectedLegacyUnit(int unit_id) {
+    if (!g_ready || unit_id < 0) {
+        return false;
+    }
+    auto selected = std::find(
+            g_selected_unit_ids.begin(),
+            g_selected_unit_ids.end(),
+            unit_id);
+    if (selected == g_selected_unit_ids.end()) {
+        return false;
+    }
+    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(unit_id);
+    if (unit == nullptr ||
+        !unit->IsAlive() ||
+        !unit->IsSelectable() ||
+        unit->GetPlayer() != 0) {
+        return false;
+    }
+    std::rotate(
+            g_selected_unit_ids.begin(),
+            selected,
+            selected + 1);
+    g_selected_unit_id = unit_id;
+    PublishPresentationEntities();
+    PlatformRuntime::instance().log_info(
+            std::string("player_active_selected_unit=") +
+            std::to_string(unit_id) +
+            "; selection=" +
+            std::to_string(g_selected_unit_ids.size()));
+    return true;
 }
 
 bool MoveSelectedLegacyUnit(float world_x, float world_y) {
@@ -1932,7 +2066,7 @@ std::string SelectedLegacyUnitHudSnapshot() {
                             selected->GetStats()->fMaxHP));
         first_member = false;
     }
-    const CUserActions actions = LegacyUnitActions(unit);
+    const CUserActions actions = SelectedLegacyActions(unit);
     snapshot << ";actions=";
     bool first_action = true;
     for (int action = 1; action <= 127; ++action) {
@@ -1962,7 +2096,8 @@ std::string SelectedLegacyUnitHudSnapshot() {
                  static_cast<int>(NDb::USER_ACTION_STOP),
                  static_cast<int>(NDb::USER_ACTION_SPYGLASS)}) {
         if (!actions.HasAction(action) ||
-            (action == NDb::USER_ACTION_MOVE && !unit->CanMove())) {
+            (action == NDb::USER_ACTION_MOVE &&
+             !AnySelectedLegacyUnitCanMove())) {
             continue;
         }
         if (!first_enabled) {

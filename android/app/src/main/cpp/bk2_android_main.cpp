@@ -97,9 +97,80 @@ struct TouchCameraState {
     float start_y = 0.0f;
     float distance = 0.0f;
     bool moved = false;
+    bool panning = false;
+    bool selecting = false;
+    uint64_t down_millis = 0;
 };
 
 TouchCameraState g_touch_camera;
+
+void ResetTouchCameraState() {
+    g_touch_camera = TouchCameraState{};
+}
+
+void QueueTouchSelectionOverlay() {
+    if (!g_touch_camera.selecting ||
+        !bk2::android::RenderBackend().is_ready()) {
+        return;
+    }
+    const float viewport_width = static_cast<float>(
+            bk2::android::RenderBackend().width());
+    const float viewport_height = static_cast<float>(
+            bk2::android::RenderBackend().height());
+    const float left = std::clamp(
+            std::min(g_touch_camera.start_x, g_touch_camera.center_x),
+            0.0f,
+            viewport_width);
+    const float right = std::clamp(
+            std::max(g_touch_camera.start_x, g_touch_camera.center_x),
+            0.0f,
+            viewport_width);
+    const float top = std::clamp(
+            std::min(g_touch_camera.start_y, g_touch_camera.center_y),
+            0.0f,
+            viewport_height);
+    const float bottom = std::clamp(
+            std::max(g_touch_camera.start_y, g_touch_camera.center_y),
+            0.0f,
+            viewport_height);
+    if (right - left < 1.0f || bottom - top < 1.0f) {
+        return;
+    }
+    constexpr uint32_t kSelectionFillArgb = 0x243fdb67u;
+    constexpr uint32_t kSelectionBorderArgb = 0xff72e681u;
+    const float border = std::max(2.0f, viewport_width / 1200.0f);
+    auto& backend = bk2::android::RenderBackend();
+    backend.queue_solid_rect(
+            left,
+            top,
+            right - left,
+            bottom - top,
+            kSelectionFillArgb);
+    backend.queue_solid_rect(
+            left,
+            top,
+            right - left,
+            border,
+            kSelectionBorderArgb);
+    backend.queue_solid_rect(
+            left,
+            bottom - border,
+            right - left,
+            border,
+            kSelectionBorderArgb);
+    backend.queue_solid_rect(
+            left,
+            top,
+            border,
+            bottom - top,
+            kSelectionBorderArgb);
+    backend.queue_solid_rect(
+            right - border,
+            top,
+            border,
+            bottom - top,
+            kSelectionBorderArgb);
+}
 
 void PollInput(android_app* app) {
     android_input_buffer* input_buffer = android_app_swap_input_buffers(app);
@@ -111,8 +182,7 @@ void PollInput(android_app* app) {
         const GameActivityMotionEvent& event = input_buffer->motionEvents[i];
         const int action = event.action & AMOTION_EVENT_ACTION_MASK;
         if (action == AMOTION_EVENT_ACTION_CANCEL) {
-            g_touch_camera.tracking = false;
-            g_touch_camera.pointer_count = 0;
+            ResetTouchCameraState();
             continue;
         }
         if (action == AMOTION_EVENT_ACTION_UP ||
@@ -120,21 +190,28 @@ void PollInput(android_app* app) {
             if (action == AMOTION_EVENT_ACTION_UP &&
                 g_touch_camera.tracking &&
                 g_touch_camera.pointer_count == 1 &&
-                !g_touch_camera.moved &&
                 event.pointerCount > 0) {
                 const float x =
                         GameActivityPointerAxes_getX(&event.pointers[0]);
                 const float y =
                         GameActivityPointerAxes_getY(&event.pointers[0]);
-                bk2::android::HandleSinglePlayerTap(
-                        x,
-                        y,
-                        bk2::android::RenderBackend().width(),
-                        bk2::android::RenderBackend().height());
+                if (g_touch_camera.selecting) {
+                    bk2::android::HandleSinglePlayerSelectionRect(
+                            g_touch_camera.start_x,
+                            g_touch_camera.start_y,
+                            x,
+                            y,
+                            bk2::android::RenderBackend().width(),
+                            bk2::android::RenderBackend().height());
+                } else if (!g_touch_camera.moved) {
+                    bk2::android::HandleSinglePlayerTap(
+                            x,
+                            y,
+                            bk2::android::RenderBackend().width(),
+                            bk2::android::RenderBackend().height());
+                }
             }
-            g_touch_camera.tracking = false;
-            g_touch_camera.pointer_count = 0;
-            g_touch_camera.moved = false;
+            ResetTouchCameraState();
             continue;
         }
 
@@ -154,6 +231,11 @@ void PollInput(android_app* app) {
                 g_touch_camera.start_y = y;
                 g_touch_camera.distance = 0.0f;
                 g_touch_camera.moved = false;
+                g_touch_camera.panning = false;
+                g_touch_camera.selecting = false;
+                g_touch_camera.down_millis =
+                        bk2::android::PlatformRuntime::instance()
+                                .monotonic_millis();
                 continue;
             }
 
@@ -165,9 +247,25 @@ void PollInput(android_app* app) {
                         16.0f * 16.0f) {
                     g_touch_camera.moved = true;
                 }
-                bk2::android::PanSinglePlayerCamera(
-                        x - g_touch_camera.center_x,
-                        y - g_touch_camera.center_y);
+                const uint64_t now_millis =
+                        bk2::android::PlatformRuntime::instance()
+                                .monotonic_millis();
+                if (!g_touch_camera.panning &&
+                    !g_touch_camera.selecting &&
+                    g_touch_camera.moved) {
+                    if (bk2::android::SinglePlayerTouchCommandMode() == 0 &&
+                        now_millis >= g_touch_camera.down_millis &&
+                        now_millis - g_touch_camera.down_millis >= 350) {
+                        g_touch_camera.selecting = true;
+                    } else {
+                        g_touch_camera.panning = true;
+                    }
+                }
+                if (g_touch_camera.panning) {
+                    bk2::android::PanSinglePlayerCamera(
+                            x - g_touch_camera.center_x,
+                            y - g_touch_camera.center_y);
+                }
                 g_touch_camera.center_x = x;
                 g_touch_camera.center_y = y;
             }
@@ -176,8 +274,7 @@ void PollInput(android_app* app) {
 
         if (event.pointerCount < 2) {
             if (action == AMOTION_EVENT_ACTION_POINTER_DOWN) {
-                g_touch_camera.tracking = false;
-                g_touch_camera.pointer_count = 0;
+                ResetTouchCameraState();
             }
             continue;
         }
@@ -204,6 +301,8 @@ void PollInput(android_app* app) {
             g_touch_camera.center_y = center_y;
             g_touch_camera.distance = distance;
             g_touch_camera.moved = true;
+            g_touch_camera.panning = true;
+            g_touch_camera.selecting = false;
             continue;
         }
 
@@ -347,6 +446,7 @@ extern "C" void android_main(android_app* app) {
         }
         bk2::android::AudioOutput().service();
         if (bk2::android::RenderBackend().is_ready()) {
+            QueueTouchSelectionOverlay();
             bk2::android::RenderLegacyGfxFrame();
             if (!first_render_frame_logged &&
                 bk2::android::RenderBackend().frame_count() > 0) {

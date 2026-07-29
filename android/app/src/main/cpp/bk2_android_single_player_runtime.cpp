@@ -2427,6 +2427,118 @@ float TerrainMeshHeightAtLocked(float world_x, float world_y) {
     return top + (bottom - top) * ty;
 }
 
+struct ScreenProjectionVec3 {
+    float x;
+    float y;
+    float z;
+};
+
+struct ScreenProjectionBasis {
+    ScreenProjectionVec3 eye;
+    ScreenProjectionVec3 forward;
+    ScreenProjectionVec3 right;
+    ScreenProjectionVec3 up;
+    float tangent = 0.0f;
+    float aspect = 1.0f;
+};
+
+ScreenProjectionVec3 NormalizeProjectionVector(
+        ScreenProjectionVec3 value) {
+    const float length = std::sqrt(
+            value.x * value.x +
+            value.y * value.y +
+            value.z * value.z);
+    if (length > 0.0001f) {
+        value.x /= length;
+        value.y /= length;
+        value.z /= length;
+    }
+    return value;
+}
+
+ScreenProjectionVec3 CrossProjectionVectors(
+        const ScreenProjectionVec3& left,
+        const ScreenProjectionVec3& right) {
+    return {
+            left.y * right.z - left.z * right.y,
+            left.z * right.x - left.x * right.z,
+            left.x * right.y - left.y * right.x};
+}
+
+float DotProjectionVectors(
+        const ScreenProjectionVec3& left,
+        const ScreenProjectionVec3& right) {
+    return left.x * right.x + left.y * right.y + left.z * right.z;
+}
+
+bool BuildScreenProjectionBasisLocked(
+        uint32_t viewport_width,
+        uint32_t viewport_height,
+        ScreenProjectionBasis* basis) {
+    if (viewport_width == 0 ||
+        viewport_height == 0 ||
+        basis == nullptr) {
+        return false;
+    }
+
+    const float horizontal_distance =
+            g_camera.distance * std::cos(g_camera.pitch_radians);
+    basis->eye = {
+            g_camera.target_x +
+                    std::sin(g_camera.yaw_radians) * horizontal_distance,
+            g_camera.target_y -
+                    std::cos(g_camera.yaw_radians) * horizontal_distance,
+            g_camera.target_z +
+                    std::sin(g_camera.pitch_radians) * g_camera.distance};
+    basis->forward = NormalizeProjectionVector({
+            g_camera.target_x - basis->eye.x,
+            g_camera.target_y - basis->eye.y,
+            g_camera.target_z - basis->eye.z});
+    basis->right = NormalizeProjectionVector(CrossProjectionVectors(
+            {0.0f, 0.0f, 1.0f},
+            basis->forward));
+    basis->up = NormalizeProjectionVector(CrossProjectionVectors(
+            basis->forward,
+            basis->right));
+    basis->tangent =
+            std::tan(48.0f * 0.5f * 3.14159265358979323846f / 180.0f);
+    basis->aspect =
+            static_cast<float>(viewport_width) /
+            static_cast<float>(viewport_height);
+    return true;
+}
+
+bool ProjectEntityToScreenLocked(
+        const Bk2PresentationEntity& entity,
+        const ScreenProjectionBasis& basis,
+        uint32_t viewport_width,
+        uint32_t viewport_height,
+        float* screen_x,
+        float* screen_y) {
+    if (screen_x == nullptr || screen_y == nullptr) {
+        return false;
+    }
+    const ScreenProjectionVec3 relative = {
+            entity.x - basis.eye.x,
+            entity.y - basis.eye.y,
+            entity.z + 1.0f - basis.eye.z};
+    const float depth = DotProjectionVectors(
+            relative,
+            basis.forward);
+    if (depth <= 0.001f) {
+        return false;
+    }
+    const float ndc_x =
+            DotProjectionVectors(relative, basis.right) /
+            (depth * basis.tangent * basis.aspect);
+    const float ndc_y =
+            DotProjectionVectors(relative, basis.up) /
+            (depth * basis.tangent);
+    *screen_x = (ndc_x + 1.0f) * 0.5f * viewport_width;
+    *screen_y = (1.0f - ndc_y) * 0.5f * viewport_height;
+    return true;
+}
+
 int FindEntityNearScreenLocked(
         float screen_x,
         float screen_y,
@@ -2435,9 +2547,14 @@ int FindEntityNearScreenLocked(
         int player,
         bool invert_player_match,
         float radius_pixels) {
-    if (viewport_width == 0 ||
-        viewport_height == 0 ||
-        radius_pixels <= 0.0f) {
+    if (radius_pixels <= 0.0f) {
+        return -1;
+    }
+    ScreenProjectionBasis basis;
+    if (!BuildScreenProjectionBasisLocked(
+                viewport_width,
+                viewport_height,
+                &basis)) {
         return -1;
     }
     const Bk2PresentationSnapshotInfo snapshot =
@@ -2450,55 +2567,6 @@ int FindEntityNearScreenLocked(
         return -1;
     }
 
-    struct Vec3 {
-        float x;
-        float y;
-        float z;
-    };
-    const auto normalize = [](Vec3 value) {
-        const float length = std::sqrt(
-                value.x * value.x +
-                value.y * value.y +
-                value.z * value.z);
-        if (length > 0.0001f) {
-            value.x /= length;
-            value.y /= length;
-            value.z /= length;
-        }
-        return value;
-    };
-    const auto cross = [](const Vec3& left, const Vec3& right) {
-        return Vec3{
-                left.y * right.z - left.z * right.y,
-                left.z * right.x - left.x * right.z,
-                left.x * right.y - left.y * right.x};
-    };
-    const auto dot = [](const Vec3& left, const Vec3& right) {
-        return left.x * right.x + left.y * right.y + left.z * right.z;
-    };
-
-    const float horizontal_distance =
-            g_camera.distance * std::cos(g_camera.pitch_radians);
-    const Vec3 eye = {
-            g_camera.target_x +
-                    std::sin(g_camera.yaw_radians) * horizontal_distance,
-            g_camera.target_y -
-                    std::cos(g_camera.yaw_radians) * horizontal_distance,
-            g_camera.target_z +
-                    std::sin(g_camera.pitch_radians) * g_camera.distance};
-    const Vec3 forward = normalize(Vec3{
-            g_camera.target_x - eye.x,
-            g_camera.target_y - eye.y,
-            g_camera.target_z - eye.z});
-    const Vec3 right = normalize(cross(
-            Vec3{0.0f, 0.0f, 1.0f},
-            forward));
-    const Vec3 camera_up = normalize(cross(forward, right));
-    const float tangent =
-            std::tan(48.0f * 0.5f * 3.14159265358979323846f / 180.0f);
-    const float aspect =
-            static_cast<float>(viewport_width) /
-            static_cast<float>(viewport_height);
     const float max_distance_squared = radius_pixels * radius_pixels;
     float best_distance_squared = std::numeric_limits<float>::max();
     int best_id = -1;
@@ -2508,22 +2576,17 @@ int FindEntityNearScreenLocked(
             (entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) == 0) {
             continue;
         }
-        const Vec3 relative = {
-                entity.x - eye.x,
-                entity.y - eye.y,
-                entity.z + 1.0f - eye.z};
-        const float depth = dot(relative, forward);
-        if (depth <= 0.001f) {
+        float projected_x = 0.0f;
+        float projected_y = 0.0f;
+        if (!ProjectEntityToScreenLocked(
+                    entity,
+                    basis,
+                    viewport_width,
+                    viewport_height,
+                    &projected_x,
+                    &projected_y)) {
             continue;
         }
-        const float ndc_x =
-                dot(relative, right) / (depth * tangent * aspect);
-        const float ndc_y =
-                dot(relative, camera_up) / (depth * tangent);
-        const float projected_x =
-                (ndc_x + 1.0f) * 0.5f * viewport_width;
-        const float projected_y =
-                (1.0f - ndc_y) * 0.5f * viewport_height;
         const float delta_x = projected_x - screen_x;
         const float delta_y = projected_y - screen_y;
         const float distance_squared =
@@ -3086,6 +3149,101 @@ void RotateSinglePlayerCamera(float delta_radians) {
     ApplyCameraLocked();
 }
 
+bool HandleSinglePlayerSelectionRect(
+        float start_x,
+        float start_y,
+        float end_x,
+        float end_y,
+        uint32_t viewport_width,
+        uint32_t viewport_height) {
+    std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    if (!g_ready ||
+        g_user_paused ||
+        g_touch_command_mode != TouchCommandMode::Contextual) {
+        return false;
+    }
+    const float left = std::min(start_x, end_x);
+    const float right = std::max(start_x, end_x);
+    const float top = std::min(start_y, end_y);
+    const float bottom = std::max(start_y, end_y);
+    if (right - left < 16.0f || bottom - top < 16.0f) {
+        return false;
+    }
+    ScreenProjectionBasis basis;
+    if (!BuildScreenProjectionBasisLocked(
+                viewport_width,
+                viewport_height,
+                &basis)) {
+        return false;
+    }
+    const Bk2PresentationSnapshotInfo snapshot =
+            bk2_presentation_snapshot_info();
+    std::vector<Bk2PresentationEntity> entities(snapshot.entity_count);
+    if (!entities.empty() &&
+        bk2_presentation_copy_entities(
+                entities.data(),
+                entities.size()) != entities.size()) {
+        return false;
+    }
+    struct SelectionCandidate {
+        int id;
+        float screen_x;
+        float screen_y;
+    };
+    std::vector<SelectionCandidate> candidates;
+    for (const Bk2PresentationEntity& entity : entities) {
+        if (entity.player != 0 ||
+            (entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) == 0 ||
+            (entity.flags & BK2_PRESENTATION_ENTITY_SELECTABLE) == 0) {
+            continue;
+        }
+        float projected_x = 0.0f;
+        float projected_y = 0.0f;
+        if (!ProjectEntityToScreenLocked(
+                    entity,
+                    basis,
+                    viewport_width,
+                    viewport_height,
+                    &projected_x,
+                    &projected_y) ||
+            projected_x < left ||
+            projected_x > right ||
+            projected_y < top ||
+            projected_y > bottom) {
+            continue;
+        }
+        candidates.push_back({
+                entity.id,
+                projected_x,
+                projected_y});
+    }
+    std::sort(
+            candidates.begin(),
+            candidates.end(),
+            [](const SelectionCandidate& left_candidate,
+               const SelectionCandidate& right_candidate) {
+                if (left_candidate.screen_y != right_candidate.screen_y) {
+                    return left_candidate.screen_y <
+                            right_candidate.screen_y;
+                }
+                return left_candidate.screen_x <
+                        right_candidate.screen_x;
+            });
+    std::vector<int> unit_ids;
+    unit_ids.reserve(candidates.size());
+    for (const SelectionCandidate& candidate : candidates) {
+        unit_ids.push_back(candidate.id);
+    }
+    const int selected_count = SelectLegacyUnits(unit_ids, 0);
+    std::ostringstream report;
+    report << "player_drag_selection=" << selected_count
+           << "; rect=" << left << "," << top
+           << "-" << right << "," << bottom;
+    PlatformRuntime::instance().log_info(report.str());
+    return selected_count > 0 &&
+            RefreshDynamicWorldMeshLocked(true);
+}
+
 bool HandleSinglePlayerTap(
         float screen_x,
         float screen_y,
@@ -3459,6 +3617,18 @@ int SinglePlayerTouchCommandMode() {
     return static_cast<int>(g_touch_command_mode);
 }
 
+bool ActivateSelectedSinglePlayerUnit(int unit_id) {
+    std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    if (!g_ready ||
+        g_user_paused ||
+        !ActivateSelectedLegacyUnit(unit_id)) {
+        return false;
+    }
+    g_touch_command_mode = TouchCommandMode::Contextual;
+    ResetPendingTrenchCommandLocked();
+    return RefreshDynamicWorldMeshLocked(true);
+}
+
 bool StopSelectedSinglePlayerUnit() {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
     if (!g_ready || g_user_paused || !StopSelectedLegacyUnit()) {
@@ -3792,6 +3962,17 @@ Java_com_nival_blitzkrieg2_NativeBridge_stopSelectedUnit(
         JNIEnv*,
         jclass) {
     return bk2::android::StopSelectedSinglePlayerUnit()
+            ? JNI_TRUE
+            : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_setActiveSelectedUnit(
+        JNIEnv*,
+        jclass,
+        jint unit_id) {
+    return bk2::android::ActivateSelectedSinglePlayerUnit(
+                   static_cast<int>(unit_id))
             ? JNI_TRUE
             : JNI_FALSE;
 }

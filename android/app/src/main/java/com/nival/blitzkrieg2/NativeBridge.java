@@ -27,6 +27,7 @@ final class NativeBridge {
     static native String getSelectedUnitHudSnapshot();
     static native boolean setTouchCommandMode(int mode);
     static native int getTouchCommandMode();
+    static native boolean setActiveSelectedUnit(int unitId);
     static native boolean stopSelectedUnit();
     static native boolean performSelectedUnitAction(int userAction);
     static native void setMissionPaused(boolean paused);

@@ -40,10 +40,14 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   disabled icons. Double-tapping a selected unit expands selection to as many
   as twelve nearby units with matching legacy stats/type. All selected units
   receive world markers and individual HUD cards, while supported commands are
-  registered and dispatched through `CGroupLogic::GroupCommand`. Drag-box
-  selection, mixed-type ability groups, general runtime skinning, remaining
-  action-specific clips, command subpanels, briefings, and the rest of the
-  legacy UI are still pending.
+  registered and dispatched through `CGroupLogic::GroupCommand`. Holding for
+  350 ms before a one-finger drag draws a screen-space selection rectangle and
+  selects up to twelve friendly units of any type; quick drags still pan the
+  camera. Tapping a member card changes the active unit and therefore the
+  type-specific command grid, while common desktop actions still address the
+  full mixed selection. General runtime skinning, remaining action-specific
+  clips, command subpanels, briefings, and the rest of the legacy UI are still
+  pending.
 - `BK2_ENABLE_LEGACY_TEXTURE_RUNTIME=ON` links the Android
   `NGfx::CTexture`/`I2DBuffer` contract. Legacy callers can allocate textures,
   lock mip levels with `CTextureLock`, write the original pixel formats into CPU
@@ -602,6 +606,10 @@ Touch controls currently implemented:
 - tap a green player unit or formation to select it;
 - double-tap a selected player unit to select up to twelve nearby units of the
   same legacy type; the HUD shows one health card per selected unit;
+- hold for 350 ms and drag one finger to draw a selection rectangle and select
+  up to twelve friendly units of any type inside it; a quick drag still pans;
+- tap any selected-unit HUD card to make that unit active, update the
+  type-specific action grid, and keep common commands bound to the full group;
 - tap a red hostile unit while a player unit is selected to issue the original
   legacy attack command;
 - tap terrain to issue the original legacy move command and move the selected
