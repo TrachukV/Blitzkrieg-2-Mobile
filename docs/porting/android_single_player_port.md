@@ -29,11 +29,15 @@ the orange `PAUSED` label over the playable viewport while leaving the original
 bottom panel visible, matching the desktop mission presentation. A dedicated
 JNI headline call resolves the active primary `SMissionObjective` header through
 the shipped UTF-16 localization and displays it at the top-left; the internal
-campaign/map ID is now only a startup fallback. Converted static and dynamic
-models also produce one translucent ground silhouette from the convex hull of
-their sun-projected Granny vertices. The dynamic path samples the same current
-pre-skinned animation frame used by the visible model, so infantry shadows move
-with the unit rather than remaining fixed proxy circles. The battlefield camera
+campaign/map ID is now only a startup fallback. A thread-safe five-second FIFO
+temporarily replaces that header with original objective and reinforcement
+notifications. It consumes `EFB_OBJECTIVE_CHANGED` and
+`EFB_REINFORCEMENT_CENTER_LOCAL_PLAYER`, resolves the shipped UTF-16 text
+resources, and restores the active objective after expiry. Converted static and
+dynamic models also produce one translucent ground silhouette from the convex
+hull of their sun-projected Granny vertices. The dynamic path samples the same
+current pre-skinned animation frame used by the visible model, so infantry
+shadows move with the unit rather than remaining fixed proxy circles. The battlefield camera
 loads horizontal FOV, default pitch/yaw, and min/average/max distance from the
 same legacy `ClientGameConsts` used by the desktop mission. Screen projection,
 terrain picking, drag selection, and bgfx rendering all consume that one camera

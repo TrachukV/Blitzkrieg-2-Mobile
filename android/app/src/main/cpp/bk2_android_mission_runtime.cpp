@@ -2,6 +2,7 @@
 
 #include "bk2_android_database.h"
 #include "bk2_android_legacy_game_runtime.h"
+#include "bk2_android_platform.h"
 #include "bk2_android_vfs.h"
 #include "bk2_port_paths.h"
 
@@ -20,6 +21,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <jni.h>
 #include <limits>
 #include <map>
@@ -27,6 +29,7 @@
 #include <sstream>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <utility>
 
 namespace bk2::android {
 namespace {
@@ -35,6 +38,18 @@ std::mutex g_mission_mutex;
 MissionRuntimeState g_state;
 std::mutex g_text_cache_mutex;
 std::map<std::string, std::string> g_text_cache;
+std::mutex g_hud_notification_mutex;
+
+struct MissionHudNotification {
+    std::string text;
+    uint32_t visible_millis = 0;
+    uint64_t shown_at_millis = 0;
+};
+
+std::deque<MissionHudNotification> g_hud_notifications;
+
+constexpr uint32_t kMissionHudNotificationVisibleMillis = 5000;
+constexpr size_t kMaxQueuedMissionHudNotifications = 16;
 
 struct MissionLocation {
     int campaign_index = -1;
@@ -3204,7 +3219,61 @@ MissionRuntimeState GetMissionRuntimeState() {
     return g_state;
 }
 
+bool QueueMissionHudNotification(
+        const std::string& text_file_ref,
+        uint32_t visible_millis,
+        const std::string& suffix_file_ref) {
+    std::string text = LoadUtf16Text(text_file_ref);
+    const std::string suffix = LoadUtf16Text(suffix_file_ref);
+    if (!text.empty() && !suffix.empty() &&
+        text[text.size() - 1] != ' ') {
+        text.push_back(' ');
+    }
+    text += suffix;
+    if (text.empty()) {
+        return false;
+    }
+
+    MissionHudNotification notification;
+    notification.text = text;
+    notification.visible_millis =
+            visible_millis == 0
+            ? kMissionHudNotificationVisibleMillis
+            : visible_millis;
+
+    std::lock_guard<std::mutex> lock(g_hud_notification_mutex);
+    if (g_hud_notifications.size() >=
+        kMaxQueuedMissionHudNotifications) {
+        g_hud_notifications.pop_back();
+    }
+    g_hud_notifications.push_back(std::move(notification));
+    return true;
+}
+
+void ResetMissionHudNotifications() {
+    std::lock_guard<std::mutex> lock(g_hud_notification_mutex);
+    g_hud_notifications.clear();
+}
+
 std::string GetMissionHudHeadlineText() {
+    {
+        const uint64_t now =
+                PlatformRuntime::instance().monotonic_millis();
+        std::lock_guard<std::mutex> lock(g_hud_notification_mutex);
+        while (!g_hud_notifications.empty()) {
+            MissionHudNotification& notification =
+                    g_hud_notifications.front();
+            if (notification.shown_at_millis == 0) {
+                notification.shown_at_millis = now;
+            }
+            if (now - notification.shown_at_millis <
+                notification.visible_millis) {
+                return notification.text;
+            }
+            g_hud_notifications.pop_front();
+        }
+    }
+
     const MissionRuntimeState state = GetMissionRuntimeState();
     const MissionObjectiveState* active = nullptr;
     for (std::vector<MissionObjectiveState>::const_iterator it =

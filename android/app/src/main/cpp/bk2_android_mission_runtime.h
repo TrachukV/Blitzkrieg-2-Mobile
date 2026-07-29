@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -257,6 +258,11 @@ MissionRuntimeResult SaveMissionRuntimeCheckpoint(const std::string& slot_name);
 MissionRuntimeResult LoadMissionRuntimeCheckpoint(const std::string& slot_name);
 MissionRuntimeState GetMissionRuntimeState();
 void ResetMissionRuntimeState();
+bool QueueMissionHudNotification(
+        const std::string& text_file_ref,
+        uint32_t visible_millis,
+        const std::string& suffix_file_ref = std::string());
+void ResetMissionHudNotifications();
 std::string GetMissionHudHeadlineText();
 std::string GetMissionHudStatusText();
 std::string DescribeMissionRuntimeState(const MissionRuntimeState& state);

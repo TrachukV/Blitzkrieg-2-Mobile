@@ -49,9 +49,13 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   silhouette shadows for static objects and live units; animated infantry
   shadows use the same current pre-skinned frame as the visible mesh. The camera
   reads the original horizontal FOV, pitch/yaw defaults, and distance range from
-  the loaded `ClientGameConsts`. General runtime skinning, remaining
-  action-specific clips, transient scenario-notification queues, command
-  subpanels, briefings, and the rest of the legacy UI are still pending.
+  the loaded `ClientGameConsts`. The top-left headline now has a thread-safe
+  five-second FIFO for original scenario notifications. Objective feedback
+  combines the shipped notification prefix with the objective header, while
+  `EFB_REINFORCEMENT_CENTER_LOCAL_PLAYER` resolves and displays the shipped
+  reinforcement text. General runtime skinning, remaining action-specific
+  clips, a multi-line notification console, command subpanels, briefings, and
+  the rest of the legacy UI are still pending.
 - `BK2_ENABLE_LEGACY_TEXTURE_RUNTIME=ON` links the Android
   `NGfx::CTexture`/`I2DBuffer` contract. Legacy callers can allocate textures,
   lock mip levels with `CTextureLock`, write the original pixel formats into CPU
@@ -619,6 +623,8 @@ Touch controls currently implemented:
 - the top-left headline resolves the localized header of the active primary
   legacy objective, with the internal mission ID used only before objectives
   are ready;
+- original objective and reinforcement feedback temporarily replaces that
+  headline for five seconds, then restores the active objective;
 - tap a red hostile unit while a player unit is selected to issue the original
   legacy attack command;
 - tap terrain to issue the original legacy move command and move the selected
@@ -661,7 +667,10 @@ mission Lua, allowing campaign autosave and continuation to be tested without
 completing a full battle. Keyboard `L` toggles one live soldier between the
 original standing and prone states for animation validation. Keyboard `M`
 kills a visible mechanized unit through the same statistics/death path and is
-used to validate the destruction presentation. All six shortcuts are absent
+used to validate the destruction presentation. Keyboard `N` injects the
+reinforcement notification type so descriptor lookup, UTF-16 decoding, JNI
+polling, and five-second expiry can be checked independently of the still
+unported `LandReinforcementFromMap` Lua command. All seven shortcuts are absent
 from release builds.
 
 `Data/Weapons` is required runtime DB payload. Without it, mine descriptors keep
@@ -701,7 +710,14 @@ case-insensitive Android VFS instead of relying on the legacy
 16-bit-`wchar_t` assumption. The Android client now drains the original AI
 update stream every simulation tick instead of allowing visual/client updates
 to accumulate. `EFB_OBJECTIVE_CHANGED` updates are applied to both the original
-scenario tracker and the Android campaign checkpoint state.
+scenario tracker and the Android campaign checkpoint state. Received,
+completed, and failed objective notifications use the original localized
+prefix plus objective header. Local-player reinforcement feedback uses
+`NTF_REINFORCEMENT_ARRIVED` and the shipped UTF-16
+`ReinfArrived/Text.txt`. These messages occupy the same top-left line for five
+seconds before the active objective returns. This is currently a single-line
+FIFO approximation of the desktop mission console, not its complete stacked
+and scrolling implementation.
 
 The battle renderer now consumes `IAILogic::GetMiniMapWarForInfo()` instead of
 approximating vision with Android-side circles. The legacy AI exports its

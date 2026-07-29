@@ -34,6 +34,7 @@
 #include "Stats_B2_M1/DBVisObj.h"
 #include "Stats_B2_M1/ActionsRemap.h"
 #include "Stats_B2_M1/AIUpdates.h"
+#include "Stats_B2_M1/DBNotifications.h"
 #include "Stats_B2_M1/FeedBackUpdates.h"
 #include "Stats_B2_M1/TerraAIObserver.h"
 #include "Stats_B2_M1/Vis2AI.h"
@@ -106,6 +107,7 @@ uint64_t g_player_attack_command_count = 0;
 uint64_t g_player_stop_command_count = 0;
 uint64_t g_client_update_count = 0;
 uint64_t g_objective_update_count = 0;
+uint64_t g_hud_notification_count = 0;
 struct TimedCombatEffect {
     AndroidCombatEffect effect;
     uint64_t created_millis = 0;
@@ -864,6 +866,69 @@ void PruneExpiredCombatEffects() {
             g_destruction_effects.end());
 }
 
+const char* LegacyNotificationTextFallback(
+        NDb::ENotificationType type) {
+    switch (type) {
+        case NDb::NTF_OBJECTIVE_RECEIVED:
+            return "/Other/Text/Game/Mission/Notifications/"
+                   "Objective_Received/Text.txt";
+        case NDb::NTF_OBJECTIVE_COMPLETED:
+            return "/Other/Text/Game/Mission/Notifications/"
+                   "Objective_Completed/Text.txt";
+        case NDb::NTF_OBJECTIVE_FAILED:
+            return "/Other/Text/Game/Mission/Notifications/"
+                   "Objective_Failed/Text.txt";
+        case NDb::NTF_REINFORCEMENT_ARRIVED:
+            return "/Other/Text/Game/Mission/Notifications/"
+                   "ReinfArrived/Text.txt";
+        default:
+            return "";
+    }
+}
+
+bool QueueLegacyHudNotification(
+        NDb::ENotificationType type,
+        const std::string& suffix_file_ref = std::string()) {
+    const NDb::SGameRoot* root = NGameX::GetGameRoot();
+    std::string text_ref;
+    if (root != nullptr) {
+        for (const CDBPtr<NDb::SNotification>& notification :
+             root->notifications) {
+            if (!notification || notification->eType != type) {
+                continue;
+            }
+            text_ref = notification->szTextFileRef.c_str();
+            break;
+        }
+    }
+    if (text_ref.empty()) {
+        text_ref = LegacyNotificationTextFallback(type);
+    }
+    if (text_ref.empty()) {
+        PlatformRuntime::instance().log_warn(
+                std::string("mission_hud_notification_missing=") +
+                std::to_string(static_cast<int>(type)) +
+                "; error=no_text_ref");
+        return false;
+    }
+    if (!QueueMissionHudNotification(
+                text_ref,
+                5000,
+                suffix_file_ref)) {
+        PlatformRuntime::instance().log_warn(
+                std::string("mission_hud_notification_failed=") +
+                std::to_string(static_cast<int>(type)) +
+                "; text_ref=" + text_ref);
+        return false;
+    }
+    ++g_hud_notification_count;
+    PlatformRuntime::instance().log_info(
+            std::string("mission_hud_notification=") +
+            std::to_string(static_cast<int>(type)) +
+            "; text_ref=" + text_ref);
+    return true;
+}
+
 void DrainLegacyClientUpdates() {
     if (g_ai_logic == nullptr) {
         return;
@@ -905,8 +970,16 @@ void DrainLegacyClientUpdates() {
         }
         SAIFeedbackUpdate* feedback =
                 dynamic_cast<SAIFeedbackUpdate*>(update.GetPtr());
-        if (feedback == nullptr ||
-            feedback->info.feedBackType != EFB_OBJECTIVE_CHANGED) {
+        if (feedback == nullptr) {
+            continue;
+        }
+        if (feedback->info.feedBackType ==
+            EFB_REINFORCEMENT_CENTER_LOCAL_PLAYER) {
+            QueueLegacyHudNotification(
+                    NDb::NTF_REINFORCEMENT_ARRIVED);
+            continue;
+        }
+        if (feedback->info.feedBackType != EFB_OBJECTIVE_CHANGED) {
             continue;
         }
 
@@ -926,6 +999,31 @@ void DrainLegacyClientUpdates() {
                 SetMissionObjectiveState(objective, state);
         if (result.ok) {
             ++g_objective_update_count;
+            std::string objective_text_ref;
+            if (objective >= 0 &&
+                objective <
+                        static_cast<int>(
+                                result.state.objectives.size())) {
+                const MissionObjectiveState& objective_state =
+                        result.state.objectives[objective];
+                objective_text_ref =
+                        objective_state.header_ref.empty()
+                        ? objective_state.description_ref
+                        : objective_state.header_ref;
+            }
+            if (state == EMOS_RECEIVED) {
+                QueueLegacyHudNotification(
+                        NDb::NTF_OBJECTIVE_RECEIVED,
+                        objective_text_ref);
+            } else if (state == EMOS_COMPLETED) {
+                QueueLegacyHudNotification(
+                        NDb::NTF_OBJECTIVE_COMPLETED,
+                        objective_text_ref);
+            } else if (state == EMOS_FAILED) {
+                QueueLegacyHudNotification(
+                        NDb::NTF_OBJECTIVE_FAILED,
+                        objective_text_ref);
+            }
             PlatformRuntime::instance().log_info(
                     std::string("mission_objective_update=") +
                     std::to_string(objective) +
@@ -1273,6 +1371,7 @@ void ResetReportState() {
     g_missing_squad_payload_refs.clear();
     g_client_update_count = 0;
     g_objective_update_count = 0;
+    g_hud_notification_count = 0;
     g_combat_effects.clear();
     g_destruction_effects.clear();
     g_infantry_shot_effect_count = 0;
@@ -2142,6 +2241,11 @@ void HandleLegacyInputEvent(const char* event_name) {
     } else if (std::strcmp(event_name, "local_loose") == 0) {
         g_pending_mission_outcome.store(kLegacyMissionLost);
 #if !defined(NDEBUG)
+    } else if (std::strcmp(
+                       event_name,
+                       "debug_reinforcement_notification") == 0) {
+        QueueLegacyHudNotification(
+                NDb::NTF_REINFORCEMENT_ARRIVED);
     } else if (std::strcmp(event_name, "debug_force_combat") == 0) {
         CAIUnit* attacker = nullptr;
         CAIUnit* target = nullptr;
@@ -2378,6 +2482,7 @@ void ShutdownLegacyGameRuntime() {
     g_player_stop_command_count = 0;
     g_client_update_count = 0;
     g_objective_update_count = 0;
+    g_hud_notification_count = 0;
     g_last_presentation_entities.clear();
     g_presentation_corpses.clear();
     g_presentation_death_count = 0;
@@ -2426,6 +2531,7 @@ std::string LegacyGameRuntimeReport() {
            << "; player_stop_commands=" << g_player_stop_command_count
            << "; client_updates=" << g_client_update_count
            << "; objective_updates=" << g_objective_update_count
+           << "; hud_notifications=" << g_hud_notification_count
            << "; infantry_shot_effects="
            << g_infantry_shot_effect_count
            << "; mechanized_shot_effects="

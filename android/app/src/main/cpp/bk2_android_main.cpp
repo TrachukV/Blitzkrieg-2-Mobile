@@ -384,6 +384,10 @@ void PollInput(android_app* app) {
                 bk2::android::HandleLegacyInputEvent(
                         "debug_kill_mechanized");
                 break;
+            case AKEYCODE_N:
+                bk2::android::HandleLegacyInputEvent(
+                        "debug_reinforcement_notification");
+                break;
 #endif
             default:
                 break;

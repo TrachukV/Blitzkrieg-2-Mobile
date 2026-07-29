@@ -3153,6 +3153,7 @@ bool InitializeSinglePlayerRuntime() {
         return false;
     }
 
+    ResetMissionHudNotifications();
     const MissionRuntimeResult mission = StartConfiguredMissionState();
     if (!mission.ok || mission.state.mission_id.empty()) {
         g_last_error = mission.error.empty()
@@ -3266,6 +3267,7 @@ void TickSinglePlayerRuntime(uint32_t elapsed_millis) {
 void ShutdownSinglePlayerRuntime() {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
     ShutdownLegacyGameRuntime();
+    ResetMissionHudNotifications();
     RenderBackend().clear_terrain_mesh();
     RenderBackend().clear_world_object_mesh();
     g_terrain_texture = 0;

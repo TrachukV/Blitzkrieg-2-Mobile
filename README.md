@@ -65,7 +65,11 @@ while common commands continue to address the whole selection. Native pause
 from `P` or `Space` now displays the original orange `PAUSED` treatment centered
 over the battlefield without covering the shipped bottom HUD. The top-left
 mission line now comes from the localized header of the active primary legacy
-objective instead of exposing the internal campaign/map identifier. See
+objective instead of exposing the internal campaign/map identifier. Original
+scenario notifications temporarily replace that line for five seconds and
+then restore the objective; the legacy reinforcement feedback now displays the
+shipped `The Reinforcement Has Arrived` text instead of an Android-authored
+copy. See
 [`android/README.md`](android/README.md) for build, content-staging, verification,
 and remaining-port details.
 
