@@ -90,6 +90,14 @@ size_t g_active_combat_effect_count = 0;
 size_t g_active_unit_indicator_count = 0;
 bool g_combat_effect_trace_texture_logged = false;
 
+enum class TouchCommandMode {
+    Contextual = 0,
+    Move = 1,
+    Attack = 2,
+};
+
+TouchCommandMode g_touch_command_mode = TouchCommandMode::Contextual;
+
 enum class ConvertedAnimationVariant {
     Base,
     Move,
@@ -2183,8 +2191,10 @@ int FindEntityNearScreenLocked(
             g_camera.target_x - eye.x,
             g_camera.target_y - eye.y,
             g_camera.target_z - eye.z});
-    const Vec3 right = normalize(cross(forward, Vec3{0.0f, 0.0f, 1.0f}));
-    const Vec3 camera_up = normalize(cross(right, forward));
+    const Vec3 right = normalize(cross(
+            Vec3{0.0f, 0.0f, 1.0f},
+            forward));
+    const Vec3 camera_up = normalize(cross(forward, right));
     const float tangent =
             std::tan(48.0f * 0.5f * 3.14159265358979323846f / 180.0f);
     const float aspect =
@@ -2282,8 +2292,8 @@ bool ScreenToTerrainLocked(
             g_camera.target_y - eye.y,
             g_camera.target_z - eye.z});
     const Vec3 world_up = {0.0f, 0.0f, 1.0f};
-    const Vec3 right = normalize(cross(forward, world_up));
-    const Vec3 camera_up = normalize(cross(right, forward));
+    const Vec3 right = normalize(cross(world_up, forward));
+    const Vec3 camera_up = normalize(cross(forward, right));
     const float ndc_x =
             screen_x / static_cast<float>(viewport_width) * 2.0f - 1.0f;
     const float ndc_y =
@@ -2661,6 +2671,7 @@ void ShutdownSinglePlayerRuntime() {
     g_active_combat_effect_count = 0;
     g_active_unit_indicator_count = 0;
     g_combat_effect_trace_texture_logged = false;
+    g_touch_command_mode = TouchCommandMode::Contextual;
     g_converted_geometries.clear();
     g_missing_converted_geometries.clear();
     g_move_converted_geometries.clear();
@@ -2748,6 +2759,51 @@ bool HandleSinglePlayerTap(
         return false;
     }
     constexpr float kEntityTapRadiusPixels = 52.0f;
+    if (g_touch_command_mode == TouchCommandMode::Attack) {
+        constexpr float kAttackCommandRadiusPixels = 96.0f;
+        const int hostile_unit = FindEntityNearScreenLocked(
+                screen_x,
+                screen_y,
+                viewport_width,
+                viewport_height,
+                0,
+                true,
+                kAttackCommandRadiusPixels);
+        if (hostile_unit < 0 ||
+            !AttackSelectedLegacyUnit(hostile_unit)) {
+            PlatformRuntime::instance().log_info(
+                    "player_touch_command=attack; result=no_target");
+            return false;
+        }
+        g_touch_command_mode = TouchCommandMode::Contextual;
+        PlatformRuntime::instance().log_info(
+                std::string(
+                        "player_touch_command=attack; result=issued; target=") +
+                std::to_string(hostile_unit));
+        return RefreshDynamicWorldMeshLocked(true);
+    }
+    if (g_touch_command_mode == TouchCommandMode::Move) {
+        float world_x = 0.0f;
+        float world_y = 0.0f;
+        if (!ScreenToTerrainLocked(
+                    screen_x,
+                    screen_y,
+                    viewport_width,
+                    viewport_height,
+                    &world_x,
+                    &world_y) ||
+            !MoveSelectedLegacyUnit(world_x, world_y)) {
+            PlatformRuntime::instance().log_info(
+                    "player_touch_command=move; result=invalid_target");
+            return false;
+        }
+        g_touch_command_mode = TouchCommandMode::Contextual;
+        PlatformRuntime::instance().log_info(
+                std::string(
+                        "player_touch_command=move; result=issued; target=") +
+                std::to_string(world_x) + "," + std::to_string(world_y));
+        return RefreshDynamicWorldMeshLocked(true);
+    }
     const int friendly_unit = FindEntityNearScreenLocked(
             screen_x,
             screen_y,
@@ -2831,6 +2887,44 @@ bool HandleSinglePlayerTap(
         return false;
     }
     PlatformRuntime::instance().log_info("player_tap=move");
+    return RefreshDynamicWorldMeshLocked(true);
+}
+
+bool SetSinglePlayerTouchCommandMode(int mode) {
+    std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    if (!g_ready || mode < 0 || mode > 2) {
+        return false;
+    }
+    const TouchCommandMode requested =
+            static_cast<TouchCommandMode>(mode);
+    if (requested != TouchCommandMode::Contextual &&
+        SelectedLegacyUnitId() < 0) {
+        PlatformRuntime::instance().log_info(
+                "player_touch_command_mode=rejected; reason=no_selection");
+        return false;
+    }
+    g_touch_command_mode = requested;
+    const char* name = requested == TouchCommandMode::Move
+            ? "move"
+            : requested == TouchCommandMode::Attack
+                    ? "attack"
+                    : "contextual";
+    PlatformRuntime::instance().log_info(
+            std::string("player_touch_command_mode=") + name);
+    return true;
+}
+
+int SinglePlayerTouchCommandMode() {
+    std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    return static_cast<int>(g_touch_command_mode);
+}
+
+bool StopSelectedSinglePlayerUnit() {
+    std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    if (!g_ready || !StopSelectedLegacyUnit()) {
+        return false;
+    }
+    g_touch_command_mode = TouchCommandMode::Contextual;
     return RefreshDynamicWorldMeshLocked(true);
 }
 
@@ -3089,6 +3183,33 @@ Java_com_nival_blitzkrieg2_NativeBridge_getSelectedUnitHudStatus(
     const std::string status =
             bk2::android::SelectedSinglePlayerUnitHudStatus();
     return env->NewStringUTF(status.c_str());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_setTouchCommandMode(
+        JNIEnv*,
+        jclass,
+        jint mode) {
+    return bk2::android::SetSinglePlayerTouchCommandMode(mode)
+            ? JNI_TRUE
+            : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_stopSelectedUnit(
+        JNIEnv*,
+        jclass) {
+    return bk2::android::StopSelectedSinglePlayerUnit()
+            ? JNI_TRUE
+            : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_getTouchCommandMode(
+        JNIEnv*,
+        jclass) {
+    return static_cast<jint>(
+            bk2::android::SinglePlayerTouchCommandMode());
 }
 
 extern "C" JNIEXPORT jintArray JNICALL

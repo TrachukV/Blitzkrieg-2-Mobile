@@ -32,6 +32,8 @@ public final class Blitzkrieg2Activity extends GameActivity {
     private TextView missionTitle;
     private TextView missionStatus;
     private OriginalMissionHudView originalHud;
+    private ImageButton moveCommandButton;
+    private ImageButton attackCommandButton;
     private boolean outcomePolling;
     private int hudPollCount;
     private final Runnable outcomePoll = new Runnable() {
@@ -65,6 +67,8 @@ public final class Blitzkrieg2Activity extends GameActivity {
                     originalHud.setMinimapPixels(pixels, 192, 192);
                 }
             }
+            updateCommandButtonState(
+                    NativeBridge.getTouchCommandMode());
             String outcome = NativeBridge.getMissionOutcome();
             if ("won".equals(outcome)) {
                 showOutcome("VICTORY", 0xffd9c46b);
@@ -161,24 +165,36 @@ public final class Blitzkrieg2Activity extends GameActivity {
         LinearLayout commandButtons = new LinearLayout(this);
         commandButtons.setOrientation(LinearLayout.HORIZONTAL);
         commandButtons.setGravity(Gravity.CENTER);
+        moveCommandButton = originalImageButton(
+                dataRoot,
+                "Complete/UI/Buttons/Move/MoveNormal.tga",
+                view -> toggleTouchCommandMode(1));
+        moveCommandButton.setContentDescription("Move");
         commandButtons.addView(
-                originalImageButton(
-                        dataRoot,
-                        "Complete/UI/Buttons/Move/MoveNormal.tga",
-                        null),
+                moveCommandButton,
                 new LinearLayout.LayoutParams(dp(38), dp(38)));
+        attackCommandButton = originalImageButton(
+                dataRoot,
+                "Complete/UI/Buttons/Attack/AttackNormal.tga",
+                view -> toggleTouchCommandMode(2));
+        attackCommandButton.setContentDescription("Attack");
         commandButtons.addView(
-                originalImageButton(
-                        dataRoot,
-                        "Complete/UI/Buttons/Attack/AttackNormal.tga",
-                        null),
+                attackCommandButton,
                 new LinearLayout.LayoutParams(dp(38), dp(38)));
+        ImageButton stopCommandButton = originalImageButton(
+                dataRoot,
+                "Complete/UI/Buttons/Stop/StopNormal.tga",
+                view -> {
+                    if (!NativeBridge.stopSelectedUnit()) {
+                        showCommandHint("Select a unit first");
+                    }
+                    updateCommandButtonState(0);
+                });
+        stopCommandButton.setContentDescription("Stop");
         commandButtons.addView(
-                originalImageButton(
-                        dataRoot,
-                        "Complete/UI/Buttons/Stop/StopNormal.tga",
-                        null),
+                stopCommandButton,
                 new LinearLayout.LayoutParams(dp(38), dp(38)));
+        updateCommandButtonState(0);
 
         ImageButton objectives = originalImageButton(
                 dataRoot,
@@ -286,6 +302,34 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 Gravity.CENTER);
         root.addView(outcomePanel, outcomeParams);
         return root;
+    }
+
+    private void toggleTouchCommandMode(int requestedMode) {
+        int mode = NativeBridge.getTouchCommandMode() == requestedMode
+                ? 0
+                : requestedMode;
+        if (!NativeBridge.setTouchCommandMode(mode)) {
+            showCommandHint("Select a unit first");
+            mode = 0;
+        }
+        updateCommandButtonState(mode);
+    }
+
+    private void updateCommandButtonState(int mode) {
+        if (moveCommandButton != null) {
+            moveCommandButton.setAlpha(mode == 1 ? 1.0f : 0.72f);
+            moveCommandButton.setSelected(mode == 1);
+        }
+        if (attackCommandButton != null) {
+            attackCommandButton.setAlpha(mode == 2 ? 1.0f : 0.72f);
+            attackCommandButton.setSelected(mode == 2);
+        }
+    }
+
+    private void showCommandHint(String hint) {
+        if (missionStatus != null) {
+            missionStatus.setText(hint);
+        }
     }
 
     private ImageButton originalImageButton(

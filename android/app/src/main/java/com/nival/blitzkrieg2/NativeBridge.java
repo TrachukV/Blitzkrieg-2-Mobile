@@ -24,6 +24,9 @@ final class NativeBridge {
     static native String getCurrentMissionId();
     static native String getMissionHudStatus();
     static native String getSelectedUnitHudStatus();
+    static native boolean setTouchCommandMode(int mode);
+    static native int getTouchCommandMode();
+    static native boolean stopSelectedUnit();
     static native int[] getMissionMinimapArgb(int width, int height);
     static native void forfeitMission();
 

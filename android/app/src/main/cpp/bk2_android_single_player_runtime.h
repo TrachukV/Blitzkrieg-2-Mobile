@@ -18,6 +18,9 @@ bool HandleSinglePlayerTap(
         float screen_y,
         uint32_t viewport_width,
         uint32_t viewport_height);
+bool SetSinglePlayerTouchCommandMode(int mode);
+int SinglePlayerTouchCommandMode();
+bool StopSelectedSinglePlayerUnit();
 
 bool IsSinglePlayerRuntimeReady();
 std::string CurrentSinglePlayerMissionId();

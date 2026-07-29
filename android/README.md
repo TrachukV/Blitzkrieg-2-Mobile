@@ -590,9 +590,18 @@ Touch controls currently implemented:
   legacy attack command;
 - tap terrain to issue the original legacy move command and move the selected
   unit through the Android presentation bridge;
+- tap the original Move or Attack HUD button to arm a highlighted one-shot
+  command mode, then tap its terrain destination or hostile target;
+- tap the original Stop HUD button to send `ACTION_COMMAND_STOP` immediately
+  through `CGroupLogic`;
 - drag with one finger to pan;
 - pinch to zoom;
 - rotate with a two-finger twist.
+
+Touch projection uses the same left-handed camera basis as bgfx. An earlier
+cross-product order mirrored picking across the screen's X axis even though the
+rendered units were correct; selection, explicit attack targets, and
+screen-to-terrain movement now agree with their visible positions.
 
 Debug APKs also accept keyboard `F` to select the closest valid player/enemy
 pair and issue the real legacy attack command. Keyboard `T` emits a debug-only
@@ -602,7 +611,9 @@ infantry member through the original `CStatistics::UnitKilled` and
 `CAIUnit::Die` paths so campaign statistics and death presentation can be
 smoke-tested together. Keyboard `V` sends the same `local_win` event used by
 mission Lua, allowing campaign autosave and continuation to be tested without
-completing a full battle. All four shortcuts are absent from release builds.
+completing a full battle. Keyboard `L` toggles one live soldier between the
+original standing and prone states for animation validation. All five shortcuts
+are absent from release builds.
 
 `Data/Weapons` is required runtime DB payload. Without it, mine descriptors keep
 an unresolved `pWeapon`; the original `CMineStaticObject::Detonate` path then

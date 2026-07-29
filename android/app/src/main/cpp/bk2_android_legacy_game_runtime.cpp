@@ -99,6 +99,7 @@ int g_selected_unit_id = -1;
 int g_attack_target_unit_id = -1;
 uint64_t g_player_move_command_count = 0;
 uint64_t g_player_attack_command_count = 0;
+uint64_t g_player_stop_command_count = 0;
 uint64_t g_client_update_count = 0;
 uint64_t g_objective_update_count = 0;
 struct TimedCombatEffect {
@@ -1339,6 +1340,33 @@ bool AttackSelectedLegacyUnit(int target_unit_id) {
     return true;
 }
 
+bool StopSelectedLegacyUnit() {
+    if (!g_ready || g_selected_unit_id < 0) {
+        return false;
+    }
+    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+    if (unit == nullptr ||
+        !unit->IsAlive() ||
+        !unit->IsSelectable() ||
+        unit->GetPlayer() != 0) {
+        g_selected_unit_id = -1;
+        PublishPresentationEntities();
+        return false;
+    }
+    SAIUnitCmd command(ACTION_COMMAND_STOP);
+    command.bFromAI = false;
+    theGroupLogic.UnitCommand(command, unit, false);
+    g_android_move_active = false;
+    g_android_move_log_millis = 0;
+    g_attack_target_unit_id = -1;
+    ++g_player_stop_command_count;
+    PublishPresentationEntities();
+    PlatformRuntime::instance().log_info(
+            std::string("player_stop_command=") +
+            std::to_string(g_selected_unit_id));
+    return true;
+}
+
 int SelectedLegacyUnitId() {
     return g_selected_unit_id;
 }
@@ -1562,6 +1590,7 @@ void ShutdownLegacyGameRuntime() {
     g_attack_target_unit_id = -1;
     g_player_move_command_count = 0;
     g_player_attack_command_count = 0;
+    g_player_stop_command_count = 0;
     g_client_update_count = 0;
     g_objective_update_count = 0;
     g_last_presentation_entities.clear();
@@ -1605,6 +1634,7 @@ std::string LegacyGameRuntimeReport() {
            << MissionOutcomeName(g_mission_outcome.load())
            << "; player_move_commands=" << g_player_move_command_count
            << "; player_attack_commands=" << g_player_attack_command_count
+           << "; player_stop_commands=" << g_player_stop_command_count
            << "; client_updates=" << g_client_update_count
            << "; objective_updates=" << g_objective_update_count
            << "; infantry_shot_effects="
