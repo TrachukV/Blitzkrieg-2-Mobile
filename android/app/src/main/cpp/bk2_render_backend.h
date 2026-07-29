@@ -58,6 +58,7 @@ struct TerrainCamera {
     float yaw_radians = 0.0f;
     float pitch_radians = 0.85f;
     float distance = 100.0f;
+    float horizontal_fov_degrees = 26.0f;
 };
 
 class IRenderBackend {

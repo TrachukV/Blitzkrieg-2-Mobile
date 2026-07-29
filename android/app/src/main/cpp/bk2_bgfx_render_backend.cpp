@@ -620,10 +620,21 @@ private:
         float view[16];
         float projection[16];
         bx::mtxLookAt(view, eye, target, up);
+        const float aspect =
+                static_cast<float>(width_) /
+                static_cast<float>(height_);
+        const float horizontal_half_fov =
+                bx::toRad(terrain_camera_.horizontal_fov_degrees * 0.5f);
+        const float vertical_fov_degrees =
+                bx::toDeg(
+                        2.0f *
+                        std::atan(
+                                std::tan(horizontal_half_fov) /
+                                aspect));
         bx::mtxProj(
                 projection,
-                48.0f,
-                static_cast<float>(width_) / static_cast<float>(height_),
+                vertical_fov_degrees,
+                aspect,
                 0.5f,
                 std::max(terrain_mesh_.world_size * 8.0f, 1000.0f),
                 bgfx::getCaps()->homogeneousDepth);

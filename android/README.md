@@ -47,10 +47,11 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   type-specific command grid, while common desktop actions still address the
   full mixed selection. Original converted geometry now also supplies projected
   silhouette shadows for static objects and live units; animated infantry
-  shadows use the same current pre-skinned frame as the visible mesh. General
-  runtime skinning, remaining action-specific
-  clips, transient scenario-notification queues, command subpanels, briefings,
-  and the rest of the legacy UI are still pending.
+  shadows use the same current pre-skinned frame as the visible mesh. The camera
+  reads the original horizontal FOV, pitch/yaw defaults, and distance range from
+  the loaded `ClientGameConsts`. General runtime skinning, remaining
+  action-specific clips, transient scenario-notification queues, command
+  subpanels, briefings, and the rest of the legacy UI are still pending.
 - `BK2_ENABLE_LEGACY_TEXTURE_RUNTIME=ON` links the Android
   `NGfx::CTexture`/`I2DBuffer` contract. Legacy callers can allocate textures,
   lock mip levels with `CTextureLock`, write the original pixel formats into CPU
@@ -644,7 +645,10 @@ Touch controls currently implemented:
 Touch projection uses the same left-handed camera basis as bgfx. An earlier
 cross-product order mirrored picking across the screen's X axis even though the
 rendered units were correct; selection, explicit attack targets, and
-screen-to-terrain movement now agree with their visible positions.
+screen-to-terrain movement now agree with their visible positions. The bgfx
+vertical projection is derived from the original horizontal FOV and the current
+surface aspect ratio, matching the desktop `CTransformStack::MakeProjective`
+contract. Tap selection and drag selection use that same conversion.
 
 Debug APKs also accept keyboard `F` to select the closest valid player/enemy
 pair and issue the real legacy attack command. Keyboard `T` emits a debug-only
@@ -750,10 +754,13 @@ tree omits each bridge's `center_visobj.xdb`, so the offline index recovers its
 shipped seasonal `summer_center_model.xdb` directly. This restores all four
 asphalt bridge spans on GB3.1 and reduces its remaining diagnostic fallbacks
 from 33 to 29. Unmapped formations and objects remain green/red proxies. The
-camera starts closer to the player's formation, points inward from the nearest
-map edge, and caps zoom-out so the clear color outside the terrain does not
-dominate the battle view. The HUD campaign and mission title comes from the
-mission ID loaded by the native runtime instead of assuming the first USA map.
+camera keeps the player formation as its startup anchor but now loads the
+desktop mission values from `ClientGameConsts`: 26-degree horizontal FOV,
+45-degree default pitch and yaw, and 150/170/200
+minimum/average/maximum distance. Pan anchors are clamped to the same terrain
+rectangle as `CWorldClient::LoadMap`, and pinch zoom is clamped to the loaded
+distance range. The HUD campaign and mission title comes from the mission ID
+loaded by the native runtime instead of assuming the first USA map.
 
 This is a playable runtime milestone, not a complete visual port. Terrain now
 uses original game materials and the first runtime model path uses original

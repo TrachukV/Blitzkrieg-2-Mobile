@@ -14,7 +14,10 @@
 #include "SceneB2/stdafx.h"
 #include "3Dmotor/DBScene.h"
 #include "3Dmotor/GTexture.h"
+#include "GameX/GetConsts.h"
 #include "SceneB2/TerrainInfo.h"
+#include "Stats_B2_M1/DBCameraConsts.h"
+#include "Stats_B2_M1/DBClientConsts.h"
 #include "Stats_B2_M1/DBMapInfo.h"
 #include "Stats_B2_M1/DBVisObj.h"
 #include "Stats_B2_M1/UserActions.h"
@@ -42,9 +45,13 @@ namespace bk2::android {
 namespace {
 
 constexpr float kPackedHeightScale = 0.01f;
-constexpr float kMinCameraDistance = 24.0f;
-constexpr float kInitialCameraMinDistance = 72.0f;
-constexpr float kCameraMaxTerrainFraction = 0.48f;
+constexpr float kPi = 3.14159265358979323846f;
+constexpr float kDefaultCameraMinDistance = 150.0f;
+constexpr float kDefaultCameraMaxDistance = 200.0f;
+constexpr float kDefaultCameraDistance = 170.0f;
+constexpr float kDefaultCameraPitchDegrees = 45.0f;
+constexpr float kDefaultCameraYawDegrees = 45.0f;
+constexpr float kDefaultCameraHorizontalFovDegrees = 26.0f;
 constexpr const char* kInfantryTraceTexture =
         "Scene/TexAndMats/All/Units/Weapons/GunShotTraceBlue_Texture.dds";
 constexpr const char* kMechanizedTraceTexture =
@@ -82,6 +89,12 @@ uint64_t g_rendered_presentation_generation = 0;
 uint64_t g_rendered_war_fog_generation = 0;
 float g_animation_elapsed_seconds = 0.0f;
 TerrainCamera g_camera;
+struct CameraRuntimeLimits {
+    float min_distance = kDefaultCameraMinDistance;
+    float max_distance = kDefaultCameraMaxDistance;
+    float default_distance = kDefaultCameraDistance;
+};
+CameraRuntimeLimits g_camera_limits;
 TerrainMesh g_terrain_mesh;
 WorldObjectMesh g_static_world_object_mesh;
 WorldObjectMesh g_world_object_mesh;
@@ -2489,6 +2502,73 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
     return RenderBackend().set_world_object_mesh(g_world_object_mesh);
 }
 
+float CameraDegreesToRadians(float degrees) {
+    return degrees * kPi / 180.0f;
+}
+
+void ConfigureCameraFromLegacyConstsLocked() {
+    g_camera_limits = CameraRuntimeLimits();
+    g_camera.yaw_radians =
+            CameraDegreesToRadians(kDefaultCameraYawDegrees);
+    g_camera.pitch_radians =
+            CameraDegreesToRadians(kDefaultCameraPitchDegrees);
+    g_camera.distance = kDefaultCameraDistance;
+    g_camera.horizontal_fov_degrees =
+            kDefaultCameraHorizontalFovDegrees;
+
+    const NDb::SClientGameConsts* client_consts =
+            NGameX::GetClientConsts();
+    const NDb::SCameraLimits* camera_consts =
+            client_consts == nullptr
+            ? nullptr
+            : client_consts->pCamera.GetPtr();
+    bool loaded = false;
+    if (camera_consts != nullptr) {
+        const NDb::SCameraLimits::SCLLimit& distance =
+                camera_consts->distanceLimit;
+        if (std::isfinite(distance.fMin) &&
+            std::isfinite(distance.fMax) &&
+            std::isfinite(distance.fAve) &&
+            distance.fMin > 0.0f &&
+            distance.fMax >= distance.fMin) {
+            g_camera_limits.min_distance = distance.fMin;
+            g_camera_limits.max_distance = distance.fMax;
+            g_camera_limits.default_distance = std::clamp(
+                    distance.fAve,
+                    distance.fMin,
+                    distance.fMax);
+            g_camera.distance =
+                    g_camera_limits.default_distance;
+            loaded = true;
+        }
+        if (std::isfinite(camera_consts->pitchLimit.fAve)) {
+            g_camera.pitch_radians = CameraDegreesToRadians(
+                    camera_consts->pitchLimit.fAve);
+        }
+        if (std::isfinite(camera_consts->yawLimit.fAve)) {
+            g_camera.yaw_radians = CameraDegreesToRadians(
+                    camera_consts->yawLimit.fAve);
+        }
+        if (std::isfinite(camera_consts->fFOV) &&
+            camera_consts->fFOV > 1.0f &&
+            camera_consts->fFOV < 179.0f) {
+            g_camera.horizontal_fov_degrees =
+                    camera_consts->fFOV;
+        }
+    }
+
+    std::ostringstream report;
+    report << "camera_limits=" << (loaded ? "legacy" : "fallback")
+           << "; distance=" << g_camera_limits.min_distance
+           << "," << g_camera_limits.default_distance
+           << "," << g_camera_limits.max_distance
+           << "; pitch=" << g_camera.pitch_radians
+           << "; yaw=" << g_camera.yaw_radians
+           << "; horizontal_fov="
+           << g_camera.horizontal_fov_degrees;
+    PlatformRuntime::instance().log_info(report.str());
+}
+
 bool FocusCameraOnPlayerLocked(int player) {
     const Bk2PresentationSnapshotInfo info =
             bk2_presentation_snapshot_info();
@@ -2525,32 +2605,18 @@ bool FocusCameraOnPlayerLocked(int player) {
     g_camera.target_x = (min_x + max_x) * 0.5f;
     g_camera.target_y = (min_y + max_y) * 0.5f;
     g_camera.target_z = height_sum / static_cast<float>(count);
-    const float camera_from_center_x =
-            g_camera.target_x - g_terrain_mesh.center_x;
-    const float camera_from_center_y =
-            g_camera.target_y - g_terrain_mesh.center_y;
-    if (camera_from_center_x * camera_from_center_x +
-            camera_from_center_y * camera_from_center_y >
-        g_terrain_mesh.world_size * g_terrain_mesh.world_size * 0.01f) {
-        g_camera.yaw_radians = std::atan2(
-                camera_from_center_x,
-                -camera_from_center_y);
-    }
-    const float formation_span = std::max(max_x - min_x, max_y - min_y);
-    g_camera.distance = std::clamp(
-            formation_span * 1.8f + 42.0f,
-            kInitialCameraMinDistance,
-            std::max(
-                    g_terrain_mesh.world_size *
-                            kCameraMaxTerrainFraction,
-                    kInitialCameraMinDistance));
+    g_camera.distance = g_camera_limits.default_distance;
 
     std::ostringstream report;
     report << "camera_focus=player"
            << "; player=" << player
            << "; units=" << count
            << "; target=" << g_camera.target_x << "," << g_camera.target_y
-           << "; distance=" << g_camera.distance;
+           << "; distance=" << g_camera.distance
+           << "; pitch=" << g_camera.pitch_radians
+           << "; yaw=" << g_camera.yaw_radians
+           << "; horizontal_fov="
+           << g_camera.horizontal_fov_degrees;
     PlatformRuntime::instance().log_info(report.str());
     return true;
 }
@@ -2662,11 +2728,14 @@ bool BuildScreenProjectionBasisLocked(
     basis->up = NormalizeProjectionVector(CrossProjectionVectors(
             basis->forward,
             basis->right));
-    basis->tangent =
-            std::tan(48.0f * 0.5f * 3.14159265358979323846f / 180.0f);
     basis->aspect =
             static_cast<float>(viewport_width) /
             static_cast<float>(viewport_height);
+    basis->tangent =
+            std::tan(
+                    CameraDegreesToRadians(
+                            g_camera.horizontal_fov_degrees * 0.5f)) /
+            basis->aspect;
     return true;
 }
 
@@ -2822,10 +2891,14 @@ bool ScreenToTerrainLocked(
             screen_x / static_cast<float>(viewport_width) * 2.0f - 1.0f;
     const float ndc_y =
             1.0f - screen_y / static_cast<float>(viewport_height) * 2.0f;
-    const float tangent = std::tan(48.0f * 0.5f * 3.14159265358979323846f / 180.0f);
     const float aspect =
             static_cast<float>(viewport_width) /
             static_cast<float>(viewport_height);
+    const float tangent =
+            std::tan(
+                    CameraDegreesToRadians(
+                            g_camera.horizontal_fov_degrees * 0.5f)) /
+            aspect;
     const Vec3 ray = normalize(Vec3{
             forward.x + right.x * ndc_x * tangent * aspect +
                     camera_up.x * ndc_y * tangent,
@@ -3114,9 +3187,7 @@ bool InitializeSinglePlayerRuntime() {
     g_camera.target_x = mesh.center_x;
     g_camera.target_y = mesh.center_y;
     g_camera.target_z = mesh.center_z;
-    g_camera.yaw_radians = 0.72f;
-    g_camera.pitch_radians = 0.92f;
-    g_camera.distance = std::max(mesh.world_size * 1.05f, kMinCameraDistance);
+    ConfigureCameraFromLegacyConstsLocked();
 
     g_terrain_mesh = std::move(mesh);
     g_static_world_object_mesh = std::move(presentation_world_mesh);
@@ -3275,7 +3346,8 @@ void PanSinglePlayerCamera(float delta_x_pixels, float delta_y_pixels) {
         return;
     }
     const float scale =
-            std::max(g_camera.distance, kMinCameraDistance) * 0.0015f;
+            std::max(g_camera.distance, g_camera_limits.min_distance) *
+            0.0015f;
     const float right_x = std::cos(g_camera.yaw_radians);
     const float right_y = std::sin(g_camera.yaw_radians);
     const float forward_x = -right_y;
@@ -3284,6 +3356,20 @@ void PanSinglePlayerCamera(float delta_x_pixels, float delta_y_pixels) {
     g_camera.target_y -= right_y * delta_x_pixels * scale;
     g_camera.target_x += forward_x * delta_y_pixels * scale;
     g_camera.target_y += forward_y * delta_y_pixels * scale;
+    const float maximum_x =
+            static_cast<float>(std::max(g_height_width - 1, 0)) *
+            VIS_TILE_SIZE;
+    const float maximum_y =
+            static_cast<float>(std::max(g_height_height - 1, 0)) *
+            VIS_TILE_SIZE;
+    g_camera.target_x = std::clamp(
+            g_camera.target_x,
+            0.0f,
+            maximum_x);
+    g_camera.target_y = std::clamp(
+            g_camera.target_y,
+            0.0f,
+            maximum_y);
     ApplyCameraLocked();
 }
 
@@ -3292,14 +3378,11 @@ void ZoomSinglePlayerCamera(float scale) {
     if (!g_ready || scale <= 0.0f) {
         return;
     }
-    const float maximum_distance = std::max(
-            kMinCameraDistance,
-            g_terrain_mesh.world_size * kCameraMaxTerrainFraction);
     g_camera.distance = std::clamp(
             g_camera.distance /
                     std::max(0.25f, std::min(scale, 4.0f)),
-            kMinCameraDistance,
-            maximum_distance);
+            g_camera_limits.min_distance,
+            g_camera_limits.max_distance);
     ApplyCameraLocked();
 }
 
@@ -3683,8 +3766,10 @@ bool HandleSinglePlayerTap(
     const float world_units_per_pixel =
             2.0f *
             g_camera.distance *
-            std::tan(48.0f * 0.5f * 3.14159265358979323846f / 180.0f) /
-            static_cast<float>(std::max(viewport_height, 1u));
+            std::tan(
+                    CameraDegreesToRadians(
+                            g_camera.horizontal_fov_degrees * 0.5f)) /
+            static_cast<float>(std::max(viewport_width, 1u));
     const float selection_radius =
             std::max(world_units_per_pixel * 42.0f, VIS_TILE_SIZE * 1.5f);
     const int selected_unit = SelectLegacyUnitNear(
@@ -3888,6 +3973,17 @@ std::string SinglePlayerRuntimeReport() {
            << "; error=" << (g_last_error.empty() ? "<none>" : g_last_error)
            << "; mission=" << (g_mission_id.empty() ? "<none>" : g_mission_id)
            << "; map=" << (g_map_path.empty() ? "<none>" : g_map_path)
+           << "; camera_target="
+           << g_camera.target_x << "," << g_camera.target_y
+           << "," << g_camera.target_z
+           << "; camera_distance=" << g_camera.distance
+           << "; camera_distance_limits="
+           << g_camera_limits.min_distance << ","
+           << g_camera_limits.max_distance
+           << "; camera_pitch=" << g_camera.pitch_radians
+           << "; camera_yaw=" << g_camera.yaw_radians
+           << "; camera_horizontal_fov="
+           << g_camera.horizontal_fov_degrees
            << "; heightfield=" << g_height_width << "x" << g_height_height
            << "; triangles=" << g_triangle_count
            << "; terrain_texture="

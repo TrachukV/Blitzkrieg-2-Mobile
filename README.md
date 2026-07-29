@@ -51,10 +51,12 @@ use their original disabled artwork. Original combat textures now provide
 tracer ribbons, muzzle flashes, and animated fire/smoke on destroyed mechanized
 units. Static objects and live units now cast translucent projected silhouettes
 derived from their actual converted Granny vertices; animated infantry shadows
-follow the current frame instead of using fixed circles. Double-tapping a
-selected unit expands the selection to nearby units of
-the same legacy type (up to twelve), gives each unit an original selection
-marker and HUD card, and sends Move, Attack, Stop, and supported abilities
+follow the current frame instead of using fixed circles. The battlefield camera
+now reads the original mission's 26-degree horizontal FOV, 45-degree default
+pitch/yaw, and 150/170/200 distance limits from the loaded legacy
+`ClientGameConsts`. Double-tapping a selected unit expands the selection to
+nearby units of the same legacy type (up to twelve), gives each unit an original
+selection marker and HUD card, and sends Move, Attack, Stop, and supported abilities
 through one legacy AI command group. Holding for 350 ms and then dragging draws
 an original-style selection rectangle and selects up to twelve friendly units
 of any type inside it; a quick drag still pans the camera. Tapping a member card

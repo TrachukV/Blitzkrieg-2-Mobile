@@ -33,7 +33,11 @@ campaign/map ID is now only a startup fallback. Converted static and dynamic
 models also produce one translucent ground silhouette from the convex hull of
 their sun-projected Granny vertices. The dynamic path samples the same current
 pre-skinned animation frame used by the visible model, so infantry shadows move
-with the unit rather than remaining fixed proxy circles.
+with the unit rather than remaining fixed proxy circles. The battlefield camera
+loads horizontal FOV, default pitch/yaw, and min/average/max distance from the
+same legacy `ClientGameConsts` used by the desktop mission. Screen projection,
+terrain picking, drag selection, and bgfx rendering all consume that one camera
+state.
 
 ## Implemented In This Slice
 
