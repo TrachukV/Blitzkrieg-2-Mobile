@@ -64,6 +64,7 @@ size_t g_rendered_object_count = 0;
 size_t g_dynamic_rendered_object_count = 0;
 bool g_presentation_snapshot_written = false;
 uint64_t g_rendered_presentation_generation = 0;
+uint64_t g_rendered_war_fog_generation = 0;
 float g_animation_elapsed_seconds = 0.0f;
 TerrainCamera g_camera;
 TerrainMesh g_terrain_mesh;
@@ -173,6 +174,7 @@ std::unordered_map<std::string, size_t> g_static_fallback_stats_paths;
 std::unordered_map<uint64_t, size_t> g_dynamic_fallback_stats_hashes;
 
 void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh);
+float TerrainMeshHeightAtLocked(float world_x, float world_y);
 
 struct MissionLaunchOverride {
     bool present = false;
@@ -1940,8 +1942,11 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
             bk2_presentation_snapshot_info();
     const std::vector<AndroidCombatEffect> combat_effects =
             CopyActiveAndroidCombatEffects();
+    const AndroidWarFogSnapshot war_fog =
+            CopyAndroidWarFogSnapshot();
     if (!force &&
         info.generation == g_rendered_presentation_generation &&
+        war_fog.generation == g_rendered_war_fog_generation &&
         g_animated_geometry_part_count == 0 &&
         combat_effects.empty() &&
         g_active_combat_effect_count == 0) {
@@ -2025,9 +2030,100 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         PlatformRuntime::instance().log_info(
                 "combat_effect_render=cleared");
     }
+    if (war_fog.width >= 2 &&
+        war_fog.height >= 2 &&
+        war_fog.visibility.size() ==
+                static_cast<size_t>(
+                        war_fog.width * war_fog.height)) {
+        constexpr int kMaxFogQuadsPerAxis = 96;
+        const int x_step = std::max(
+                1,
+                (war_fog.width - 1 + kMaxFogQuadsPerAxis - 1) /
+                        kMaxFogQuadsPerAxis);
+        const int y_step = std::max(
+                1,
+                (war_fog.height - 1 + kMaxFogQuadsPerAxis - 1) /
+                        kMaxFogQuadsPerAxis);
+        std::vector<int> fog_x;
+        std::vector<int> fog_y;
+        for (int x = 0; x < war_fog.width - 1; x += x_step) {
+            fog_x.push_back(x);
+        }
+        fog_x.push_back(war_fog.width - 1);
+        for (int y = 0; y < war_fog.height - 1; y += y_step) {
+            fog_y.push_back(y);
+        }
+        fog_y.push_back(war_fog.height - 1);
+
+        const uint32_t vertex_base =
+                static_cast<uint32_t>(combined.vertices.size());
+        combined.vertices.reserve(
+                combined.vertices.size() +
+                fog_x.size() * fog_y.size());
+        for (int y : fog_y) {
+            for (int x : fog_x) {
+                const uint8_t visibility =
+                        war_fog.visibility[
+                                static_cast<size_t>(
+                                        y * war_fog.width + x)];
+                const float hidden =
+                        1.0f -
+                        std::clamp(
+                                static_cast<float>(visibility) /
+                                        static_cast<float>(
+                                                std::max<int>(
+                                                        war_fog.visibility_power,
+                                                        1)),
+                                0.0f,
+                                1.0f);
+                const uint32_t alpha = static_cast<uint32_t>(
+                        std::lround(hidden * 248.0f));
+                const float world_x =
+                        static_cast<float>(x) * VIS_TILE_SIZE;
+                const float world_y =
+                        static_cast<float>(y) * VIS_TILE_SIZE;
+                combined.vertices.push_back(TerrainVertex{
+                        world_x,
+                        world_y,
+                        TerrainMeshHeightAtLocked(world_x, world_y) + 0.25f,
+                        0.0f,
+                        0.0f,
+                        alpha << 24});
+            }
+        }
+
+        WorldObjectMesh::Layer fog_layer;
+        fog_layer.alpha_blended = true;
+        fog_layer.depth_test_always = true;
+        fog_layer.triangle_indices.reserve(
+                (fog_x.size() - 1) *
+                (fog_y.size() - 1) * 6);
+        const uint32_t fog_width =
+                static_cast<uint32_t>(fog_x.size());
+        for (uint32_t y = 0;
+             y + 1 < static_cast<uint32_t>(fog_y.size());
+             ++y) {
+            for (uint32_t x = 0; x + 1 < fog_width; ++x) {
+                const uint32_t top_left =
+                        vertex_base + y * fog_width + x;
+                const uint32_t top_right = top_left + 1;
+                const uint32_t bottom_left =
+                        top_left + fog_width;
+                const uint32_t bottom_right = bottom_left + 1;
+                fog_layer.triangle_indices.push_back(top_left);
+                fog_layer.triangle_indices.push_back(bottom_left);
+                fog_layer.triangle_indices.push_back(top_right);
+                fog_layer.triangle_indices.push_back(top_right);
+                fog_layer.triangle_indices.push_back(bottom_left);
+                fog_layer.triangle_indices.push_back(bottom_right);
+            }
+        }
+        combined.layers.push_back(std::move(fog_layer));
+    }
     g_world_object_mesh = std::move(combined);
     RefreshWorldObjectTextureHandles(&g_world_object_mesh);
     g_rendered_presentation_generation = info.generation;
+    g_rendered_war_fog_generation = war_fog.generation;
     return RenderBackend().set_world_object_mesh(g_world_object_mesh);
 }
 
@@ -2408,6 +2504,8 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
         layer.texture_handle =
                 ModelTextureHandle(layer.texture_path);
         if (layer.alpha_blended &&
+            (layer.texture_path == kInfantryTraceTexture ||
+             layer.texture_path == kMechanizedTraceTexture) &&
             !g_combat_effect_trace_texture_logged) {
             PlatformRuntime::instance().log_info(
                     std::string("combat_effect_trace_texture=") +
@@ -2708,6 +2806,7 @@ void ShutdownSinglePlayerRuntime() {
     g_dynamic_rendered_object_count = 0;
     g_presentation_snapshot_written = false;
     g_rendered_presentation_generation = 0;
+    g_rendered_war_fog_generation = 0;
     g_animation_elapsed_seconds = 0.0f;
 }
 

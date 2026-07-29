@@ -120,6 +120,8 @@ std::unordered_map<int32_t, Bk2PresentationEntity>
         g_last_presentation_entities;
 std::unordered_map<int32_t, PresentationCorpse> g_presentation_corpses;
 uint64_t g_presentation_death_count = 0;
+AndroidWarFogSnapshot g_war_fog_snapshot;
+bool g_war_fog_first_update = true;
 enum LegacyMissionOutcomeValue {
     kLegacyMissionRunning = 0,
     kLegacyMissionWon = 1,
@@ -134,6 +136,59 @@ uint32_t g_android_move_log_millis = 0;
 std::set<std::string> g_missing_unit_payload_refs;
 std::set<std::string> g_missing_squad_payload_refs;
 std::string g_stage = "not_started";
+
+bool UpdateWarFogSnapshot() {
+    if (g_ai_logic == nullptr) {
+        return false;
+    }
+    CArray2D<BYTE>* fog = nullptr;
+    const bool complete = g_ai_logic->GetMiniMapWarForInfo(
+            &fog,
+            g_war_fog_first_update);
+    if (!complete || fog == nullptr ||
+        fog->GetSizeX() < 2 || fog->GetSizeY() < 2) {
+        return false;
+    }
+    g_war_fog_first_update = false;
+    AndroidWarFogSnapshot next;
+    next.width = fog->GetSizeX();
+    next.height = fog->GetSizeY();
+    next.visibility_power = static_cast<uint8_t>(
+            std::max(g_ai_logic->VIS_POWER(), 1));
+    next.visibility.resize(
+            static_cast<size_t>(next.width * next.height));
+    size_t visible_cells = 0;
+    for (int y = 0; y < next.height; ++y) {
+        for (int x = 0; x < next.width; ++x) {
+            const uint8_t value = (*fog)[y][x];
+            next.visibility[
+                    static_cast<size_t>(y * next.width + x)] = value;
+            if (value >= next.visibility_power) {
+                ++visible_cells;
+            }
+        }
+    }
+    if (next.width == g_war_fog_snapshot.width &&
+        next.height == g_war_fog_snapshot.height &&
+        next.visibility_power == g_war_fog_snapshot.visibility_power &&
+        next.visibility == g_war_fog_snapshot.visibility) {
+        return true;
+    }
+    next.generation = g_war_fog_snapshot.generation + 1;
+    const bool first_snapshot = g_war_fog_snapshot.generation == 0;
+    g_war_fog_snapshot = std::move(next);
+    if (first_snapshot) {
+        PlatformRuntime::instance().log_info(
+                std::string("war_fog=ready; size=") +
+                std::to_string(g_war_fog_snapshot.width) + "x" +
+                std::to_string(g_war_fog_snapshot.height) +
+                "; power=" +
+                std::to_string(g_war_fog_snapshot.visibility_power) +
+                "; visible_cells=" +
+                std::to_string(visible_cells));
+    }
+    return true;
+}
 
 uint64_t StatsPathHash(const NDb::SHPObjectRPGStats* stats) {
     if (stats == nullptr) {
@@ -687,6 +742,11 @@ void PublishPresentationEntities() {
         if (unit == nullptr) {
             continue;
         }
+        const BYTE player_party = theDipl.GetMyParty();
+        if (unit->GetParty() != player_party &&
+            !unit->IsVisible(player_party)) {
+            continue;
+        }
         uint32_t flags = 0;
         if (unit->IsAlive()) {
             flags |= BK2_PRESENTATION_ENTITY_ALIVE;
@@ -1164,6 +1224,7 @@ bool InitializeLegacyGameRuntime(
     SetStage("post_map_load");
     g_ai_logic->PostMapLoad();
     g_ai_logic->Resume();
+    UpdateWarFogSnapshot();
 
     g_unit_count = 0;
     const int players_to_count = static_cast<int>(map->diplomacies.size());
@@ -1197,6 +1258,7 @@ void TickLegacyGameRuntime(uint32_t elapsed_millis) {
         ++g_segment_count;
         advanced = true;
     }
+    UpdateWarFogSnapshot();
     DrainLegacyClientUpdates();
     PruneExpiredCombatEffects();
     FinalizePendingMissionOutcome();
@@ -1592,6 +1654,10 @@ std::vector<AndroidCombatEffect> CopyActiveAndroidCombatEffects() {
     return result;
 }
 
+AndroidWarFogSnapshot CopyAndroidWarFogSnapshot() {
+    return g_war_fog_snapshot;
+}
+
 void ShutdownLegacyGameRuntime() {
     if (g_ai_logic != nullptr) {
         g_ai_logic->Suspend();
@@ -1621,6 +1687,8 @@ void ShutdownLegacyGameRuntime() {
     g_last_presentation_entities.clear();
     g_presentation_corpses.clear();
     g_presentation_death_count = 0;
+    g_war_fog_snapshot = AndroidWarFogSnapshot();
+    g_war_fog_first_update = true;
     g_combat_effects.clear();
     g_infantry_shot_effect_count = 0;
     g_mechanized_shot_effect_count = 0;
@@ -1673,6 +1741,10 @@ std::string LegacyGameRuntimeReport() {
            << g_forwarded_unit_kill_error_count
            << "; presented_deaths=" << g_presentation_death_count
            << "; active_corpses=" << g_presentation_corpses.size()
+           << "; war_fog=" << g_war_fog_snapshot.width
+           << "x" << g_war_fog_snapshot.height
+           << "; war_fog_generation="
+           << g_war_fog_snapshot.generation
            << "; normalized_rpg_stats=" << g_normalized_rpg_stats_count
            << "; normalized_unit_stats=" << g_normalized_unit_stats_count
            << "; normalized_squad_stats=" << g_normalized_squad_stats_count

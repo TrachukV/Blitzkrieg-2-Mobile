@@ -650,6 +650,18 @@ update stream every simulation tick instead of allowing visual/client updates
 to accumulate. `EFB_OBJECTIVE_CHANGED` updates are applied to both the original
 scenario tracker and the Android campaign checkpoint state.
 
+The battle renderer now consumes `IAILogic::GetMiniMapWarForInfo()` instead of
+approximating vision with Android-side circles. The legacy AI exports its
+smoothed 0-to-`VIS_POWER()` visibility grid; Android converts it into a black
+alpha mesh drawn after terrain, static objects, and units, while units that
+`IsVisible(playerParty)` rejects are omitted from the presentation snapshot.
+The mesh is capped at 96 quads per axis and rebuilt only for a new fog
+generation. On USA US1.2 the ARM64 runtime reported a real `128x128`, power-7
+grid with 1,894 fully visible cells; the resulting battlefield has the same
+black unexplored perimeter and soft visible-area boundary as the original
+battle view. The bgfx clear color is also black so uncovered map edges no
+longer expose the old teal diagnostic background.
+
 Original Lua `Win()`/`Loose()` calls now cross the Android input bridge.
 They freeze the finished simulation, commit the corresponding campaign
 win/cancel state, and show a centered victory/defeat panel with a return to the

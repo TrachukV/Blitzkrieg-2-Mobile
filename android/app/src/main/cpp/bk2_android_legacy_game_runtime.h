@@ -30,6 +30,14 @@ struct AndroidCombatEffect {
     uint32_t lifetime_millis = 0;
 };
 
+struct AndroidWarFogSnapshot {
+    int width = 0;
+    int height = 0;
+    uint8_t visibility_power = 1;
+    uint64_t generation = 0;
+    std::vector<uint8_t> visibility;
+};
+
 bool InitializeLegacyGameRuntime(
         const NDb::SMapInfo* map,
         const STerrainInfo& terrain_info,
@@ -53,6 +61,7 @@ std::string SelectedLegacyUnitHudSnapshot();
 void HandleLegacyInputEvent(const char* event_name);
 const char* LegacyMissionOutcome();
 std::vector<AndroidCombatEffect> CopyActiveAndroidCombatEffects();
+AndroidWarFogSnapshot CopyAndroidWarFogSnapshot();
 void ShutdownLegacyGameRuntime();
 bool IsLegacyGameRuntimeReady();
 std::string LegacyGameRuntimeReport();

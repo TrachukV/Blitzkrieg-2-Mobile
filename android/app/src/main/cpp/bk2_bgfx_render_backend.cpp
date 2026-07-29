@@ -24,7 +24,7 @@ namespace {
 
 constexpr bgfx::ViewId kTerrainView = 0;
 constexpr bgfx::ViewId kUiView = 1;
-constexpr uint32_t kClearColor = 0x173c32ff;
+constexpr uint32_t kClearColor = 0x000000ff;
 
 const bgfx::EmbeddedShader kRectShaders[] = {
         BGFX_EMBEDDED_SHADER(vs_debugdraw_fill_mesh),
@@ -759,10 +759,17 @@ private:
             bgfx::setTexture(0, texture_sampler_, texture);
             bgfx::setVertexBuffer(0, world_object_vertex_buffer_);
             bgfx::setIndexBuffer(index_buffer);
-            bgfx::setState(
-                    world_object_mesh_.layers[index].alpha_blended
-                    ? state | BGFX_STATE_BLEND_ALPHA
-                    : state);
+            const WorldObjectMesh::Layer& layer =
+                    world_object_mesh_.layers[index];
+            uint64_t layer_state = layer.depth_test_always
+                    ? BGFX_STATE_WRITE_RGB |
+                            BGFX_STATE_WRITE_A |
+                            BGFX_STATE_MSAA
+                    : state;
+            if (layer.alpha_blended) {
+                layer_state |= BGFX_STATE_BLEND_ALPHA;
+            }
+            bgfx::setState(layer_state);
             bgfx::submit(kTerrainView, textured_rect_program_);
             ++submitted_primitives_;
         }
