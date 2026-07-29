@@ -1566,7 +1566,7 @@ void AppendMapObjects(
     }
 }
 
-void BuildWorldObjectMesh(
+void BuildPresentationStaticWorldMesh(
         const NDb::SMapInfo* map,
         const STerrainInfo& terrain_info,
         WorldObjectMesh* mesh) {
@@ -1583,7 +1583,7 @@ void BuildWorldObjectMesh(
             map->objects,
             terrain_info,
             false,
-            true,
+            false,
             true,
             true,
             mesh);
@@ -1591,37 +1591,9 @@ void BuildWorldObjectMesh(
             map->scenarioObjects,
             terrain_info,
             true,
-            true,
-            true,
-            true,
-            mesh);
-}
-
-void BuildPresentationStaticWorldMesh(
-        const NDb::SMapInfo* map,
-        const STerrainInfo& terrain_info,
-        WorldObjectMesh* mesh) {
-    if (map == nullptr || mesh == nullptr) {
-        return;
-    }
-    const size_t total = map->objects.size() + map->scenarioObjects.size();
-    mesh->vertices.reserve(total * 5);
-    mesh->triangle_indices.reserve(total * 18);
-    AppendMapObjects(
-            map->objects,
-            terrain_info,
-            false,
             false,
             true,
-            false,
-            mesh);
-    AppendMapObjects(
-            map->scenarioObjects,
-            terrain_info,
             true,
-            false,
-            true,
-            false,
             mesh);
 }
 
@@ -2227,8 +2199,6 @@ bool InitializeSinglePlayerRuntime() {
         return false;
     }
     BuildTerrainLayers(map, terrain_info, &mesh);
-    WorldObjectMesh world_object_mesh;
-    BuildWorldObjectMesh(map, terrain_info, &world_object_mesh);
     WorldObjectMesh presentation_world_mesh;
     BuildPresentationStaticWorldMesh(map, terrain_info, &presentation_world_mesh);
     if (LoadTerrainLayerTextures(map, &mesh) == 0) {

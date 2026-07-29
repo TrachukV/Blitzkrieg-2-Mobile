@@ -506,6 +506,12 @@ default camera distance. The full-chain path has been
 exercised on USA1.0, GB3.1, and GER1.0 with 38, 84, and 81 model textures
 respectively.
 
+Fallback accounting now runs only on the final presentation meshes. The
+discarded pre-presentation preview no longer counts squad spawn descriptors as
+visible proxy models. Runtime checks on USA `US1.0`, GB `GB3.1`, and GER
+`GER1.0` all report zero converted-geometry fallbacks for static and live
+entities.
+
 Some late content descriptors reference Granny record IDs whose binary streams
 are absent from both this checkout and `origin/main`. The offline index rejects
 those dead bindings instead of sending them to the runtime loader. Two explicit
@@ -513,9 +519,10 @@ compatibility substitutions cover visible GER1.0 objects: Pz IV F2 record
 `1000090` uses the shipped Pz IV Ausf G model, the closest available variant,
 and `Concretedot_2` record `1000206` uses the older shipped concrete pillbox.
 These are original game assets but are documented stand-ins, not recovered
-missing meshes. On GER1.0 this takes `missing_converted_geometry` from four to
-zero, removes the only dynamic proxy, and reduces diagnostic fallbacks from 95
-to 91.
+missing meshes. On GER1.0 these substitutions take
+`missing_converted_geometry` from four to zero and remove the only real dynamic
+proxy; the previously reported remaining fallbacks came from the obsolete
+preview pass rather than the rendered world.
 
 Granny resources can use either numeric filenames or UUID filenames. The
 converter and index now assign the latter the same stable positive runtime ID
