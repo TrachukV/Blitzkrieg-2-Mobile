@@ -859,6 +859,12 @@ The Japan assault-squad officer has the same Oodle1 limitation in
 This removes the last live proxy encountered on `US1.2` while preserving the
 correct nation, role, skeleton family, and original material.
 
+The early German StuG III A/B/C also lacks a decodable visual resource. Its
+shipped StuG III Ausf. D geometry (record `795`) has the same footprint,
+seven-part layout, and height within one millimetre. The index reuses only that
+geometry and retains the A/B/C material and texture. On `GER2.3`, this removes
+both live A/B/C proxies without changing the remaining unrelated fallback.
+
 Granny resources can use either numeric filenames or UUID filenames. The
 converter and index now assign the latter the same stable positive runtime ID
 and reject collisions before conversion. The current complete pass requests

@@ -82,6 +82,14 @@ PROCEDURAL_GEOMETRY_RESOURCES = {
     "8E1CF9C4-6B9E-4930-90A2-2B92D658005E",
 }
 
+# The early StuG III A/B/C resource is Oodle1-compressed. The Ausf. D mesh has
+# the same 2.90494 x 5.40997 footprint, height within one millimetre, and the
+# same seven-part layout. Reuse only its geometry while retaining the A/B/C
+# model's original material and texture.
+UNSUPPORTED_GEOMETRY_FALLBACKS = {
+    "1000178": "795",
+}
+
 
 def child(element: ET.Element, name: str) -> ET.Element | None:
     wanted = name.lower()
@@ -379,39 +387,57 @@ def geometry_info(
         value,
         geometry_record_id,
     ):
-        ai_geometry_path = href_child_path(
-            data_root,
-            geometry_path,
-            geometry,
-            "AIGeometry",
-        )
-        ai_geometry = (
-            parse_root(ai_geometry_path)
-            if ai_geometry_path is not None
-            else None
-        )
-        ai_record = (
-            geometry_resource_key(ai_geometry)
-            if ai_geometry is not None
+        fallback_value = UNSUPPORTED_GEOMETRY_FALLBACKS.get(value.upper())
+        fallback_runtime_id = (
+            runtime_geometry_id(fallback_value)
+            if fallback_value is not None
             else None
         )
         if (
-            ai_record is not None
-            and geometry_resource_supported(data_root, ai_record)
+            fallback_value is not None
+            and fallback_runtime_id is not None
+            and geometry_resource_available(
+                data_root,
+                converted_geometry_root,
+                fallback_value,
+                fallback_runtime_id,
+            )
         ):
-            geometry_record_id = runtime_geometry_id(ai_record)
-            if (
-                geometry_record_id is None
-                or not converted_geometry_exists(
-                    converted_geometry_root,
-                    geometry_record_id,
-                )
-            ):
-                return None
-            # Matches AI_TO_VIS from Stats_B2_M1/Vis2AI.h.
-            geometry_scale = 2.75 / 64.0
+            geometry_record_id = fallback_runtime_id
         else:
-            return None
+            ai_geometry_path = href_child_path(
+                data_root,
+                geometry_path,
+                geometry,
+                "AIGeometry",
+            )
+            ai_geometry = (
+                parse_root(ai_geometry_path)
+                if ai_geometry_path is not None
+                else None
+            )
+            ai_record = (
+                geometry_resource_key(ai_geometry)
+                if ai_geometry is not None
+                else None
+            )
+            if (
+                ai_record is not None
+                and geometry_resource_supported(data_root, ai_record)
+            ):
+                geometry_record_id = runtime_geometry_id(ai_record)
+                if (
+                    geometry_record_id is None
+                    or not converted_geometry_exists(
+                        converted_geometry_root,
+                        geometry_record_id,
+                    )
+                ):
+                    return None
+                # Matches AI_TO_VIS from Stats_B2_M1/Vis2AI.h.
+                geometry_scale = 2.75 / 64.0
+            else:
+                return None
     quantities: list[int] = []
     material_quantities = child(geometry, "MaterialQuantities")
     if material_quantities is not None:
