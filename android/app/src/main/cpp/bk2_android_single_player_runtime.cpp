@@ -83,6 +83,10 @@ constexpr const char* kEffectLightTexture =
         "Scene/TexAndMats/All/Effects/LightFX/Flare_Texture.dds";
 constexpr const char* kProjectedShadowLayer =
         "__android_projected_shadow__";
+// Health bars read as interface, not as scene geometry: the original draws
+// them in screen space, so here they go in a layer that ignores depth and
+// cannot be hidden behind the unit in front.
+constexpr const char* kHealthBarLayer = "__android_health_bar__";
 constexpr const char* kDestructionFireTextures[] = {
         "Scene/TexAndMats/All/Effects/Destructions/Fire/Fire2_Texture.dds",
         "Scene/TexAndMats/All/Effects/Destructions/Fire/Fire3_Texture.dds",
@@ -202,6 +206,7 @@ size_t g_active_combat_effect_count = 0;
 size_t g_active_scene_effect_count = 0;
 size_t g_active_destruction_effect_count = 0;
 size_t g_active_unit_indicator_count = 0;
+size_t g_health_bar_count = 0;
 bool g_combat_effect_trace_texture_logged = false;
 bool g_muzzle_flash_texture_logged = false;
 bool g_descriptor_particle_texture_logged = false;
@@ -4735,6 +4740,110 @@ void AppendOrientedBox(
     }
 }
 
+float CameraDegreesToRadians(float degrees);
+
+// A health bar over every unit, coloured by side. Without it there is no
+// telling friend from enemy on screen, and no reading how hurt anything is.
+// The quad stands upright and turns with the camera yaw, so it never tips
+// into the ground, and it is sized in world units that hold a constant size
+// on screen the way the original's screen-space bar does.
+void AppendUnitHealthBar(
+        WorldObjectMesh* mesh,
+        const Bk2PresentationEntity& entity) {
+    if (mesh == nullptr ||
+        !std::isfinite(entity.hit_points) ||
+        !std::isfinite(entity.max_hit_points) ||
+        entity.max_hit_points <= 0.0f) {
+        return;
+    }
+    const uint32_t viewport_width = RenderBackend().width();
+    if (viewport_width == 0) {
+        return;
+    }
+    const float fraction = std::clamp(
+            entity.hit_points / entity.max_hit_points, 0.0f, 1.0f);
+    // One pixel of screen at the camera's target plane.
+    const float world_per_pixel = 2.0f * g_camera.distance *
+            std::tan(CameraDegreesToRadians(
+                    g_camera.horizontal_fov_degrees * 0.5f)) /
+            static_cast<float>(viewport_width);
+    const bool mechanized =
+            (entity.flags & BK2_PRESENTATION_ENTITY_MECHANIZED) != 0;
+    const float half_width =
+            (mechanized ? 26.0f : 18.0f) * world_per_pixel;
+    const float height = 5.0f * world_per_pixel;
+    const float scale = std::isfinite(entity.visual_scale)
+            ? std::clamp(entity.visual_scale, 0.6f, 2.5f)
+            : 1.0f;
+    // The model's own height is world units; the clearance above it is
+    // pixels, like the bar itself, so it does not drift with the zoom.
+    const float lift = (mechanized ? 3.4f : 2.4f) * scale +
+            30.0f * world_per_pixel;
+
+    // Upright billboard: right turns with the camera, up is world up.
+    const float right_x = std::cos(g_camera.yaw_radians);
+    const float right_y = std::sin(g_camera.yaw_radians);
+
+    const uint32_t frame_abgr = ArgbToAbgr(0xd0101010u);
+    // Own units green shading to red as they are hurt, hostile units red,
+    // anyone else amber: the same three-way read the original gives.
+    const uint32_t fill_abgr = ArgbToAbgr(
+            entity.relation == BK2_PRESENTATION_RELATION_ENEMY
+                    ? 0xffd02020u
+                    : entity.relation == BK2_PRESENTATION_RELATION_ALLY
+                            ? 0xffd8a020u
+                            : (fraction > 0.6f ? 0xff35c03bu
+                                               : fraction > 0.3f
+                                                       ? 0xffd8c02bu
+                                                       : 0xffcf3a25u));
+
+    WorldObjectMesh::Layer* layer =
+            FindOrAddWorldObjectLayer(mesh, kHealthBarLayer);
+    if (layer == nullptr) {
+        return;
+    }
+    layer->depth_test_always = true;
+    const auto quad = [&](float left,
+                          float right,
+                          float bottom,
+                          float top,
+                          uint32_t abgr) {
+        const uint32_t base = static_cast<uint32_t>(mesh->vertices.size());
+        const float corners[4][2] = {
+                {left, bottom}, {right, bottom}, {right, top}, {left, top}};
+        for (const float(&corner)[2] : corners) {
+            mesh->vertices.push_back(TerrainVertex{
+                    entity.x + right_x * corner[0],
+                    entity.y + right_y * corner[0],
+                    entity.z + lift + corner[1],
+                    0.0f,
+                    0.0f,
+                    abgr});
+        }
+        layer->triangle_indices.push_back(base);
+        layer->triangle_indices.push_back(base + 1);
+        layer->triangle_indices.push_back(base + 2);
+        layer->triangle_indices.push_back(base);
+        layer->triangle_indices.push_back(base + 2);
+        layer->triangle_indices.push_back(base + 3);
+    };
+
+    const float margin = height * 0.3f;
+    quad(-half_width - margin,
+         half_width + margin,
+         -margin,
+         height + margin,
+         frame_abgr);
+    if (fraction > 0.0f) {
+        quad(-half_width,
+             -half_width + 2.0f * half_width * fraction,
+             0.0f,
+             height,
+             fill_abgr);
+    }
+    ++g_health_bar_count;
+}
+
 void AppendUnitIndicator(
         WorldObjectMesh* mesh,
         const Bk2PresentationEntity& entity,
@@ -5828,12 +5937,14 @@ void ReportTickBudgetLocked(std::chrono::steady_clock::time_point now) {
            << "; entities=" << g_dynamic_rendered_object_count
            << "; culled=" << g_culled_entity_count
            << "; shadow_cache=" << g_projected_shadow_hulls.size()
+           << "; health_bars=" << g_health_bar_count
            << "; wheel_parts=" << g_wheel_roll_part_count
            << "; track_parts=" << g_track_scroll_part_count
 ;
     PlatformRuntime::instance().log_info(report.str());
     g_wheel_roll_part_count = 0;
     g_track_scroll_part_count = 0;
+    g_health_bar_count = 0;
     g_tick_budget = TickBudget();
     g_tick_budget.started = true;
     g_tick_budget.window_start = now;
@@ -6091,6 +6202,9 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
                              : ArgbToAbgr(0xffff6a36u));
             ++g_active_unit_indicator_count;
         }
+        if (!dead) {
+            AppendUnitHealthBar(&combined, entity);
+        }
         AppendEntityModel(
                 &combined,
                 entity,
@@ -6250,6 +6364,20 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
             }
         }
         combined.layers.push_back(std::move(fog_layer));
+    }
+    // Layers submit in creation order, and the bar layer is created by the
+    // first unit drawn, so without this everything after it paints over the
+    // bars it is meant to sit under.
+    for (size_t index = 0; index + 1 < combined.layers.size(); ++index) {
+        if (combined.layers[index].texture_path == kHealthBarLayer) {
+            std::rotate(
+                    combined.layers.begin() +
+                            static_cast<std::ptrdiff_t>(index),
+                    combined.layers.begin() +
+                            static_cast<std::ptrdiff_t>(index) + 1,
+                    combined.layers.end());
+            break;
+        }
     }
     g_world_object_mesh = std::move(combined);
     RefreshWorldObjectTextureHandles(&g_world_object_mesh);
@@ -8743,20 +8871,28 @@ std::vector<int32_t> MissionMinimapArgb(int width, int height) {
         bk2_presentation_copy_entities(
                 entities.data(),
                 entities.size()) == entities.size()) {
-        const float world_size = std::max(g_terrain_mesh.world_size, 1.0f);
+        // The dots have to use the same extent as the viewport frame below,
+        // or they sit somewhere else on the map entirely.
+        const float world_size_x = std::max(
+                static_cast<float>(g_height_width - 1) * VIS_TILE_SIZE,
+                1.0f);
+        const float world_size_y = std::max(
+                static_cast<float>(g_height_height - 1) * VIS_TILE_SIZE,
+                1.0f);
         for (const Bk2PresentationEntity& entity : entities) {
             if ((entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) == 0) {
                 continue;
             }
             const int center_x = std::clamp(
                     static_cast<int>(
-                            entity.x / world_size * static_cast<float>(width)),
+                            entity.x / world_size_x *
+                            static_cast<float>(width)),
                     0,
                     width - 1);
             const int center_y = std::clamp(
                     height - 1 -
                             static_cast<int>(
-                                    entity.y / world_size *
+                                    entity.y / world_size_y *
                                     static_cast<float>(height)),
                     0,
                     height - 1);
@@ -8765,13 +8901,16 @@ std::vector<int32_t> MissionMinimapArgb(int width, int height) {
                      BK2_PRESENTATION_ENTITY_SELECTED) != 0;
             const int radius =
                     (entity.flags & BK2_PRESENTATION_ENTITY_MECHANIZED) != 0
-                    ? 2
-                    : selected ? 2 : 1;
+                    ? 3
+                    : selected ? 3 : 2;
             const uint32_t color = selected
                     ? 0xffffdf58u
-                    : entity.player == 0
-                            ? 0xff70e08au
-                            : 0xffe55f54u;
+                    : entity.relation == BK2_PRESENTATION_RELATION_ENEMY
+                            ? 0xffe55f54u
+                            : entity.relation ==
+                                            BK2_PRESENTATION_RELATION_ALLY
+                                    ? 0xffe0b040u
+                                    : 0xff70e08au;
             for (int dy = -radius; dy <= radius; ++dy) {
                 for (int dx = -radius; dx <= radius; ++dx) {
                     const int px = center_x + dx;

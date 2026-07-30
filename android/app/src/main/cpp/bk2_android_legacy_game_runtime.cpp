@@ -1868,7 +1868,12 @@ void PublishPresentationEntities() {
                         ? 0.0f
                         : aim->second.pitch_radians,
                 aim != g_turret_aim.end() && aim->second.has_yaw ? 1u : 0u,
-                odometer.distance};
+                odometer.distance,
+                unit->GetPlayer() == theDipl.GetMyNumber()
+                        ? BK2_PRESENTATION_RELATION_OWN
+                        : (unit->GetParty() == theDipl.GetMyParty()
+                                   ? BK2_PRESENTATION_RELATION_ALLY
+                                   : BK2_PRESENTATION_RELATION_ENEMY)};
         entities.push_back(entity);
         if ((entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) != 0) {
             g_last_presentation_entities[entity.id] = entity;

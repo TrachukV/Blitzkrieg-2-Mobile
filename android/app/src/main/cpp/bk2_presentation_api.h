@@ -34,6 +34,12 @@ typedef struct Bk2PresentationVertex {
     uint32_t abgr;
 } Bk2PresentationVertex;
 
+enum {
+    BK2_PRESENTATION_RELATION_OWN = 0,
+    BK2_PRESENTATION_RELATION_ALLY = 1,
+    BK2_PRESENTATION_RELATION_ENEMY = 2
+};
+
 typedef struct Bk2PresentationEntity {
     int32_t id;
     int32_t player;
@@ -57,6 +63,9 @@ typedef struct Bk2PresentationEntity {
     uint32_t turret_aim_valid;
     /* Distance this unit has travelled, in AI units. Wheels roll by it. */
     float travelled_distance;
+    /* Where this unit stands relative to the player, so the renderer can
+       tell friend from enemy without knowing about diplomacy. */
+    int32_t relation;
 } Bk2PresentationEntity;
 
 typedef struct Bk2PresentationSnapshotInfo {
