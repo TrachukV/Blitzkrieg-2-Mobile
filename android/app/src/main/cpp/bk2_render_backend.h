@@ -103,6 +103,10 @@ public:
             const std::vector<TerrainVertex>& vertices) = 0;
     virtual void clear_water_mesh() = 0;
     virtual bool set_world_object_mesh(const WorldObjectMesh& mesh) = 0;
+    // Geometry that never changes during a mission. Kept in its own GPU
+    // buffers so the per-frame path only rebuilds what actually moves.
+    virtual bool set_static_world_object_mesh(
+            const WorldObjectMesh& mesh) = 0;
     virtual void clear_world_object_mesh() = 0;
     virtual void set_terrain_camera(const TerrainCamera& camera) = 0;
     virtual void set_bottom_inset(uint32_t pixels) = 0;

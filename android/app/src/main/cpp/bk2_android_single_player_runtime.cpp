@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cerrno>
 #include <cstring>
@@ -156,6 +157,9 @@ std::unordered_set<std::string> g_crag_texture_paths;
 bool g_crag_texture_logged = false;
 bool g_turret_pose_logged = false;
 WorldObjectMesh g_static_world_object_mesh;
+// Static layers whose texture scrolls (rivers). They have to be rebuilt every
+// frame, so they live apart from the geometry that is uploaded once.
+WorldObjectMesh g_animated_static_world_object_mesh;
 WorldObjectMesh g_world_object_mesh;
 CObj<NGfx::CTexture> g_terrain_texture;
 std::string g_terrain_texture_path;
@@ -175,6 +179,7 @@ int g_terrain_type_height = 0;
 size_t g_converted_geometry_instance_count = 0;
 size_t g_converted_geometry_fallback_count = 0;
 size_t g_animated_geometry_part_count = 0;
+size_t g_culled_entity_count = 0;
 size_t g_move_animation_instance_count = 0;
 size_t g_attack_animation_instance_count = 0;
 size_t g_death_animation_instance_count = 0;
@@ -3706,12 +3711,38 @@ void AppendPartIndices(
                 part.triangle_indices.size()) {
         return;
     }
-    output->reserve(output->size() + index_count);
+    // No incremental reserve: growing by exactly what each call needs turns
+    // push_back's geometric growth into a full reallocation every time, which
+    // is quadratic over a frame's worth of parts.
     for (uint32_t index = 0; index < index_count; ++index) {
         output->push_back(
                 vertex_base +
                 part.triangle_indices[first_index + index]);
     }
+}
+
+size_t ConvertedGeometryFrameIndex(
+        const ConvertedGeometryPart& part,
+        ConvertedAnimationVariant animation_variant,
+        float animation_time_seconds) {
+    if (part.animation_frames.size() <= 1 ||
+        part.animation_duration_seconds <= 0.0f) {
+        return 0;
+    }
+    const float animation_time =
+            animation_variant == ConvertedAnimationVariant::Death
+            ? std::min(
+                      std::max(animation_time_seconds, 0.0f),
+                      part.animation_duration_seconds)
+            : std::fmod(
+                      std::max(animation_time_seconds, 0.0f),
+                      part.animation_duration_seconds);
+    return std::min(
+            static_cast<size_t>(
+                    animation_time /
+                    part.animation_duration_seconds *
+                    part.animation_frames.size()),
+            part.animation_frames.size() - 1);
 }
 
 const std::vector<ConvertedGeometryVertex>*
@@ -3723,21 +3754,10 @@ SelectConvertedGeometryVertices(
         part.animation_duration_seconds <= 0.0f) {
         return &part.vertices;
     }
-    const float animation_time =
-            animation_variant == ConvertedAnimationVariant::Death
-            ? std::min(
-                      std::max(animation_time_seconds, 0.0f),
-                      part.animation_duration_seconds)
-            : std::fmod(
-                      std::max(animation_time_seconds, 0.0f),
-                      part.animation_duration_seconds);
-    const size_t animation_frame = std::min(
-            static_cast<size_t>(
-                    animation_time /
-                    part.animation_duration_seconds *
-                    part.animation_frames.size()),
-            part.animation_frames.size() - 1);
-    return &part.animation_frames[animation_frame];
+    return &part.animation_frames[ConvertedGeometryFrameIndex(
+            part,
+            animation_variant,
+            animation_time_seconds)];
 }
 
 struct ProjectedShadowPoint {
@@ -3745,12 +3765,66 @@ struct ProjectedShadowPoint {
     float y;
 };
 
+// The projected silhouette only depends on the model, its animation frame and
+// its heading: moving the unit just translates the hull. Rebuilding it (sort +
+// convex hull over every vertex) for every unit every frame was the single
+// most expensive thing in the frame, so the hull is cached in origin-relative
+// space and the heading is quantised to keep the cache bounded.
+constexpr size_t kProjectedShadowHeadingBuckets = 64;
+constexpr size_t kProjectedShadowCacheLimit = 8192;
+
+std::unordered_map<uint64_t, std::vector<ProjectedShadowPoint> >
+        g_projected_shadow_hulls;
+
+void MixProjectedShadowKey(uint64_t* key, uint64_t value) {
+    *key ^= value + 0x9e3779b97f4a7c15ull + (*key << 6) + (*key >> 2);
+}
+
 float ProjectedShadowCross(
         const ProjectedShadowPoint& origin,
         const ProjectedShadowPoint& left,
         const ProjectedShadowPoint& right) {
     return (left.x - origin.x) * (right.y - origin.y) -
             (left.y - origin.y) * (right.x - origin.x);
+}
+
+void AppendProjectedShadowHull(
+        WorldObjectMesh* mesh,
+        const std::vector<ProjectedShadowPoint>& hull,
+        float x,
+        float y,
+        float z) {
+    if (hull.size() < 3) {
+        return;
+    }
+    const uint32_t vertex_base =
+            static_cast<uint32_t>(mesh->vertices.size());
+    constexpr uint32_t kShadowArgb = 0x5811170du;
+    const uint32_t shadow_abgr = ArgbToAbgr(kShadowArgb);
+    for (const ProjectedShadowPoint& point : hull) {
+        mesh->vertices.push_back(TerrainVertex{
+                x + point.x,
+                y + point.y,
+                z + 0.08f,
+                0.0f,
+                0.0f,
+                shadow_abgr});
+    }
+    WorldObjectMesh::Layer* shadow_layer =
+            FindOrAddWorldObjectLayer(
+                    mesh,
+                    kProjectedShadowLayer);
+    if (shadow_layer == nullptr) {
+        return;
+    }
+    shadow_layer->alpha_blended = true;
+    for (uint32_t index = 1;
+         index + 1 < static_cast<uint32_t>(hull.size());
+         ++index) {
+        shadow_layer->triangle_indices.push_back(vertex_base);
+        shadow_layer->triangle_indices.push_back(vertex_base + index);
+        shadow_layer->triangle_indices.push_back(vertex_base + index + 1);
+    }
 }
 
 void AppendProjectedGeometryShadow(
@@ -3769,6 +3843,46 @@ void AppendProjectedGeometryShadow(
     }
     constexpr float kShadowProjectionX = 0.42f;
     constexpr float kShadowProjectionY = -0.28f;
+    const float heading = std::atan2(sine, cosine);
+    const size_t heading_bucket = static_cast<size_t>(
+            ((static_cast<int>(std::lround(
+                      heading / (2.0f * kPi) *
+                      static_cast<float>(
+                              kProjectedShadowHeadingBuckets))) %
+              static_cast<int>(kProjectedShadowHeadingBuckets)) +
+             static_cast<int>(kProjectedShadowHeadingBuckets)) %
+            static_cast<int>(kProjectedShadowHeadingBuckets));
+    uint64_t cache_key = 0xcbf29ce484222325ull;
+    MixProjectedShadowKey(
+            &cache_key,
+            static_cast<uint64_t>(binding.geometry_record_id) + 1ull);
+    MixProjectedShadowKey(
+            &cache_key,
+            static_cast<uint64_t>(animation_variant));
+    MixProjectedShadowKey(&cache_key, heading_bucket);
+    MixProjectedShadowKey(
+            &cache_key,
+            static_cast<uint64_t>(
+                    std::lround(binding.geometry_scale * 4096.0f)));
+    for (const ConvertedGeometryPart& part : geometry.parts) {
+        MixProjectedShadowKey(
+                &cache_key,
+                ConvertedGeometryFrameIndex(
+                        part,
+                        animation_variant,
+                        animation_time_seconds));
+    }
+    const auto cached = g_projected_shadow_hulls.find(cache_key);
+    if (cached != g_projected_shadow_hulls.end()) {
+        AppendProjectedShadowHull(mesh, cached->second, x, y, z);
+        return;
+    }
+
+    const float bucket_angle =
+            static_cast<float>(heading_bucket) * 2.0f * kPi /
+            static_cast<float>(kProjectedShadowHeadingBuckets);
+    const float bucket_cosine = std::cos(bucket_angle);
+    const float bucket_sine = std::sin(bucket_angle);
     std::vector<ProjectedShadowPoint> points;
     for (const ConvertedGeometryPart& part : geometry.parts) {
         const std::vector<ConvertedGeometryVertex>* vertices =
@@ -3780,19 +3894,20 @@ void AppendProjectedGeometryShadow(
         for (const ConvertedGeometryVertex& vertex : *vertices) {
             const float local_x =
                     binding.geometry_scale *
-                    (cosine * vertex.x - sine * vertex.y);
+                    (bucket_cosine * vertex.x - bucket_sine * vertex.y);
             const float local_y =
                     binding.geometry_scale *
-                    (sine * vertex.x + cosine * vertex.y);
+                    (bucket_sine * vertex.x + bucket_cosine * vertex.y);
             const float local_height = std::max(
                     binding.geometry_scale * vertex.z,
                     0.0f);
             points.push_back({
-                    x + local_x + local_height * kShadowProjectionX,
-                    y + local_y + local_height * kShadowProjectionY});
+                    local_x + local_height * kShadowProjectionX,
+                    local_y + local_height * kShadowProjectionY});
         }
     }
     if (points.size() < 3) {
+        g_projected_shadow_hulls[cache_key];
         return;
     }
     std::sort(
@@ -3815,6 +3930,7 @@ void AppendProjectedGeometryShadow(
                     }),
             points.end());
     if (points.size() < 3) {
+        g_projected_shadow_hulls[cache_key];
         return;
     }
     std::vector<ProjectedShadowPoint> hull(points.size() * 2);
@@ -3842,40 +3958,23 @@ void AppendProjectedGeometryShadow(
         hull[hull_size++] = point;
     }
     if (hull_size <= 3) {
+        g_projected_shadow_hulls[cache_key];
         return;
     }
     --hull_size;
-    const uint32_t vertex_base =
-            static_cast<uint32_t>(mesh->vertices.size());
-    constexpr uint32_t kShadowArgb = 0x5811170du;
-    const uint32_t shadow_abgr = ArgbToAbgr(kShadowArgb);
-    for (size_t index = 0; index < hull_size; ++index) {
-        mesh->vertices.push_back(TerrainVertex{
-                hull[index].x,
-                hull[index].y,
-                z + 0.08f,
-                0.0f,
-                0.0f,
-                shadow_abgr});
+    // hull was sized for the worst case; store only the points it kept, or
+    // every cache entry drags the whole scratch allocation along with it.
+    std::vector<ProjectedShadowPoint> compact(
+            hull.begin(),
+            hull.begin() + static_cast<std::ptrdiff_t>(hull_size));
+    if (g_projected_shadow_hulls.size() >= kProjectedShadowCacheLimit) {
+        g_projected_shadow_hulls.clear();
     }
-    WorldObjectMesh::Layer* shadow_layer =
-            FindOrAddWorldObjectLayer(
-                    mesh,
-                    kProjectedShadowLayer);
-    if (shadow_layer == nullptr) {
-        return;
-    }
-    shadow_layer->alpha_blended = true;
-    shadow_layer->triangle_indices.reserve(
-            shadow_layer->triangle_indices.size() +
-            (hull_size - 2) * 3);
-    for (uint32_t index = 1;
-         index + 1 < static_cast<uint32_t>(hull_size);
-         ++index) {
-        shadow_layer->triangle_indices.push_back(vertex_base);
-        shadow_layer->triangle_indices.push_back(vertex_base + index);
-        shadow_layer->triangle_indices.push_back(vertex_base + index + 1);
-    }
+    const std::vector<ProjectedShadowPoint>& stored =
+            g_projected_shadow_hulls
+                    .emplace(cache_key, std::move(compact))
+                    .first->second;
+    AppendProjectedShadowHull(mesh, stored, x, y, z);
 }
 
 void AppendAlphaMaskedGeometryShadow(
@@ -3908,7 +4007,6 @@ void AppendAlphaMaskedGeometryShadow(
                         animation_time_seconds);
         const uint32_t vertex_base =
                 static_cast<uint32_t>(mesh->vertices.size());
-        mesh->vertices.reserve(mesh->vertices.size() + vertices->size());
         for (const ConvertedGeometryVertex& vertex : *vertices) {
             const float local_x =
                     binding.geometry_scale *
@@ -4149,11 +4247,6 @@ bool AppendConvertedGeometry(
                 animation_variant,
                 animation_time_seconds);
     }
-    size_t total_vertices = 0;
-    for (const ConvertedGeometryPart& part : geometry->parts) {
-        total_vertices += part.vertices.size();
-    }
-    mesh->vertices.reserve(mesh->vertices.size() + total_vertices);
     const bool has_textures = std::any_of(
             binding.texture_paths.begin(),
             binding.texture_paths.end(),
@@ -4463,12 +4556,6 @@ void AppendUnitIndicator(
     const float indicator_z = entity.z + 0.12f;
     const uint32_t base =
             static_cast<uint32_t>(mesh->vertices.size());
-    mesh->vertices.reserve(
-            mesh->vertices.size() +
-            static_cast<size_t>(kSegmentCount + 1) * 2);
-    mesh->triangle_indices.reserve(
-            mesh->triangle_indices.size() +
-            static_cast<size_t>(kSegmentCount) * 6);
     for (int segment = 0; segment <= kSegmentCount; ++segment) {
         const float angle =
                 static_cast<float>(segment) *
@@ -5494,6 +5581,211 @@ void ApplyStaticLayerTextureAnimation(WorldObjectMesh* mesh) {
     }
 }
 
+struct TickBudget {
+    std::chrono::steady_clock::time_point window_start;
+    uint64_t ticks = 0;
+    uint64_t legacy_micros = 0;
+    uint64_t mesh_micros = 0;
+    uint64_t water_micros = 0;
+    bool started = false;
+};
+
+TickBudget g_tick_budget;
+
+uint64_t ElapsedMicros(
+        std::chrono::steady_clock::time_point from,
+        std::chrono::steady_clock::time_point to) {
+    return static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(to - from)
+                    .count());
+}
+
+// One line every five seconds: enough to spot a regression, cheap enough to
+// leave switched on.
+void ReportTickBudgetLocked(std::chrono::steady_clock::time_point now) {
+    if (!g_tick_budget.started) {
+        g_tick_budget.started = true;
+        g_tick_budget.window_start = now;
+        return;
+    }
+    const uint64_t window_micros = ElapsedMicros(g_tick_budget.window_start, now);
+    if (window_micros < 5000000ull) {
+        return;
+    }
+    std::ostringstream report;
+    report << "tick_budget=" << g_tick_budget.ticks << " ticks/"
+           << (window_micros / 1000ull) << "ms"
+           << "; legacy_ms=" << (g_tick_budget.legacy_micros / 1000ull)
+           << "; mesh_ms=" << (g_tick_budget.mesh_micros / 1000ull)
+           << "; water_ms=" << (g_tick_budget.water_micros / 1000ull)
+           << "; static_verts=" << g_static_world_object_mesh.vertices.size()
+           << "; dynamic_verts=" << g_world_object_mesh.vertices.size()
+           << "; entities=" << g_dynamic_rendered_object_count
+           << "; culled=" << g_culled_entity_count
+           << "; shadow_cache=" << g_projected_shadow_hulls.size()
+;
+    PlatformRuntime::instance().log_info(report.str());
+    g_tick_budget = TickBudget();
+    g_tick_budget.started = true;
+    g_tick_budget.window_start = now;
+}
+
+// Moves the scrolling-texture layers out of the mission's static mesh into a
+// compact mesh of their own, so the bulk of the world can stay on the GPU
+// untouched while only the rivers are re-uploaded each frame.
+void SplitAnimatedStaticLayersLocked() {
+    g_animated_static_world_object_mesh = WorldObjectMesh();
+    WorldObjectMesh& source = g_static_world_object_mesh;
+    WorldObjectMesh& animated = g_animated_static_world_object_mesh;
+    std::vector<WorldObjectMesh::Layer> kept;
+    kept.reserve(source.layers.size());
+    std::vector<uint32_t> remap(source.vertices.size(), UINT32_MAX);
+    for (WorldObjectMesh::Layer& layer : source.layers) {
+        if (layer.texture_v_scroll_speed == 0.0f) {
+            kept.push_back(std::move(layer));
+            continue;
+        }
+        WorldObjectMesh::Layer moved;
+        moved.texture_path = layer.texture_path;
+        moved.texture_handle = layer.texture_handle;
+        moved.alpha_blended = layer.alpha_blended;
+        moved.additive_blended = layer.additive_blended;
+        moved.alpha_tested = layer.alpha_tested;
+        moved.alpha_masked_shadow = layer.alpha_masked_shadow;
+        moved.depth_test_always = layer.depth_test_always;
+        moved.texture_v_scroll_speed = layer.texture_v_scroll_speed;
+        moved.triangle_indices.reserve(layer.triangle_indices.size());
+        for (uint32_t vertex_index : layer.triangle_indices) {
+            if (vertex_index >= source.vertices.size()) {
+                continue;
+            }
+            uint32_t& mapped = remap[vertex_index];
+            if (mapped == UINT32_MAX) {
+                mapped = static_cast<uint32_t>(animated.vertices.size());
+                animated.vertices.push_back(source.vertices[vertex_index]);
+            }
+            moved.triangle_indices.push_back(mapped);
+        }
+        animated.layers.push_back(std::move(moved));
+    }
+    source.layers = std::move(kept);
+}
+
+bool UploadStaticWorldObjectMeshLocked() {
+    RefreshWorldObjectTextureHandles(&g_static_world_object_mesh);
+    if (g_static_world_object_mesh.vertices.empty()) {
+        return true;
+    }
+    return RenderBackend().set_static_world_object_mesh(
+            g_static_world_object_mesh);
+}
+
+float CameraDegreesToRadians(float degrees);
+
+struct VisibleWorldBounds {
+    float min_x = -1.0e9f;
+    float min_y = -1.0e9f;
+    float max_x = 1.0e9f;
+    float max_y = 1.0e9f;
+    bool valid = false;
+};
+
+// The camera basis mirrors ScreenToTerrainIntersectionLocked so the culled
+// rectangle matches what the renderer actually draws.
+VisibleWorldBounds ComputeVisibleWorldBoundsLocked() {
+    VisibleWorldBounds bounds;
+    const uint32_t viewport_width = RenderBackend().width();
+    const uint32_t viewport_height = RenderBackend().content_height();
+    if (viewport_width == 0 || viewport_height == 0) {
+        return bounds;
+    }
+    struct Vec3 {
+        float x;
+        float y;
+        float z;
+    };
+    const auto normalize = [](Vec3 value) {
+        const float length = std::sqrt(
+                value.x * value.x +
+                value.y * value.y +
+                value.z * value.z);
+        if (length > 0.0001f) {
+            value.x /= length;
+            value.y /= length;
+            value.z /= length;
+        }
+        return value;
+    };
+    const auto cross = [](const Vec3& left, const Vec3& right) {
+        return Vec3{
+                left.y * right.z - left.z * right.y,
+                left.z * right.x - left.x * right.z,
+                left.x * right.y - left.y * right.x};
+    };
+    const float horizontal_distance =
+            g_camera.distance * std::cos(g_camera.pitch_radians);
+    const Vec3 eye = {
+            g_camera.target_x +
+                    std::sin(g_camera.yaw_radians) * horizontal_distance,
+            g_camera.target_y -
+                    std::cos(g_camera.yaw_radians) * horizontal_distance,
+            g_camera.target_z +
+                    std::sin(g_camera.pitch_radians) * g_camera.distance};
+    const Vec3 forward = normalize(Vec3{
+            g_camera.target_x - eye.x,
+            g_camera.target_y - eye.y,
+            g_camera.target_z - eye.z});
+    const Vec3 world_up = {0.0f, 0.0f, 1.0f};
+    const Vec3 right = normalize(cross(world_up, forward));
+    const Vec3 camera_up = normalize(cross(forward, right));
+    const float aspect =
+            static_cast<float>(viewport_width) /
+            static_cast<float>(viewport_height);
+    const float tangent =
+            std::tan(
+                    CameraDegreesToRadians(
+                            g_camera.horizontal_fov_degrees * 0.5f)) /
+            aspect;
+    // Objects taller than the ground plane show up before their footprint
+    // does, and their projected shadow reaches further still.
+    const float margin = 48.0f;
+    const float far_limit = g_camera.distance * 6.0f;
+    float min_x = 1.0e9f;
+    float min_y = 1.0e9f;
+    float max_x = -1.0e9f;
+    float max_y = -1.0e9f;
+    const float corners[4][2] = {
+            {-1.0f, -1.0f}, {1.0f, -1.0f}, {-1.0f, 1.0f}, {1.0f, 1.0f}};
+    for (const float(&corner)[2] : corners) {
+        const Vec3 ray = normalize(Vec3{
+                forward.x + right.x * corner[0] * tangent * aspect +
+                        camera_up.x * corner[1] * tangent,
+                forward.y + right.y * corner[0] * tangent * aspect +
+                        camera_up.y * corner[1] * tangent,
+                forward.z + right.z * corner[0] * tangent * aspect +
+                        camera_up.z * corner[1] * tangent});
+        float distance = far_limit;
+        if (ray.z < -0.0001f) {
+            const float ground = (g_camera.target_z - eye.z) / ray.z;
+            if (ground > 0.0f) {
+                distance = std::min(ground, far_limit);
+            }
+        }
+        const float point_x = eye.x + ray.x * distance;
+        const float point_y = eye.y + ray.y * distance;
+        min_x = std::min(min_x, point_x);
+        min_y = std::min(min_y, point_y);
+        max_x = std::max(max_x, point_x);
+        max_y = std::max(max_y, point_y);
+    }
+    bounds.min_x = min_x - margin;
+    bounds.min_y = min_y - margin;
+    bounds.max_x = max_x + margin;
+    bounds.max_y = max_y + margin;
+    bounds.valid = true;
+    return bounds;
+}
+
 bool RefreshDynamicWorldMeshLocked(bool force) {
     const Bk2PresentationSnapshotInfo info =
             bk2_presentation_snapshot_info();
@@ -5528,7 +5820,7 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         }
     }
 
-    WorldObjectMesh combined = g_static_world_object_mesh;
+    WorldObjectMesh combined = g_animated_static_world_object_mesh;
     ApplyStaticLayerTextureAnimation(&combined);
     combined.vertices.reserve(
             combined.vertices.size() + entities.size() * 24);
@@ -5536,6 +5828,9 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
             combined.triangle_indices.size() + entities.size() * 108);
     g_dynamic_rendered_object_count = 0;
     g_active_unit_indicator_count = 0;
+    const VisibleWorldBounds visible_bounds =
+            ComputeVisibleWorldBoundsLocked();
+    g_culled_entity_count = 0;
     std::unordered_set<int32_t> visible_corpse_ids;
     for (const Bk2PresentationEntity& entity : entities) {
         const bool dead =
@@ -5554,6 +5849,17 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
                             .first;
             animation_time_seconds =
                     g_animation_elapsed_seconds - start->second;
+        }
+        // Nothing outside the camera rectangle reaches the screen, and
+        // rebuilding its geometry every frame is what used to eat the frame
+        // budget on a full map.
+        if (visible_bounds.valid &&
+            (entity.x < visible_bounds.min_x ||
+             entity.x > visible_bounds.max_x ||
+             entity.y < visible_bounds.min_y ||
+             entity.y > visible_bounds.max_y)) {
+            ++g_culled_entity_count;
+            continue;
         }
         const bool selected =
                 (entity.flags & BK2_PRESENTATION_ENTITY_SELECTED) != 0;
@@ -5667,9 +5973,6 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
 
         const uint32_t vertex_base =
                 static_cast<uint32_t>(combined.vertices.size());
-        combined.vertices.reserve(
-                combined.vertices.size() +
-                fog_x.size() * fog_y.size());
         for (int y : fog_y) {
             for (int x : fog_x) {
                 const uint8_t visibility =
@@ -6052,6 +6355,84 @@ bool ProjectEntityToScreenLocked(
     *screen_x = (ndc_x + 1.0f) * 0.5f * viewport_width;
     *screen_y = (1.0f - ndc_y) * 0.5f * viewport_height;
     return true;
+}
+
+size_t CountOwnUnitsLocked(int player) {
+    const Bk2PresentationSnapshotInfo snapshot =
+            bk2_presentation_snapshot_info();
+    std::vector<Bk2PresentationEntity> entities(snapshot.entity_count);
+    if (!entities.empty() &&
+        bk2_presentation_copy_entities(
+                entities.data(),
+                entities.size()) != entities.size()) {
+        return 0;
+    }
+    size_t count = 0;
+    for (const Bk2PresentationEntity& entity : entities) {
+        if (entity.player == player &&
+            (entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) != 0) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+float NearestOwnUnitScreenDistanceLocked(
+        float screen_x,
+        float screen_y,
+        uint32_t viewport_width,
+        uint32_t viewport_height,
+        int player,
+        float* nearest_screen_x = nullptr,
+        float* nearest_screen_y = nullptr) {
+    ScreenProjectionBasis basis;
+    if (!BuildScreenProjectionBasisLocked(
+                viewport_width,
+                viewport_height,
+                &basis)) {
+        return -1.0f;
+    }
+    const Bk2PresentationSnapshotInfo snapshot =
+            bk2_presentation_snapshot_info();
+    std::vector<Bk2PresentationEntity> entities(snapshot.entity_count);
+    if (!entities.empty() &&
+        bk2_presentation_copy_entities(
+                entities.data(),
+                entities.size()) != entities.size()) {
+        return -1.0f;
+    }
+    float best = -1.0f;
+    for (const Bk2PresentationEntity& entity : entities) {
+        if (entity.player != player ||
+            (entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) == 0) {
+            continue;
+        }
+        float projected_x = 0.0f;
+        float projected_y = 0.0f;
+        if (!ProjectEntityToScreenLocked(
+                    entity,
+                    basis,
+                    viewport_width,
+                    viewport_height,
+                    &projected_x,
+                    &projected_y)) {
+            continue;
+        }
+        const float delta_x = projected_x - screen_x;
+        const float delta_y = projected_y - screen_y;
+        const float distance = std::sqrt(
+                delta_x * delta_x + delta_y * delta_y);
+        if (best < 0.0f || distance < best) {
+            best = distance;
+            if (nearest_screen_x != nullptr) {
+                *nearest_screen_x = projected_x;
+            }
+            if (nearest_screen_y != nullptr) {
+                *nearest_screen_y = projected_y;
+            }
+        }
+    }
+    return best;
 }
 
 int FindEntityNearScreenLocked(
@@ -6564,6 +6945,9 @@ bool RefreshRenderResourcesLocked() {
     } else {
         RenderBackend().clear_water_mesh();
     }
+    if (!UploadStaticWorldObjectMeshLocked()) {
+        return false;
+    }
     RefreshWorldObjectTextureHandles(&g_world_object_mesh);
     if (!g_world_object_mesh.vertices.empty() &&
         !RenderBackend().set_world_object_mesh(g_world_object_mesh)) {
@@ -6637,11 +7021,12 @@ bool InitializeSinglePlayerRuntime() {
     g_terrain_mesh = std::move(mesh);
     g_water_mesh = std::move(water_mesh);
     g_static_world_object_mesh = std::move(presentation_world_mesh);
-    g_world_object_mesh = g_static_world_object_mesh;
+    g_world_object_mesh = WorldObjectMesh();
     PublishPresentationMeshes(
             mission.state.mission_id,
             g_terrain_mesh,
             g_static_world_object_mesh);
+    SplitAnimatedStaticLayersLocked();
     if (!InitializeLegacyGameRuntime(
                 map,
                 terrain_info,
@@ -6699,7 +7084,9 @@ void TickSinglePlayerRuntime(uint32_t elapsed_millis) {
     if (!g_ready || g_user_paused) {
         return;
     }
+    const auto tick_started = std::chrono::steady_clock::now();
     TickLegacyGameRuntime(elapsed_millis);
+    const auto legacy_done = std::chrono::steady_clock::now();
     g_animation_elapsed_seconds +=
             static_cast<float>(elapsed_millis) * 0.001f;
     if (g_animation_elapsed_seconds > 3600.0f) {
@@ -6709,9 +7096,16 @@ void TickSinglePlayerRuntime(uint32_t elapsed_millis) {
     if (!RefreshDynamicWorldMeshLocked(false)) {
         g_last_error = "dynamic_world_render_refresh_failed";
     }
+    const auto mesh_done = std::chrono::steady_clock::now();
     if (!UpdateWaterAnimationLocked(false)) {
         g_last_error = "water_render_refresh_failed";
     }
+    const auto tick_done = std::chrono::steady_clock::now();
+    ++g_tick_budget.ticks;
+    g_tick_budget.legacy_micros += ElapsedMicros(tick_started, legacy_done);
+    g_tick_budget.mesh_micros += ElapsedMicros(legacy_done, mesh_done);
+    g_tick_budget.water_micros += ElapsedMicros(mesh_done, tick_done);
+    ReportTickBudgetLocked(tick_done);
 }
 
 void ShutdownSinglePlayerRuntime() {
@@ -6729,6 +7123,7 @@ void ShutdownSinglePlayerRuntime() {
     g_water_mesh = WaterMesh();
     g_water_base_vertices.clear();
     g_static_world_object_mesh = WorldObjectMesh();
+    g_animated_static_world_object_mesh = WorldObjectMesh();
     g_world_object_mesh = WorldObjectMesh();
     bk2::presentation::Reset();
     g_ready = false;
@@ -6821,6 +7216,7 @@ void ShutdownSinglePlayerRuntime() {
     g_lying_attack_converted_geometries.clear();
     g_missing_lying_attack_converted_geometries.clear();
     g_death_animation_start_seconds.clear();
+    g_projected_shadow_hulls.clear();
     g_stats_geometry_index.clear();
     g_stats_geometry_variants.clear();
     g_stats_geometry_index_loaded = false;
@@ -7378,7 +7774,27 @@ bool HandleSinglePlayerTap(
         return RefreshDynamicWorldMeshLocked(true);
     }
     if (!MoveSelectedLegacyUnit(world_x, world_y)) {
-        PlatformRuntime::instance().log_info("player_tap=no_action");
+        // A tap that neither selects nor orders means the player has no unit
+        // under the finger and none selected. Report what was actually within
+        // reach so touch tuning has something to work from.
+        float nearest_screen_x = -1.0f;
+        float nearest_screen_y = -1.0f;
+        const float nearest_pixels = NearestOwnUnitScreenDistanceLocked(
+                screen_x,
+                screen_y,
+                viewport_width,
+                viewport_height,
+                0,
+                &nearest_screen_x,
+                &nearest_screen_y);
+        std::ostringstream report;
+        report << "player_tap=no_action"
+               << "; selected=" << SelectedLegacyUnitId()
+               << "; own_units=" << CountOwnUnitsLocked(0)
+               << "; nearest_own_pixels=" << nearest_pixels
+               << "; nearest_own_screen=" << nearest_screen_x
+               << "," << nearest_screen_y;
+        PlatformRuntime::instance().log_info(report.str());
         return false;
     }
     PlatformRuntime::instance().log_info("player_tap=move");

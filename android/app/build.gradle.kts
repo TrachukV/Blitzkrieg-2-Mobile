@@ -95,11 +95,17 @@ android {
 
         externalNativeBuild {
             cmake {
+                // The debug variant is what gets played during the port, and
+                // the engine is far too heavy to run unoptimised: without
+                // this the CMake debug build compiles at -O0 and the mission
+                // renderer spends the whole frame budget in vector loops.
+                cFlags += listOf("-O2")
                 cppFlags += listOf(
                     "-std=c++20",
                     "-fno-exceptions",
                     "-fms-extensions",
-                    "-fdelayed-template-parsing"
+                    "-fdelayed-template-parsing",
+                    "-O2"
                 )
                 arguments += listOf(
                     "-DANDROID_STL=c++_shared",

@@ -2032,6 +2032,43 @@ const std::string& LegacyMechTurretBone(uint64_t stats_path_hash) {
     return found == g_turret_bones.end() ? kNone : found->second;
 }
 
+// A unit that dies while selected used to stay selected forever, and every
+// order the player then gave was silently dropped by the group builder.
+void PruneDeadSelectedLegacyUnits() {
+    if (g_selected_unit_ids.empty()) {
+        return;
+    }
+    std::vector<int> alive;
+    alive.reserve(g_selected_unit_ids.size());
+    for (int unit_id : g_selected_unit_ids) {
+        CAIUnit* unit = CAIUnit::GetUnitByUniqueID(unit_id);
+        if (unit != nullptr && unit->IsAlive() && unit->IsSelectable()) {
+            alive.push_back(unit_id);
+        }
+    }
+    if (alive.size() == g_selected_unit_ids.size()) {
+        return;
+    }
+    g_selected_unit_ids = std::move(alive);
+    if (g_selected_unit_ids.empty()) {
+        g_selected_unit_id = -1;
+        g_attack_target_unit_id = -1;
+        if (g_android_command_group_registered) {
+            theGroupLogic.UnregisterGroup(g_android_command_group);
+            g_android_command_group_registered = false;
+        }
+        PlatformRuntime::instance().log_info(
+                "player_selection=cleared; reason=units_dead");
+        return;
+    }
+    if (std::find(
+                g_selected_unit_ids.begin(),
+                g_selected_unit_ids.end(),
+                g_selected_unit_id) == g_selected_unit_ids.end()) {
+        g_selected_unit_id = g_selected_unit_ids.front();
+    }
+}
+
 void TickLegacyGameRuntime(uint32_t elapsed_millis) {
     if (!g_ready || g_ai_logic == nullptr || !g_game_timer) {
         return;
@@ -2057,6 +2094,7 @@ void TickLegacyGameRuntime(uint32_t elapsed_millis) {
         return;
     }
     if (advanced) {
+        PruneDeadSelectedLegacyUnits();
         CountAIUnits();
         PublishPresentationEntities();
     }
