@@ -1175,19 +1175,27 @@ void CollectWindow(
     }
 
     // CWindow draws its own background, then its foreground, then children.
+    // A button's state presentation goes on top of that background rather
+    // than instead of it: the shared background is the plate, the state
+    // carries the label, and replacing one with the other loses whichever
+    // the button kept its caption in.
     if (visible && shared != nullptr) {
-        const NDb::SBackground* background = shared->pBackground.GetPtr();
+        AppendBackgroundQuads(
+                shared->pBackground.GetPtr(), x, y, width, height);
         if (window->GetTypeID() == NDb::SWindowMSButton::typeID) {
             const NDb::SWindowMSButtonShared* button_shared =
                     dynamic_cast<const NDb::SWindowMSButtonShared*>(shared);
             if (button_shared != nullptr &&
-                !button_shared->visualStates.empty() &&
-                button_shared->visualStates[0].normal.pBackground) {
-                background = button_shared->visualStates[0]
-                                     .normal.pBackground.GetPtr();
+                !button_shared->visualStates.empty()) {
+                AppendBackgroundQuads(
+                        button_shared->visualStates[0]
+                                .normal.pBackground.GetPtr(),
+                        x,
+                        y,
+                        width,
+                        height);
             }
         }
-        AppendBackgroundQuads(background, x, y, width, height);
         AppendTextQuads(
                 node.caption, node.text_format, x, y, width, height);
     }
@@ -1200,6 +1208,8 @@ void CollectWindow(
             // Build the pushed presentation once so a press can swap to it
             // without re-walking the descriptor graph.
             const size_t normal_end = g_quads.size();
+            AppendBackgroundQuads(
+                    shared->pBackground.GetPtr(), x, y, width, height);
             AppendBackgroundQuads(
                     button_shared->visualStates[0].pushed.pBackground.GetPtr(),
                     x,
