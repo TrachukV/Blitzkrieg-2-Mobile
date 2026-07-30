@@ -44,6 +44,11 @@ MISSING_MODEL_FALLBACKS = {
     ): (
         "buildings/common/concretedot/summer_whole_model.xdb"
     ),
+    (
+        "objects/flora/bigpine/1_1_model.xdb"
+    ): (
+        "objects/flora/bigpine/summer_bigpine_model.xdb"
+    ),
 }
 
 UNSUPPORTED_MODEL_FALLBACKS = {

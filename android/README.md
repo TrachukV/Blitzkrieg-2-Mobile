@@ -1119,10 +1119,15 @@ uses the end model and all other frames use the center model. The open content
 tree omits each bridge's `center_visobj.xdb`, so the offline index recovers its
 shipped seasonal `summer_center_model.xdb` directly. This restores all four
 asphalt bridge spans on GB3.1 and reduces its remaining diagnostic fallbacks
-from 33 to 29. Unmapped formations and objects remain green/red proxies. The
-camera keeps the player formation as its startup anchor but now loads the
-desktop mission values from `ClientGameConsts`: 26-degree horizontal FOV,
-45-degree default pitch and yaw, and 150/170/200
+from 33 to 29. Those last 29 instances all use the BigPine legacy
+`1_1_Model.xdb`, whose geometry resource `1000129` is absent from the open
+content tree. The index now resolves the equivalent shipped seasonal model
+`summer_bigpine_model.xdb` and geometry `1674`, including its alpha-tested
+summer texture. GB3.1 consequently starts with zero static or dynamic geometry
+fallbacks. Unmapped formations and objects on other content remain green/red
+proxies. The camera keeps the player formation as its startup anchor but now
+loads the desktop mission values from `ClientGameConsts`: 26-degree horizontal
+FOV, 45-degree default pitch and yaw, and 150/170/200
 minimum/average/maximum distance. Pan anchors are clamped to the same terrain
 rectangle as `CWorldClient::LoadMap`, and pinch zoom is clamped to the loaded
 distance range. The HUD campaign and mission title comes from the mission ID
