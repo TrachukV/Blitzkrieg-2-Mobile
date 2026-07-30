@@ -4068,7 +4068,8 @@ bool AppendConvertedGeometry(
         bool cast_alpha_masked_shadow,
         int frame_index,
         const std::string& turret_bone = std::string(),
-        float turret_yaw = 0.0f) {
+        float turret_yaw = 0.0f,
+        bool turret_aim_valid = false) {
     if (mesh == nullptr) {
         return false;
     }
@@ -4183,14 +4184,29 @@ bool AppendConvertedGeometry(
                 break;
             }
         }
-        const bool pose_turret =
+        // Without a real aim from the AI the angles mean nothing, and posing
+        // by them would counter-rotate the platform by the hull heading.
+        bool pose_turret =
+                turret_aim_valid &&
                 !turret_bone.empty() &&
                 part.vertex_bones.size() == vertices->size() &&
                 turret_bone_index < part.bones.size() &&
                 part.bones[turret_bone_index].parent >= 0;
-        const std::vector<bool> turret_subtree = pose_turret
+        std::vector<bool> turret_subtree = pose_turret
                 ? ConvertedGeometryBoneSubtree(part, turret_bone)
                 : std::vector<bool>();
+        // A platform that covers nearly the whole skeleton is the hull, not a
+        // turret: those units aim by turning the vehicle, which the hull
+        // heading already does. Posing them would swing the whole body.
+        size_t subtree_size = 0;
+        for (const bool member : turret_subtree) {
+            subtree_size += member ? 1 : 0;
+        }
+        if (!part.bones.empty() &&
+            subtree_size * 5 > part.bones.size() * 4) {
+            pose_turret = false;
+            turret_subtree.clear();
+        }
         // The AI reports an absolute aim direction while the vertices are
         // still in model space, so the hull heading is taken back out.
         const float turret_local = turret_yaw - heading;
@@ -4531,8 +4547,9 @@ void AppendEntityModel(
                 true,
                 false,
                 -1,
-                LegacyMechTurretBone(entity.rpg_stats_record_id),
-                entity.turret_yaw_radians)) {
+                LegacyMechTurretBone(entity.rpg_stats_path_hash),
+                entity.turret_yaw_radians,
+                entity.turret_aim_valid != 0u)) {
         return;
     }
     ++g_converted_geometry_fallback_count;

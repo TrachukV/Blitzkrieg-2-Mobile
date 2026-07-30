@@ -52,6 +52,9 @@ typedef struct Bk2PresentationEntity {
        relative to the hull. Zero when the unit has no rotating platform. */
     float turret_yaw_radians;
     float turret_pitch_radians;
+    /* Non-zero once the AI has actually aimed this unit's platform. Without
+       it the angles are meaningless and the platform must not be posed. */
+    uint32_t turret_aim_valid;
 } Bk2PresentationEntity;
 
 typedef struct Bk2PresentationSnapshotInfo {

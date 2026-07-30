@@ -102,7 +102,7 @@ bool InitializeLegacyGameRuntime(
         std::string* error);
 void TickLegacyGameRuntime(uint32_t elapsed_millis);
 // Rotating platform bone of a mechanized unit's stats, empty when it has none.
-const std::string& LegacyMechTurretBone(int stats_record_id);
+const std::string& LegacyMechTurretBone(uint64_t stats_path_hash);
 int SelectLegacyUnitNear(
         float world_x,
         float world_y,

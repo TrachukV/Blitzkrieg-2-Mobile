@@ -691,11 +691,26 @@ vertices whose dominant bone is that bone or one of its descendants, around
 the bone's bind-pose pivot, before the hull heading is applied. The AI angle is
 absolute, so the hull heading is taken back out first.
 
-Posing is deliberately skipped when the named bone is the skeleton root. Many
-hulls name their root as the rotate point, and turning the root would spin the
-whole vehicle on top of the heading it already carries. On the ARM64 emulator
-US1.0 renders its vehicles intact with the bone-carrying cache and nothing is
-rotated that should not be.
+Posing is gated three ways, each of which the first runs got wrong:
+
+- Only when the AI has actually aimed the platform. Without that the published
+  angles are zero and subtracting the heading would counter-rotate the model.
+- Never when the named bone is the skeleton root. Many hulls name their root as
+  the rotate point, and turning it spins the whole vehicle on top of the
+  heading it already carries; the first run reported a 17-of-17 subtree.
+- Never when the subtree covers most of the skeleton. A platform that wide is
+  the hull, not a turret: those units aim by turning the vehicle, which the
+  hull heading already does.
+
+The bone table is keyed by the stats path hash rather than the record id,
+which is `-1` for these runtime stats and would collapse every unit onto one
+entry.
+
+On the ARM64 emulator US1.0 renders its vehicles intact with the bone-carrying
+cache, the AI's turret updates arrive with real angles, and nothing is rotated
+that should not be. A unit whose platform is a genuine turret bone such as
+`Turret01` has not been observed aiming yet, so visible turret rotation is
+still unconfirmed.
 
 Unit movement is the legacy simulation's, not the shell's. The port used to
 advance a single selected unit itself: after issuing the order it drove the
