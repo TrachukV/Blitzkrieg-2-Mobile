@@ -1096,13 +1096,16 @@ whose unlock and reinforcement requirements are satisfied instead of
 incorrectly launching the locked final mission at index zero. The raw 75-map
 list is hidden behind an explicit debug browser for port testing.
 
-Selected units now get a yellow ground ring and the current attack target gets
-an orange ring, so touch feedback remains visible on converted original models
-whose DDS materials intentionally ignore the old proxy tint. The central HUD
-also shows the selected unit's live current/maximum HP from the legacy RPG
-stats. Presentation API v3 carries both values for external renderers. Moving
-units follow the real terrain height. Converted original meshes use their
-resolved original DDS material. The geometry index also resolves frame-specific
+Selected units now get a thin translucent green ground ring and the current
+attack target gets a red ring. As in `CScene::MakeSelection`, the radius comes
+from half the converted model's XY diagonal multiplied by the RPG
+`SelectionScale`; ring vertices follow the terrain at the desktop
+`DEF_SELECTION_HEIGHT` offset. Selection no longer paints or enlarges the unit
+model itself. The central HUD also shows the selected unit's live
+current/maximum HP from the legacy RPG stats. Presentation API v3 carries both
+values for external renderers. Moving units follow the real terrain height.
+Converted original meshes use their resolved original DDS material. The
+geometry index also resolves frame-specific
 `segments/Item/VisObj` bindings used by composite map objects such as
 entrenchments. If a referenced visual Granny stream is absent but its original
 AI geometry is available, the converter uses the legacy `AI_TO_VIS` scale from

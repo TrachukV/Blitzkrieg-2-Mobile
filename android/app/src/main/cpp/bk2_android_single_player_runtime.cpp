@@ -83,6 +83,8 @@ constexpr const char* kEffectLightTexture =
         "Scene/TexAndMats/All/Effects/LightFX/Flare_Texture.dds";
 constexpr const char* kProjectedShadowLayer =
         "__android_projected_shadow__";
+constexpr const char* kUnitIndicatorLayer =
+        "__android_unit_indicator__";
 // Health bars read as interface, not as scene geometry: the original draws
 // them in screen space, so here they go in a layer that ignores depth and
 // cannot be hidden behind the unit in front.
@@ -314,6 +316,10 @@ struct ConvertedGeometryPart {
 
 struct ConvertedGeometry {
     std::vector<ConvertedGeometryPart> parts;
+    float min_x = std::numeric_limits<float>::infinity();
+    float max_x = -std::numeric_limits<float>::infinity();
+    float min_y = std::numeric_limits<float>::infinity();
+    float max_y = -std::numeric_limits<float>::infinity();
     // Tallest vertex in model space, measured once at load. At the shipped
     // camera a lift of h world units moves a point h*cos(pitch) worth of
     // pixels up the screen, so a constant offset that clears a tank carries
@@ -1888,6 +1894,10 @@ const ConvertedGeometry* LoadConvertedGeometry(
             continue;
         }
         for (const ConvertedGeometryVertex& vertex : part.vertices) {
+            geometry.min_x = std::min(geometry.min_x, vertex.x);
+            geometry.max_x = std::max(geometry.max_x, vertex.x);
+            geometry.min_y = std::min(geometry.min_y, vertex.y);
+            geometry.max_y = std::max(geometry.max_y, vertex.y);
             geometry.max_z = std::max(geometry.max_z, vertex.z);
         }
     }
@@ -4923,24 +4933,33 @@ void AppendUnitHealthBar(
 void AppendUnitIndicator(
         WorldObjectMesh* mesh,
         const Bk2PresentationEntity& entity,
+        float model_footprint_radius,
         uint32_t abgr) {
     if (mesh == nullptr) {
         return;
     }
-    constexpr int kSegmentCount = 32;
+    constexpr int kSegmentCount = 48;
     const float selection_scale =
             std::isfinite(entity.visual_scale)
             ? std::clamp(entity.visual_scale, 0.6f, 2.5f)
             : 1.0f;
-    const float base_radius =
-            (entity.flags & BK2_PRESENTATION_ENTITY_MECHANIZED) != 0
-            ? 3.0f
-            : (entity.flags & BK2_PRESENTATION_ENTITY_FORMATION) != 0
-                    ? 2.5f
-                    : 1.25f;
+    // SceneB2 sizes the selection square from half the model's XY diagonal,
+    // then applies the RPG SelectionScale. Keep a conservative fallback for
+    // the few entities whose converted geometry is not present yet.
+    const float base_radius = model_footprint_radius > 0.1f
+            ? model_footprint_radius
+            : (entity.flags & BK2_PRESENTATION_ENTITY_MECHANIZED) != 0
+                    ? 2.4f
+                    : (entity.flags & BK2_PRESENTATION_ENTITY_FORMATION) != 0
+                            ? 1.8f
+                            : 0.7f;
     const float outer_radius = base_radius * selection_scale;
-    const float inner_radius = outer_radius * 0.78f;
-    const float indicator_z = entity.z + 0.12f;
+    // The original is a transparent texture over a terrain-conforming patch.
+    // A narrow translucent strip reproduces its outline without the opaque
+    // mobile-only yellow tyre that used to cover the road around a tank.
+    const float strip_width =
+            std::clamp(outer_radius * 0.055f, 0.08f, 0.18f);
+    const float inner_radius = outer_radius - strip_width;
     const uint32_t base =
             static_cast<uint32_t>(mesh->vertices.size());
     for (int segment = 0; segment <= kSegmentCount; ++segment) {
@@ -4950,32 +4969,42 @@ void AppendUnitIndicator(
                 static_cast<float>(kSegmentCount);
         const float cosine = std::cos(angle);
         const float sine = std::sin(angle);
+        const float outer_x = entity.x + cosine * outer_radius;
+        const float outer_y = entity.y + sine * outer_radius;
+        const float inner_x = entity.x + cosine * inner_radius;
+        const float inner_y = entity.y + sine * inner_radius;
         mesh->vertices.push_back(TerrainVertex{
-                entity.x + cosine * outer_radius,
-                entity.y + sine * outer_radius,
-                indicator_z,
+                outer_x,
+                outer_y,
+                TerrainMeshHeightAtLocked(outer_x, outer_y) + 0.25f,
                 0.0f,
                 0.0f,
                 abgr});
         mesh->vertices.push_back(TerrainVertex{
-                entity.x + cosine * inner_radius,
-                entity.y + sine * inner_radius,
-                indicator_z,
+                inner_x,
+                inner_y,
+                TerrainMeshHeightAtLocked(inner_x, inner_y) + 0.25f,
                 0.0f,
                 0.0f,
                 abgr});
     }
+    WorldObjectMesh::Layer* layer =
+            FindOrAddWorldObjectLayer(mesh, kUnitIndicatorLayer);
+    if (layer == nullptr) {
+        return;
+    }
+    layer->alpha_blended = true;
     for (int segment = 0; segment < kSegmentCount; ++segment) {
         const uint32_t outer = base + static_cast<uint32_t>(segment * 2);
         const uint32_t inner = outer + 1;
         const uint32_t next_outer = outer + 2;
         const uint32_t next_inner = outer + 3;
-        mesh->triangle_indices.push_back(outer);
-        mesh->triangle_indices.push_back(next_outer);
-        mesh->triangle_indices.push_back(inner);
-        mesh->triangle_indices.push_back(inner);
-        mesh->triangle_indices.push_back(next_outer);
-        mesh->triangle_indices.push_back(next_inner);
+        layer->triangle_indices.push_back(outer);
+        layer->triangle_indices.push_back(next_outer);
+        layer->triangle_indices.push_back(inner);
+        layer->triangle_indices.push_back(inner);
+        layer->triangle_indices.push_back(next_outer);
+        layer->triangle_indices.push_back(next_inner);
     }
 }
 
@@ -4983,7 +5012,6 @@ void AppendEntityModel(
         WorldObjectMesh* mesh,
         const Bk2PresentationEntity& entity,
         uint32_t abgr,
-        bool selected,
         float animation_time_seconds) {
     ConvertedAnimationVariant animation_variant =
             ConvertedAnimationVariant::Base;
@@ -5037,7 +5065,9 @@ void AppendEntityModel(
     }
     ++g_converted_geometry_fallback_count;
     ++g_dynamic_fallback_stats_hashes[entity.rpg_stats_path_hash];
-    const float scale = selected ? 1.25f : 1.0f;
+    // Selection in the original is a separate terrain patch. It does not
+    // enlarge the unit if its real converted mesh is unavailable.
+    const float scale = 1.0f;
     if ((entity.flags & BK2_PRESENTATION_ENTITY_MECHANIZED) != 0) {
         AppendOrientedBox(
                 mesh,
@@ -6282,23 +6312,39 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
                 (entity.flags & BK2_PRESENTATION_ENTITY_SELECTED) != 0;
         const bool targeted =
                 (entity.flags & BK2_PRESENTATION_ENTITY_TARGETED) != 0;
+        const GeometryBinding& bar_binding = ResolveGeometryBinding(
+                entity.rpg_stats_path_hash,
+                entity.rpg_stats_record_id,
+                entity.geometry_record_id,
+                -1);
+        const ConvertedGeometry* bar_geometry = LoadConvertedGeometry(
+                bar_binding.geometry_record_id,
+                ConvertedAnimationVariant::Base);
+        float model_footprint_radius = 0.0f;
+        if (bar_geometry != nullptr &&
+            std::isfinite(bar_geometry->min_x) &&
+            std::isfinite(bar_geometry->max_x) &&
+            std::isfinite(bar_geometry->min_y) &&
+            std::isfinite(bar_geometry->max_y)) {
+            const float width =
+                    (bar_geometry->max_x - bar_geometry->min_x) *
+                    std::abs(bar_binding.geometry_scale);
+            const float depth =
+                    (bar_geometry->max_y - bar_geometry->min_y) *
+                    std::abs(bar_binding.geometry_scale);
+            model_footprint_radius =
+                    0.5f * std::hypot(width, depth);
+        }
         if (selected || targeted) {
             AppendUnitIndicator(
                     &combined,
                     entity,
-                    selected ? ArgbToAbgr(0xffffe066u)
-                             : ArgbToAbgr(0xffff6a36u));
+                    model_footprint_radius,
+                    selected ? ArgbToAbgr(0xc020e64au)
+                             : ArgbToAbgr(0xc8e1452du));
             ++g_active_unit_indicator_count;
         }
         if (!dead) {
-            const GeometryBinding& bar_binding = ResolveGeometryBinding(
-                    entity.rpg_stats_path_hash,
-                    entity.rpg_stats_record_id,
-                    entity.geometry_record_id,
-                    -1);
-            const ConvertedGeometry* bar_geometry = LoadConvertedGeometry(
-                    bar_binding.geometry_record_id,
-                    ConvertedAnimationVariant::Base);
             AppendUnitHealthBar(
                     &combined,
                     entity,
@@ -6310,10 +6356,7 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         AppendEntityModel(
                 &combined,
                 entity,
-                selected ? ArgbToAbgr(0xffffe066u)
-                         : targeted ? ArgbToAbgr(0xffff8a3du)
-                         : ObjectColor(entity.player, false),
-                selected || targeted,
+                ObjectColor(entity.player, false),
                 animation_time_seconds);
         ++g_dynamic_rendered_object_count;
     }
