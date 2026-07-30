@@ -117,13 +117,16 @@ def runtime_geometry_id(value: str) -> int | None:
     return 0x40000000 | (result & 0x3FFFFFFF)
 
 
-def geometry_resource_key(root: ET.Element) -> str | None:
+def geometry_resource_keys(root: ET.Element) -> list[str]:
+    result: list[str] = []
     record = root.attrib.get("ObjectRecordID", "").strip()
     if record.isdigit():
-        return record
+        result.append(record)
     uid = child(root, "uid")
     value = (uid.text or "").strip().upper() if uid is not None else ""
-    return value if RESOURCE_UUID_PATTERN.fullmatch(value) else None
+    if RESOURCE_UUID_PATTERN.fullmatch(value) and value not in result:
+        result.append(value)
+    return result
 
 
 def geometry_resource_path(data_root: Path, value: str) -> Path | None:
@@ -193,6 +196,26 @@ def geometry_resource_available(
         geometry_resource_supported(data_root, value)
         or value.upper() in PROCEDURAL_GEOMETRY_RESOURCES
     ) and converted_geometry_exists(converted_geometry_root, runtime_id)
+
+
+def available_geometry_id(
+    data_root: Path,
+    converted_geometry_root: Path | None,
+    values: list[str],
+) -> int | None:
+    for value in values:
+        runtime_id = runtime_geometry_id(value)
+        if (
+            runtime_id is not None
+            and geometry_resource_available(
+                data_root,
+                converted_geometry_root,
+                value,
+                runtime_id,
+            )
+        ):
+            return runtime_id
+    return None
 
 
 def validate_geometry_resource_ids(data_root: Path) -> None:
@@ -374,70 +397,49 @@ def geometry_info(
     geometry = parse_root(geometry_path)
     if geometry is None:
         return None
-    value = geometry_resource_key(geometry)
-    if value is None:
-        return None
-    geometry_record_id = runtime_geometry_id(value)
-    if geometry_record_id is None:
-        return None
-    geometry_scale = 1.0
-    if not geometry_resource_available(
+    values = geometry_resource_keys(geometry)
+    geometry_record_id = available_geometry_id(
         data_root,
         converted_geometry_root,
-        value,
-        geometry_record_id,
-    ):
-        fallback_value = UNSUPPORTED_GEOMETRY_FALLBACKS.get(value.upper())
-        fallback_runtime_id = (
-            runtime_geometry_id(fallback_value)
-            if fallback_value is not None
+        values,
+    )
+    geometry_scale = 1.0
+    if geometry_record_id is None:
+        fallback_values = [
+            UNSUPPORTED_GEOMETRY_FALLBACKS[value.upper()]
+            for value in values
+            if value.upper() in UNSUPPORTED_GEOMETRY_FALLBACKS
+        ]
+        geometry_record_id = available_geometry_id(
+            data_root,
+            converted_geometry_root,
+            fallback_values,
+        )
+    if geometry_record_id is None:
+        ai_geometry_path = href_child_path(
+            data_root,
+            geometry_path,
+            geometry,
+            "AIGeometry",
+        )
+        ai_geometry = (
+            parse_root(ai_geometry_path)
+            if ai_geometry_path is not None
             else None
         )
-        if (
-            fallback_value is not None
-            and fallback_runtime_id is not None
-            and geometry_resource_available(
+        geometry_record_id = (
+            available_geometry_id(
                 data_root,
                 converted_geometry_root,
-                fallback_value,
-                fallback_runtime_id,
+                geometry_resource_keys(ai_geometry),
             )
-        ):
-            geometry_record_id = fallback_runtime_id
-        else:
-            ai_geometry_path = href_child_path(
-                data_root,
-                geometry_path,
-                geometry,
-                "AIGeometry",
-            )
-            ai_geometry = (
-                parse_root(ai_geometry_path)
-                if ai_geometry_path is not None
-                else None
-            )
-            ai_record = (
-                geometry_resource_key(ai_geometry)
-                if ai_geometry is not None
-                else None
-            )
-            if (
-                ai_record is not None
-                and geometry_resource_supported(data_root, ai_record)
-            ):
-                geometry_record_id = runtime_geometry_id(ai_record)
-                if (
-                    geometry_record_id is None
-                    or not converted_geometry_exists(
-                        converted_geometry_root,
-                        geometry_record_id,
-                    )
-                ):
-                    return None
-                # Matches AI_TO_VIS from Stats_B2_M1/Vis2AI.h.
-                geometry_scale = 2.75 / 64.0
-            else:
-                return None
+            if ai_geometry is not None
+            else None
+        )
+        if geometry_record_id is None:
+            return None
+        # Matches AI_TO_VIS from Stats_B2_M1/Vis2AI.h.
+        geometry_scale = 2.75 / 64.0
     quantities: list[int] = []
     material_quantities = child(geometry, "MaterialQuantities")
     if material_quantities is not None:

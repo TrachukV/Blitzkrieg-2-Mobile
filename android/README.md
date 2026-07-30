@@ -867,12 +867,14 @@ both live A/B/C proxies without changing the remaining unrelated fallback.
 
 Granny resources can use either numeric filenames or UUID filenames. The
 converter and index now assign the latter the same stable positive runtime ID
-and reject collisions before conversion. The current complete pass requests
-2,817 resources: 2,510 convert, 44 contain no renderable mesh, 263 are reported
-as blocked, and none fail unexpectedly. The blocked UUID files use Granny
-Oodle1 compression; the bundled open decoder supports Oodle0, while the
-repository's Oodle1 implementation is only present in the original 32-bit
-Windows `granny2.dll`. Unsupported files are not reported as converted.
+and reject collisions before conversion. When a descriptor contains both
+identifiers, the index tries its numeric resource and then its UUID resource;
+this preserves exact visuals whose old numeric file was removed. The current
+complete pass requests 2,817 resources: 2,510 convert, 44 contain no renderable
+mesh, 263 are reported as blocked, and none fail unexpectedly. The blocked UUID
+files use Granny Oodle1 compression; the bundled open decoder supports Oodle0,
+while the repository's Oodle1 implementation is only present in the original
+32-bit Windows `granny2.dll`. Unsupported files are not reported as converted.
 The offline index reads the Granny section table as well and omits those
 blocked resources, so a mission cannot resolve an Oodle1 descriptor to a
 nonexistent Android cache file. It is also generated against the completed
