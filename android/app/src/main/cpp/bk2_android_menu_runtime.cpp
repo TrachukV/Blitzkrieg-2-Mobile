@@ -1296,6 +1296,7 @@ struct MenuScreenRoute {
 constexpr MenuScreenRoute kMenuScreenRoutes[] = {
         {"campaign_selection",
          "UI/Game/Menu/CampaignSelection_WindowScreen.xdb"},
+        {"chapter_map", "UI/Game/Menu/ChapterMap_WindowScreen.xdb"},
         {"options", "UI/Game/Menu/OptionsMenu_WindowScreen.xdb"},
         {"Credits", "UI/Game/Menu/Credits_WindowScreen.xdb"},
         {"Encyclopedia", "UI/Game/Menu/Encyclopedia_WindowScreen.xdb"},
@@ -1559,7 +1560,9 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
             return true;
         }
     }
-    if (reaction == "chapter_map") {
+    // The chapter map is a screen of its own between picking a campaign and
+    // the mission; its Play button is what actually starts one.
+    if (reaction == "play") {
         return RequestCampaignLaunch(g_selected_campaign);
     }
     // Tapping an option row advances it to its next shipped state and stores

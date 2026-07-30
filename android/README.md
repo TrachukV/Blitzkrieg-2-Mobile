@@ -338,14 +338,25 @@ exactly that. The sets are the original content but they dwarf everything else
 on the device: 10331 descriptors beside 7701 PCM wavs, about 1.4 GB. To stage
 them, check the tree out and pass the flag:
 
+The tree does not go in through `git sparse-checkout add`: the checkout is in
+non-cone mode, so append the pattern and re-read instead.
+
 ```bash
-git sparse-checkout add Versions/Current/Data/Other/AckSetRPGStats
+printf '%s\n' /Versions/Current/Data/Other/AckSetRPGStats/ \
+  >> .git/info/sparse-checkout
+git read-tree -mu HEAD
 
 python3 tools/android/prepare_data_android.py \
   --output DataAndroid \
   --mode symlink \
   --with-unit-voices
 ```
+
+On device the set costs about 780 MB, on top of the 3 GB the rest of the data
+already takes. That does not fit on a stock 12 GB emulator image alongside
+everything else -- installing the APK fails with "not enough space" -- so
+staging the party or parties a campaign actually uses is the practical choice
+there. A phone with room for the whole set needs no such trimming.
 
 (
   cd Tools/android
