@@ -17,6 +17,10 @@ const PROCEDURAL_GEOMETRY_BUILDERS = new Map([
     "8E1CF9C4-6B9E-4930-90A2-2B92D658005E",
     buildGermanAssaultBoat,
   ],
+  [
+    "80058E1C-6B9E-4930-90A2-2B92D658005E",
+    buildSovietArmoredSeaHunter,
+  ],
 ]);
 
 function isResourceId(value) {
@@ -374,6 +378,241 @@ function buildGermanAssaultBoat() {
     0.39,
     metalUv,
   );
+
+  return {
+    meshes: [
+      {
+        vertexCount: positions.length,
+        indexCount: indices.length,
+        positions,
+        normals,
+        uvs,
+        indices,
+        triangleGroups: [
+          {
+            materialIndex: 0,
+            triFirst: 0,
+            triCount: indices.length / 3,
+          },
+        ],
+        vertexWeights: Array.from(
+          { length: positions.length },
+          () => [],
+        ),
+        boneBindings: [],
+      },
+    ],
+    skeletons: [],
+  };
+}
+
+// The Soviet armored sea hunter is another Oodle1-only naval resource. Build
+// a recognizable low-poly patrol craft at the original 4.23444 x 24.9885
+// footprint, using its shipped texture atlas: narrow steel hull, raised deck,
+// bridge, fore/aft gun tubs, funnel and mast.
+function buildSovietArmoredSeaHunter() {
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+
+  const addQuad = (corners, uvRect) => {
+    const edgeA = corners[1].map((value, index) => value - corners[0][index]);
+    const edgeB = corners[2].map((value, index) => value - corners[0][index]);
+    const normal = normalize([
+      edgeA[1] * edgeB[2] - edgeA[2] * edgeB[1],
+      edgeA[2] * edgeB[0] - edgeA[0] * edgeB[2],
+      edgeA[0] * edgeB[1] - edgeA[1] * edgeB[0],
+    ]);
+    const base = positions.length;
+    const [u0, v0, u1, v1] = uvRect;
+    const faceUvs = [
+      [u0, v1],
+      [u1, v1],
+      [u1, v0],
+      [u0, v0],
+    ];
+    for (let corner = 0; corner < 4; ++corner) {
+      positions.push(corners[corner]);
+      normals.push(normal);
+      uvs.push(faceUvs[corner]);
+    }
+    indices.push(
+      base,
+      base + 1,
+      base + 2,
+      base,
+      base + 2,
+      base + 3,
+      base,
+      base + 2,
+      base + 1,
+      base,
+      base + 3,
+      base + 2,
+    );
+  };
+
+  const addBox = (minX, maxX, minY, maxY, minZ, maxZ, uvRect) => {
+    addQuad(
+      [
+        [minX, minY, maxZ],
+        [maxX, minY, maxZ],
+        [maxX, maxY, maxZ],
+        [minX, maxY, maxZ],
+      ],
+      uvRect,
+    );
+    addQuad(
+      [
+        [minX, minY, minZ],
+        [minX, maxY, minZ],
+        [maxX, maxY, minZ],
+        [maxX, minY, minZ],
+      ],
+      uvRect,
+    );
+    addQuad(
+      [
+        [minX, minY, minZ],
+        [maxX, minY, minZ],
+        [maxX, minY, maxZ],
+        [minX, minY, maxZ],
+      ],
+      uvRect,
+    );
+    addQuad(
+      [
+        [maxX, minY, minZ],
+        [maxX, maxY, minZ],
+        [maxX, maxY, maxZ],
+        [maxX, minY, maxZ],
+      ],
+      uvRect,
+    );
+    addQuad(
+      [
+        [maxX, maxY, minZ],
+        [minX, maxY, minZ],
+        [minX, maxY, maxZ],
+        [maxX, maxY, maxZ],
+      ],
+      uvRect,
+    );
+    addQuad(
+      [
+        [minX, maxY, minZ],
+        [minX, minY, minZ],
+        [minX, minY, maxZ],
+        [minX, maxY, maxZ],
+      ],
+      uvRect,
+    );
+  };
+
+  const addPrism = (centerX, centerY, radius, minZ, maxZ, sides, uvRect) => {
+    const lower = [];
+    const upper = [];
+    for (let side = 0; side < sides; ++side) {
+      const angle = side * Math.PI * 2 / sides;
+      lower.push([
+        centerX + Math.cos(angle) * radius,
+        centerY + Math.sin(angle) * radius,
+        minZ,
+      ]);
+      upper.push([
+        centerX + Math.cos(angle) * radius,
+        centerY + Math.sin(angle) * radius,
+        maxZ,
+      ]);
+    }
+    for (let side = 0; side < sides; ++side) {
+      const next = (side + 1) % sides;
+      addQuad(
+        [lower[side], lower[next], upper[next], upper[side]],
+        uvRect,
+      );
+      addQuad(
+        [
+          [centerX, centerY, maxZ],
+          upper[side],
+          upper[next],
+          [centerX, centerY, maxZ],
+        ],
+        uvRect,
+      );
+    }
+  };
+
+  const deckUv = [0.01, 0.25, 0.64, 0.47];
+  const hullUv = [0.01, 0.49, 0.65, 0.74];
+  const bottomUv = [0.01, 0.79, 0.65, 0.95];
+  const steelUv = [0.68, 0.77, 0.82, 0.97];
+  const darkSteelUv = [0.73, 0.26, 0.95, 0.46];
+  const sections = [
+    { y: -12.49425, width: 0.45 },
+    { y: -10.8, width: 1.65 },
+    { y: -7.0, width: 2.03 },
+    { y: 5.8, width: 2.11 },
+    { y: 9.8, width: 1.55 },
+    { y: 12.49425, width: 0.05 },
+  ];
+  for (let section = 0; section + 1 < sections.length; ++section) {
+    const current = sections[section];
+    const next = sections[section + 1];
+    for (const side of [-1, 1]) {
+      addQuad(
+        [
+          [side * current.width, current.y, 1.62],
+          [side * current.width * 0.72, current.y, -0.08],
+          [side * next.width * 0.72, next.y, -0.08],
+          [side * next.width, next.y, 1.62],
+        ],
+        hullUv,
+      );
+    }
+    addQuad(
+      [
+        [-current.width * 0.72, current.y, -0.08],
+        [current.width * 0.72, current.y, -0.08],
+        [next.width * 0.72, next.y, -0.08],
+        [-next.width * 0.72, next.y, -0.08],
+      ],
+      bottomUv,
+    );
+    addQuad(
+      [
+        [-current.width, current.y, 1.62],
+        [current.width, current.y, 1.62],
+        [next.width, next.y, 1.62],
+        [-next.width, next.y, 1.62],
+      ],
+      deckUv,
+    );
+  }
+
+  addBox(-1.58, 1.58, -4.7, 2.4, 1.58, 2.75, steelUv);
+  addBox(-1.18, 1.18, 1.2, 5.2, 2.70, 4.05, darkSteelUv);
+  addBox(-0.86, 0.86, 3.1, 5.35, 4.02, 4.68, steelUv);
+  addBox(-0.58, 0.58, -6.3, -4.75, 2.72, 4.15, darkSteelUv);
+
+  for (const gunY of [-8.25, 8.25]) {
+    addPrism(0.0, gunY, 1.05, 1.60, 2.32, 8, steelUv);
+    addBox(
+      -0.16,
+      0.16,
+      gunY + 0.15,
+      gunY + 3.05,
+      2.17,
+      2.43,
+      darkSteelUv,
+    );
+  }
+
+  addBox(-0.10, 0.10, 3.55, 3.75, 4.60, 8.48, darkSteelUv);
+  addBox(-1.08, 1.08, 3.59, 3.71, 7.20, 7.34, darkSteelUv);
+  addBox(-0.05, 0.05, 3.68, 4.75, 7.25, 7.36, darkSteelUv);
+  addBox(-0.48, 0.48, 3.62, 4.55, 4.64, 4.76, steelUv);
 
   return {
     meshes: [

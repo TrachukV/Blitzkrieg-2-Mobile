@@ -92,6 +92,7 @@ UNSUPPORTED_MODEL_FALLBACKS = {
 # its original runtime geometry ID and keeps the original model material.
 PROCEDURAL_GEOMETRY_RESOURCES = {
     "8E1CF9C4-6B9E-4930-90A2-2B92D658005E",
+    "80058E1C-6B9E-4930-90A2-2B92D658005E",
 }
 
 # The early StuG III A/B/C resource is Oodle1-compressed. The Ausf. D mesh has

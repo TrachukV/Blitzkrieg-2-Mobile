@@ -385,13 +385,16 @@ there. A phone with room for the whole set needs no such trimming.
     --all
 )
 
-`convert_granny_geometry.mjs` also emits a low-poly reconstruction for the
+`convert_granny_geometry.mjs` also emits low-poly reconstructions for the
 German assault boat resource
 `8E1CF9C4-6B9E-4930-90A2-2B92D658005E`. The shipped mesh uses Granny Oodle1
 compression, which the open converter cannot decode without the proprietary
 Granny runtime. The reconstruction preserves the original dimensions and
 uses the original boat material instead of substituting an unrelated vehicle
-or leaving an Android debug marker.
+or leaving an Android debug marker. The same path reconstructs the Soviet
+armored sea hunter resource
+`80058E1C-6B9E-4930-90A2-2B92D658005E` as a narrow armored patrol craft with
+its original footprint, material, and texture atlas.
 
 python3 Tools/android/build_geometry_index.py \
   --data-root Versions/Current/Data \
@@ -871,7 +874,8 @@ same footprint. The T-60 uses its closest decodable Soviet successor, the T-70,
 at `1.1x` scale. These are explicit same-family stand-ins, not recovered
 meshes. Their original articulation is disabled because its mutator names do
 not describe the substitute skeleton. This removes eleven live vehicle
-proxies; the mission's three armored sea hunters remain blocked separately.
+proxies. The mission's three armored sea hunters use the documented low-poly
+reconstruction above, taking RUS2.0 to zero live geometry fallbacks.
 
 Granny resources can use either numeric filenames or UUID filenames. The
 converter and index now assign the latter the same stable positive runtime ID
