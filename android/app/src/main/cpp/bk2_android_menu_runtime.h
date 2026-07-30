@@ -71,6 +71,9 @@ bool ShowOriginalMenuPanel(const std::string& panel_name);
 // reaction was handled.
 bool RunOriginalMenuReaction(const std::string& reaction);
 
+// True once when a menu button asked the shell to start the selected mission.
+bool ConsumeMenuMissionLaunchRequest();
+
 bool IsOriginalMenuReady();
 const std::vector<MenuWindowNode>& OriginalMenuNodes();
 float OriginalMenuVirtualWidth();

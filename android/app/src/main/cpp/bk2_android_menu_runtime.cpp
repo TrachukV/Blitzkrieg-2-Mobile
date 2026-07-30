@@ -4,6 +4,7 @@
 #include "bk2_android_audio_decode.h"
 #include "bk2_android_platform.h"
 #include "bk2_legacy_texture_probe.h"
+#include "bk2_port_paths.h"
 #include "bk2_render_backend.h"
 
 #include "UI/stdafx.h"
@@ -30,6 +31,7 @@
 #include <map>
 #include <mutex>
 #include <cstdlib>
+#include <fstream>
 #include <sstream>
 #include <vector>
 
@@ -1204,16 +1206,95 @@ constexpr MenuScreenRoute kMenuScreenRoutes[] = {
         {"CustomMission", "UI/Game/Menu/CustomMissions_WindowScreen.xdb"},
         {"Load", "UI/Game/Menu/SaveLoadMenu_WindowScreen.xdb"},
         {"load", "UI/Game/Menu/SaveLoadMenu_WindowScreen.xdb"},
-        {"chapter_map", "UI/Game/Menu/ChapterMap_WindowScreen.xdb"},
 };
 
 std::vector<std::string> g_screen_stack;
 
 }  // namespace
 
+namespace {
+
+int g_selected_campaign = 0;
+
+std::string JoinHostPath(const std::string& left, const std::string& right) {
+    if (left.empty()) {
+        return right;
+    }
+    if (left.back() == '/') {
+        return left + right;
+    }
+    return left + "/" + right;
+}
+
+// The shell's game loop polls this and hands control to the mission runtime
+// without tearing the process down.
+bool g_mission_launch_requested = false;
+
+// Writes the shell's mission selection the same way MissionSelectActivity
+// does, then asks Java to restart the activity out of menu mode.
+bool RequestCampaignLaunch(int campaign_index) {
+    const PortPaths paths = GetPortPaths();
+    std::vector<std::string> targets;
+    if (!paths.external_files_dir.empty()) {
+        targets.push_back(JoinHostPath(
+                paths.external_files_dir, "selected_mission.txt"));
+    }
+    if (!paths.files_dir.empty()) {
+        targets.push_back(
+                JoinHostPath(paths.files_dir, "selected_mission.txt"));
+    }
+    if (targets.empty()) {
+        return false;
+    }
+    bool written = false;
+    for (const std::string& target : targets) {
+        std::ofstream file(target.c_str(), std::ios::trunc);
+        if (!file.is_open()) {
+            continue;
+        }
+        file << "campaign=" << campaign_index << "\n";
+        file << "chapter=0\n";
+        file << "mission=0\n";
+        written = true;
+    }
+    if (!written) {
+        return false;
+    }
+    std::ostringstream report;
+    report << "original_menu_launch=campaign; index=" << campaign_index;
+    PlatformRuntime::instance().log_info(report.str());
+    g_mission_launch_requested = true;
+    return true;
+}
+
+}  // namespace
+
+bool ConsumeMenuMissionLaunchRequest() {
+    const bool requested = g_mission_launch_requested;
+    g_mission_launch_requested = false;
+    return requested;
+}
+
 bool RunOriginalMenuReaction(const std::string& reaction) {
     if (reaction.empty()) {
         return false;
+    }
+    // The campaign selection screen picks with static buttons and starts with
+    // Play / Continue, both of which run the chapter_map reaction.
+    if (reaction.size() == 10 &&
+        reaction.compare(0, 8, "campaign") == 0 &&
+        reaction[8] == '0') {
+        const int index = reaction[9] - '1';
+        if (index >= 0 && index < 8) {
+            g_selected_campaign = index;
+            std::ostringstream report;
+            report << "original_menu_campaign=" << index;
+            PlatformRuntime::instance().log_info(report.str());
+            return true;
+        }
+    }
+    if (reaction == "chapter_map") {
+        return RequestCampaignLaunch(g_selected_campaign);
     }
     // Panel swaps stay inside the current screen.
     if (reaction == "single_player") {

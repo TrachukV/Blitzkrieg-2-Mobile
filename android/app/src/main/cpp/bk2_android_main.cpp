@@ -485,7 +485,7 @@ extern "C" void android_main(android_app* app) {
         platform.log_warn(bk2::android::SinglePlayerRuntimeReport());
     }
 
-    const bool menu_active =
+    bool menu_active =
             !bk2::android::IsSinglePlayerRuntimeReady() &&
             bk2::android::IsOriginalMenuReady();
     g_menu_input_active = menu_active;
@@ -506,6 +506,23 @@ extern "C" void android_main(android_app* app) {
         }
 
         PollInput(app);
+        // A menu button can hand control to a mission without restarting the
+        // process; the runtime picks the selection up from its launch file.
+        if (menu_active &&
+            bk2::android::ConsumeMenuMissionLaunchRequest()) {
+            bk2::android::ShutdownSinglePlayerRuntime();
+            if (bk2::android::InitializeSinglePlayerRuntime()) {
+                bk2::android::RefreshSinglePlayerRenderResources();
+                menu_active = false;
+                g_menu_input_active = false;
+                bk2::android::ShutdownOriginalMenuRuntime();
+                platform.log_info(
+                        bk2::android::SinglePlayerRuntimeReport());
+            } else {
+                platform.log_warn(
+                        bk2::android::SinglePlayerRuntimeReport());
+            }
+        }
         const uint64_t now_millis = platform.monotonic_millis();
         const uint32_t elapsed_millis = static_cast<uint32_t>(
                 std::min<uint64_t>(now_millis - last_tick_millis, 100));

@@ -46,6 +46,28 @@ public final class Blitzkrieg2Activity extends GameActivity {
     private TextView pauseIndicator;
     private OriginalMissionHudView originalHud;
     private boolean menuMode;
+    private final Handler menuHandler = new Handler(Looper.getMainLooper());
+    private final Runnable menuMissionWatch = new Runnable() {
+        @Override
+        public void run() {
+            if (!menuMode) {
+                return;
+            }
+            String missionId = NativeBridge.getCurrentMissionId();
+            if (missionId == null || missionId.isEmpty()) {
+                menuHandler.postDelayed(this, 500);
+                return;
+            }
+            menuMode = false;
+            addContentView(
+                    createHud(),
+                    new ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT));
+            outcomePolling = true;
+            outcomeHandler.post(outcomePoll);
+        }
+    };
     private GridLayout commandGrid;
     private ImageButton moveCommandButton;
     private ImageButton attackCommandButton;
@@ -129,8 +151,10 @@ public final class Blitzkrieg2Activity extends GameActivity {
         enterImmersiveMode();
         if (menuMode) {
             // No mission HUD over the menu screen; the whole surface belongs
-            // to the original interface.
+            // to the original interface. The menu can hand control to a
+            // mission in-process, so watch for that and install the HUD then.
             NativeBridge.setMissionHudHeightPixels(0);
+            menuHandler.postDelayed(menuMissionWatch, 500);
             return;
         }
         addContentView(
@@ -146,6 +170,7 @@ public final class Blitzkrieg2Activity extends GameActivity {
     protected void onDestroy() {
         outcomePolling = false;
         outcomeHandler.removeCallbacks(outcomePoll);
+        menuHandler.removeCallbacks(menuMissionWatch);
         super.onDestroy();
     }
 
