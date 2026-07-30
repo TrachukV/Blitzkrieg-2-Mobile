@@ -1248,13 +1248,15 @@ void CollectWindow(
                     dynamic_cast<const NDb::SWindowMSButtonShared*>(shared);
             if (button_shared != nullptr &&
                 !button_shared->visualStates.empty()) {
+                const NDb::SButtonVisualSubState& normal =
+                        button_shared->visualStates[0].normal;
                 AppendBackgroundQuads(
-                        button_shared->visualStates[0]
-                                .normal.pBackground.GetPtr(),
-                        x,
-                        y,
-                        width,
-                        height);
+                        normal.pBackground.GetPtr(), x, y, width, height);
+                // A state draws its background and then its foreground, and
+                // for the common menu buttons the label is the foreground:
+                // the plate is shared art, the caption is per button.
+                AppendBackgroundQuads(
+                        normal.pForeground.GetPtr(), x, y, width, height);
             }
         }
         AppendTextQuads(
@@ -1273,6 +1275,12 @@ void CollectWindow(
                     shared->pBackground.GetPtr(), x, y, width, height);
             AppendBackgroundQuads(
                     button_shared->visualStates[0].pushed.pBackground.GetPtr(),
+                    x,
+                    y,
+                    width,
+                    height);
+            AppendBackgroundQuads(
+                    button_shared->visualStates[0].pushed.pForeground.GetPtr(),
                     x,
                     y,
                     width,
