@@ -25,6 +25,9 @@ struct MenuWindowNode {
     // Leading markup tags of the original format string, e.g. "<val button>",
     // which select the shipped text style rather than visible characters.
     std::string text_format;
+    // WindowTextView carries its font and colour on the shared descriptor.
+    std::string text_face;
+    uint32_t text_argb = 0;
     std::string action;
     int depth = 0;
     // Range of pressed-state quads built for this button.
@@ -62,6 +65,11 @@ std::string ReleaseOriginalMenu(
 // Shows one of the screen's top-level panels and hides the others, which is
 // what the shipped main_menu_init / single_player_submenu reactions do.
 bool ShowOriginalMenuPanel(const std::string& panel_name);
+
+// Runs a button reaction: either an in-screen panel swap, a push to another
+// shipped screen, or a pop back to the previous one. Returns true when the
+// reaction was handled.
+bool RunOriginalMenuReaction(const std::string& reaction);
 
 bool IsOriginalMenuReady();
 const std::vector<MenuWindowNode>& OriginalMenuNodes();

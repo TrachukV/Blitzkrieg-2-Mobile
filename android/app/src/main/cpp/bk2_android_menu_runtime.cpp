@@ -768,11 +768,19 @@ void AppendTextQuads(
         float x,
         float y,
         float width,
-        float height) {
+        float height,
+        const std::string& face_override = std::string(),
+        uint32_t argb_override = 0) {
     if (text.empty()) {
         return;
     }
-    const MenuTextStyle style = ParseTextStyle(tags);
+    MenuTextStyle style = ParseTextStyle(tags);
+    if (!face_override.empty()) {
+        style.face = face_override;
+    }
+    if (argb_override != 0) {
+        style.argb = argb_override;
+    }
     const std::map<std::string, MenuFont>::const_iterator found =
             g_fonts.find(style.face.empty() ? "body" : style.face);
     if (found == g_fonts.end() || !found->second.metrics) {
@@ -1031,6 +1039,26 @@ void CollectWindow(
                 BackgroundTexturePath(shared->pForeground.GetPtr());
     }
 
+    if (window->GetTypeID() == NDb::SWindowTextView::typeID) {
+        // Text views carry their own file ref plus a shared font name and
+        // colour rather than a ForegroundTextString.
+        const NDb::SWindowTextView* text_view =
+                static_cast<const NDb::SWindowTextView*>(window);
+        if (node.caption.empty() && !text_view->szTextFileRef.empty()) {
+            SplitMarkupTags(
+                    LoadUtf16Text(NormalizeResourcePath(
+                            ToStdString(text_view->szTextFileRef))),
+                    &node.caption,
+                    &node.text_format);
+        }
+        const NDb::SWindowTextViewShared* text_shared =
+                dynamic_cast<const NDb::SWindowTextViewShared*>(shared);
+        if (text_shared != nullptr) {
+            node.text_face = ToStdString(text_shared->szFontName);
+            node.text_argb = static_cast<uint32_t>(text_shared->nColor);
+        }
+    }
+
     if (window->GetTypeID() == NDb::SWindowMSButton::typeID) {
         const NDb::SWindowMSButton* button =
                 static_cast<const NDb::SWindowMSButton*>(window);
@@ -1155,6 +1183,72 @@ namespace {
 bool RebuildMenuScreenLocked(const std::string& screen_ref);
 
 }  // namespace
+
+namespace {
+
+// The shipped menu is a set of sibling screens the buttons push and pop.
+// Every entry below is a real WindowScreen descriptor in UI/Game/Menu.
+struct MenuScreenRoute {
+    const char* reaction;
+    const char* screen_ref;
+};
+
+constexpr MenuScreenRoute kMenuScreenRoutes[] = {
+        {"campaign_selection",
+         "UI/Game/Menu/CampaignSelection_WindowScreen.xdb"},
+        {"options", "UI/Game/Menu/OptionsMenu_WindowScreen.xdb"},
+        {"Credits", "UI/Game/Menu/Credits_WindowScreen.xdb"},
+        {"Encyclopedia", "UI/Game/Menu/Encyclopedia_WindowScreen.xdb"},
+        {"multiplayer", "UI/Game/Menu/Multiplayer_WindowScreen.xdb"},
+        {"ProfileManager", "UI/Game/Menu/ProfileManager_WindowScreen.xdb"},
+        {"CustomMission", "UI/Game/Menu/CustomMissions_WindowScreen.xdb"},
+        {"Load", "UI/Game/Menu/SaveLoadMenu_WindowScreen.xdb"},
+        {"load", "UI/Game/Menu/SaveLoadMenu_WindowScreen.xdb"},
+        {"chapter_map", "UI/Game/Menu/ChapterMap_WindowScreen.xdb"},
+};
+
+std::vector<std::string> g_screen_stack;
+
+}  // namespace
+
+bool RunOriginalMenuReaction(const std::string& reaction) {
+    if (reaction.empty()) {
+        return false;
+    }
+    // Panel swaps stay inside the current screen.
+    if (reaction == "single_player") {
+        return ShowOriginalMenuPanel("SinglePlayerMenu");
+    }
+    if (reaction == "single_player_back") {
+        return ShowOriginalMenuPanel("MainMenu");
+    }
+    for (const MenuScreenRoute& route : kMenuScreenRoutes) {
+        if (reaction != route.reaction) {
+            continue;
+        }
+        std::string previous;
+        {
+            std::lock_guard<std::mutex> guard(g_menu_mutex);
+            previous = g_screen_ref;
+        }
+        if (!LoadOriginalMenuScreen(route.screen_ref)) {
+            // Keep the caller on a working screen if the target fails.
+            LoadOriginalMenuScreen(previous);
+            return false;
+        }
+        g_screen_stack.push_back(previous);
+        return true;
+    }
+    // Every shipped back button ends in "back"; pop the pushed screen.
+    if (reaction.size() >= 4 &&
+        reaction.compare(reaction.size() - 4, 4, "back") == 0 &&
+        !g_screen_stack.empty()) {
+        const std::string previous = g_screen_stack.back();
+        g_screen_stack.pop_back();
+        return LoadOriginalMenuScreen(previous);
+    }
+    return false;
+}
 
 bool ShowOriginalMenuPanel(const std::string& panel_name) {
     std::lock_guard<std::mutex> guard(g_menu_mutex);

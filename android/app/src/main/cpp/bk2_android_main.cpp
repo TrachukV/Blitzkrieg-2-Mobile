@@ -193,16 +193,23 @@ void PollMenuInput(android_input_buffer* input_buffer) {
         } else if (action == AMOTION_EVENT_ACTION_UP) {
             const std::string reaction =
                     bk2::android::ReleaseOriginalMenu(x, y, width, height);
-            if (reaction == "single_player") {
-                bk2::android::ShowOriginalMenuPanel("SinglePlayerMenu");
-            } else if (reaction == "single_player_back") {
-                bk2::android::ShowOriginalMenuPanel("MainMenu");
-            }
+            bk2::android::RunOriginalMenuReaction(reaction);
         } else if (action == AMOTION_EVENT_ACTION_CANCEL) {
             bk2::android::CancelOriginalMenuPress();
         }
     }
     android_app_clear_motion_events(input_buffer);
+
+    // The system Back gesture pops the menu stack, which is what a phone
+    // player expects from the shipped Back buttons.
+    for (uint64_t i = 0; i < input_buffer->keyEventsCount; ++i) {
+        const GameActivityKeyEvent& event = input_buffer->keyEvents[i];
+        if (event.action == AKEY_EVENT_ACTION_UP &&
+            event.keyCode == AKEYCODE_BACK) {
+            bk2::android::RunOriginalMenuReaction("back");
+        }
+    }
+    android_app_clear_key_events(input_buffer);
 }
 
 void PollInput(android_app* app) {
