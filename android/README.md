@@ -352,8 +352,15 @@ python3 tools/android/prepare_data_android.py \
   --with-unit-voices
 ```
 
-On device the set costs about 780 MB, on top of the 3 GB the rest of the data
-already takes. That does not fit on a stock 12 GB emulator image alongside
+The music merges the same way, without a flag. The development Data tree ships
+only the battle tracks; the main menu theme and the per-party ambient and
+combat pieces live in `Complete/Music`, and descriptors name them all as
+`Music/<name>.ogg` relative to `Data`. `prepare_data_android.py` links the
+missing ones in, which is what makes the main menu play its own music instead
+of silence.
+
+On device the unit voice set costs about 780 MB, on top of the 3 GB the rest
+of the data already takes. That does not fit on a stock 12 GB emulator image alongside
 everything else -- installing the APK fails with "not enough space" -- so
 staging the party or parties a campaign actually uses is the practical choice
 there. A phone with room for the whole set needs no such trimming.
