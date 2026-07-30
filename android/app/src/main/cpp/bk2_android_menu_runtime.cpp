@@ -22,6 +22,8 @@
 #include "Misc/StrProc.h"
 #include "GameX/DBGameRoot.h"
 #include "GameX/DBScenario.h"
+#include "Stats_B2_M1/DBMapInfo.h"
+#include "Stats_B2_M1/Vis2AI.h"
 #include "GameX/dbgameoptions.h"
 #include "System/GlobalVars.h"
 #include "Sound/DBMusicSystem.h"
@@ -2098,6 +2100,104 @@ void PopulateOptionsScreenLocked() {
     }
 }
 
+// InitMissions clones a target button onto the chapter map for each mission
+// in the chapter's path. Position comes from the details map when the chapter
+// ships one, and from the mission's own PlaceOnChapterMap otherwise, which is
+// the same fallback SChapterMapMenuHelper uses.
+void PopulateChapterMapLocked() {
+    const NDb::SChapter* chapter = SelectedChapter();
+    if (chapter == nullptr || chapter->missionPath.empty()) {
+        return;
+    }
+    const std::map<std::string, MenuTemplate>::const_iterator map_window =
+            g_templates.find("ChapterMap");
+    const std::map<std::string, MenuTemplate>::const_iterator target =
+            g_templates.find("ChapterMapTarget");
+    const std::map<std::string, MenuTemplate>::const_iterator target_big =
+            g_templates.find("ChapterMapTargetBig");
+    if (map_window == g_templates.end() || target == g_templates.end()) {
+        return;
+    }
+    float details_scale_x = 0.0f;
+    float details_scale_y = 0.0f;
+    const NDb::SMapInfo* details = chapter->pDetailsMap.GetPtr();
+    if (details != nullptr &&
+        details->nNumPatchesX > 0 &&
+        details->nNumPatchesY > 0) {
+        details_scale_x = map_window->second.width /
+                static_cast<float>(
+                        details->nNumPatchesX * AI_TILE_SIZE *
+                        AI_TILES_IN_PATCH);
+        details_scale_y = map_window->second.height /
+                static_cast<float>(
+                        details->nNumPatchesY * AI_TILE_SIZE *
+                        AI_TILES_IN_PATCH);
+    }
+    size_t placed = 0;
+    for (size_t index = 0; index < chapter->missionPath.size(); ++index) {
+        const NDb::SMissionEnableInfo& mission = chapter->missionPath[index];
+        float position_x = mission.vPlaceOnChapterMap.x;
+        float position_y = mission.vPlaceOnChapterMap.y;
+        if (details != nullptr && details_scale_x > 0.0f) {
+            for (size_t object = 0; object < details->objects.size();
+                 ++object) {
+                if (details->objects[object].nPlayer !=
+                    static_cast<int>(index)) {
+                    continue;
+                }
+                // Map2Screen swaps the axes.
+                position_x =
+                        details->objects[object].vPos.y * details_scale_x;
+                position_y =
+                        details->objects[object].vPos.x * details_scale_y;
+                break;
+            }
+        }
+        // The first entry of the path is the chapter's main target and uses
+        // the larger marker.
+        const MenuTemplate& marker =
+                index == 0 && target_big != g_templates.end()
+                        ? target_big->second
+                        : target->second;
+        if (marker.shared == nullptr) {
+            continue;
+        }
+        const float x = map_window->second.x + position_x -
+                marker.width * 0.5f;
+        const float y = map_window->second.y + position_y -
+                marker.height * 0.5f;
+        MenuWindowNode node;
+        node.name = "Target" + std::to_string(index);
+        node.type = "ChapterMapTarget";
+        node.x = x;
+        node.y = y;
+        node.width = marker.width;
+        node.height = marker.height;
+        node.visible = true;
+        node.enabled = true;
+        node.button = true;
+        node.action = "play";
+        node.pressed_quad_begin = static_cast<int>(g_pressed_quads.size());
+        node.pressed_quad_end = node.pressed_quad_begin;
+        AppendBackgroundQuads(
+                marker.shared->pBackground.GetPtr(),
+                x,
+                y,
+                marker.width,
+                marker.height);
+        ++g_button_count;
+        g_nodes.push_back(node);
+        ++placed;
+    }
+    std::ostringstream report;
+    report << "original_menu_chapter_targets=" << placed
+           << "; details_map=" << (details != nullptr ? "yes" : "no")
+           << "; map_rect=" << map_window->second.x << ","
+           << map_window->second.y << "+" << map_window->second.width << "x"
+           << map_window->second.height;
+    PlatformRuntime::instance().log_info(report.str());
+}
+
 bool RebuildMenuScreenLocked(const std::string& screen_ref) {
     g_nodes.clear();
     g_quads.clear();
@@ -2146,6 +2246,9 @@ bool RebuildMenuScreenLocked(const std::string& screen_ref) {
             true);
     if (screen_ref.find("OptionsMenu") != std::string::npos) {
         PopulateOptionsScreenLocked();
+    }
+    if (screen_ref == "UI/Game/Menu/ChapterMap_WindowScreen.xdb") {
+        PopulateChapterMapLocked();
     }
     g_ready = g_nodes.size() > 1;
     if (!g_ready) {
