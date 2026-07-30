@@ -8743,6 +8743,86 @@ std::string SinglePlayerRuntimeReport() {
     return report.str();
 }
 
+// The ground point a screen ray reaches, capped so a ray that never meets the
+// ground still yields something usable. ScreenToTerrainIntersectionLocked
+// refuses those rays; the minimap needs an answer for every corner.
+bool ScreenToCappedGroundLocked(
+        float screen_x,
+        float screen_y,
+        uint32_t viewport_width,
+        uint32_t viewport_height,
+        float* world_x,
+        float* world_y) {
+    if (world_x == nullptr || world_y == nullptr ||
+        viewport_width == 0 || viewport_height == 0) {
+        return false;
+    }
+    struct Vec3 {
+        float x;
+        float y;
+        float z;
+    };
+    const auto normalize = [](Vec3 value) {
+        const float length = std::sqrt(
+                value.x * value.x + value.y * value.y + value.z * value.z);
+        if (length > 0.0001f) {
+            value.x /= length;
+            value.y /= length;
+            value.z /= length;
+        }
+        return value;
+    };
+    const auto cross = [](const Vec3& left, const Vec3& right) {
+        return Vec3{
+                left.y * right.z - left.z * right.y,
+                left.z * right.x - left.x * right.z,
+                left.x * right.y - left.y * right.x};
+    };
+    const float horizontal_distance =
+            g_camera.distance * std::cos(g_camera.pitch_radians);
+    const Vec3 eye = {
+            g_camera.target_x +
+                    std::sin(g_camera.yaw_radians) * horizontal_distance,
+            g_camera.target_y -
+                    std::cos(g_camera.yaw_radians) * horizontal_distance,
+            g_camera.target_z +
+                    std::sin(g_camera.pitch_radians) * g_camera.distance};
+    const Vec3 forward = normalize(Vec3{
+            g_camera.target_x - eye.x,
+            g_camera.target_y - eye.y,
+            g_camera.target_z - eye.z});
+    const Vec3 world_up = {0.0f, 0.0f, 1.0f};
+    const Vec3 right = normalize(cross(world_up, forward));
+    const Vec3 camera_up = normalize(cross(forward, right));
+    const float ndc_x =
+            screen_x / static_cast<float>(viewport_width) * 2.0f - 1.0f;
+    const float ndc_y =
+            1.0f - screen_y / static_cast<float>(viewport_height) * 2.0f;
+    const float aspect = static_cast<float>(viewport_width) /
+            static_cast<float>(viewport_height);
+    const float tangent = std::tan(CameraDegreesToRadians(
+                                  g_camera.horizontal_fov_degrees * 0.5f)) /
+            aspect;
+    const Vec3 ray = normalize(Vec3{
+            forward.x + right.x * ndc_x * tangent * aspect +
+                    camera_up.x * ndc_y * tangent,
+            forward.y + right.y * ndc_x * tangent * aspect +
+                    camera_up.y * ndc_y * tangent,
+            forward.z + right.z * ndc_x * tangent * aspect +
+                    camera_up.z * ndc_y * tangent});
+    const float far_limit = g_camera.distance * 6.0f;
+    float distance = far_limit;
+    if (ray.z < -0.0001f) {
+        const float ground = (g_camera.target_z - eye.z) / ray.z;
+        if (ground > 0.0f) {
+            distance = std::min(ground, far_limit);
+        }
+    }
+    *world_x = eye.x + ray.x * distance;
+    *world_y = eye.y + ray.y * distance;
+    return true;
+}
+
 std::vector<int32_t> MissionMinimapArgb(int width, int height) {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
     const bool has_original_minimap =
@@ -8959,6 +9039,11 @@ std::vector<int32_t> MissionMinimapArgb(int width, int height) {
                 static_cast<float>(viewport_height)};
         int frame_x[4] = {};
         int frame_y[4] = {};
+        // A corner that looks above the horizon has no terrain to hit, which
+        // used to drop the whole rectangle: at the shipped camera pitch the
+        // top two corners often miss, so the player was left with no marker
+        // of where they are on the map at all. Those corners fall back to the
+        // ground plane at a capped distance instead.
         bool has_viewport_frame = true;
         for (int index = 0; index < 4; ++index) {
             float world_x = 0.0f;
@@ -8969,6 +9054,13 @@ std::vector<int32_t> MissionMinimapArgb(int width, int height) {
                         viewport_width,
                         viewport_height,
                         false,
+                        &world_x,
+                        &world_y) &&
+                !ScreenToCappedGroundLocked(
+                        screen_x[index],
+                        screen_y[index],
+                        viewport_width,
+                        viewport_height,
                         &world_x,
                         &world_y)) {
                 has_viewport_frame = false;
