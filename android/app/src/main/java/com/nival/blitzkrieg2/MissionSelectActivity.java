@@ -53,9 +53,22 @@ public final class MissionSelectActivity extends AppCompatActivity {
     private Spinner difficultySpinner;
     private TextView status;
 
+    /** Opens the debug mission browser instead of the original menu. */
+    public static final String EXTRA_DEBUG_BROWSER =
+            "com.nival.blitzkrieg2.DEBUG_BROWSER";
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (!getIntent().getBooleanExtra(EXTRA_DEBUG_BROWSER, false)) {
+            // The game boots into its own interface; this Android layout is
+            // only the developer mission browser now.
+            Intent menu = new Intent(this, Blitzkrieg2Activity.class);
+            menu.putExtra(Blitzkrieg2Activity.EXTRA_SHOW_MENU, true);
+            startActivity(menu);
+            finish();
+            return;
+        }
         setContentView(createContentView());
         loadMissions();
     }

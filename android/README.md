@@ -621,6 +621,13 @@ desktop `VirtualToScreenX`/`VirtualToScreenY` mapping, which scales X and Y
 independently from the 1024x768 layout to the active surface, so the screen
 adapts to any device aspect exactly like the original does to any resolution.
 
+The launcher now opens the original interface: `MissionSelectActivity`
+forwards straight to `Blitzkrieg2Activity` with the `SHOW_MENU` extra, so the
+game boots into its own main menu instead of the Android mission picker. That
+picker is still available as a developer tool through
+`am start -n com.nival.blitzkrieg2/.MissionSelectActivity --ez
+com.nival.blitzkrieg2.DEBUG_BROWSER true`.
+
 Launching `Blitzkrieg2Activity` with the `SHOW_MENU` extra writes `menu=1` into
 `selected_mission.txt`; the single-player runtime then reports
 `menu_requested` instead of falling back to the first campaign mission, and the
