@@ -111,6 +111,14 @@ else
         "${ADB_BIN}" shell run-as "${PACKAGE}" tar -xf - -C files/DataAndroid
 fi
 
+if [[ -d "${DATA_SOURCE}/Overlay" ]]; then
+    echo "Staging Android data overlays into app-private storage."
+    "${ADB_BIN}" shell run-as "${PACKAGE}" mkdir -p files/DataAndroid/Overlay
+    COPYFILE_DISABLE=1 tar -chf - -C "${DATA_SOURCE}/Overlay" . |
+        "${ADB_BIN}" shell run-as "${PACKAGE}" tar -xf - \
+            -C files/DataAndroid/Overlay
+fi
+
 MISSING_EFFECT_ASSET=0
 for EFFECT_ASSET in "${DESTRUCTION_EFFECT_ASSETS[@]}"; do
     if [[ ! -r "${DATA_SOURCE}/Data/${EFFECT_ASSET}" ]]; then

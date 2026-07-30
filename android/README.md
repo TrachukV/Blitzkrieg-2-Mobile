@@ -355,9 +355,12 @@ python3 tools/android/prepare_data_android.py \
 The music merges the same way, without a flag. The development Data tree ships
 only the battle tracks; the main menu theme and the per-party ambient and
 combat pieces live in `Complete/Music`, and descriptors name them all as
-`Music/<name>.ogg` relative to `Data`. `prepare_data_android.py` links the
-missing ones in, which is what makes the main menu play its own music instead
-of silence.
+`Music/<name>.ogg` relative to `Data`. `prepare_data_android.py` puts only the
+missing files in `DataAndroid/Overlay/Data/Music`, and the Android audio
+resolver checks that overlay before the development Data tree. Keeping the
+merge in the overlay matters in the default symlink mode: it avoids writing
+machine-specific links back into `Versions/Current/Data`. This is what makes
+the main menu play its own music instead of silence.
 
 On device the unit voice set costs about 780 MB, on top of the 3 GB the rest
 of the data already takes. That does not fit on a stock 12 GB emulator image alongside
@@ -500,6 +503,9 @@ in app-private storage:
 
 ```text
 <files>/DataAndroid/
+  Overlay/
+    Data/
+      Music/
   Data/
     Scenario/
     Consts/

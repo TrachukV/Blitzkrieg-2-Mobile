@@ -104,6 +104,16 @@ std::string ResolveAndroidAudioPath(const std::string& path) {
 
     const std::string relative = NormalizeRelativePath(path);
     const std::string data_root = GetPortPaths().data_root();
+    const std::string overlay_direct =
+            JoinPath(JoinPath(data_root, "Overlay"), relative);
+    if (IsRegularFile(overlay_direct)) {
+        return overlay_direct;
+    }
+    const std::string overlay_data =
+            JoinPath(JoinPath(JoinPath(data_root, "Overlay"), "Data"), relative);
+    if (IsRegularFile(overlay_data)) {
+        return overlay_data;
+    }
     const std::string direct = JoinPath(data_root, relative);
     if (IsRegularFile(direct)) {
         return direct;

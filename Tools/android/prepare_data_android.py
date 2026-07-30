@@ -30,9 +30,18 @@ UNIT_VOICE_SEGMENT = "acksetrpgstats"
 # The development Data tree ships a subset of the music: the battle tracks are
 # there, but the main menu theme and the per-party ambient and combat pieces
 # only live in the complete content tree. Descriptors name them all the same
-# way -- "Music/<name>.ogg", relative to Data -- so the two are merged.
+# way -- "Music/<name>.ogg", relative to Data.
+#
+# Keep the merge in Overlay/Data. In the default symlink mode DataAndroid/Data
+# points at Versions/Current/Data, so writing missing files below that path
+# would mutate the source checkout and leave machine-specific absolute links.
 MERGE_TREES = [
-    ("Complete/Music", Path("Data/Music"), {".ogg"}),
+    (
+        "Complete/Music",
+        Path("Overlay/Data/Music"),
+        Path("Data/Music"),
+        {".ogg"},
+    ),
 ]
 
 DEFAULT_EXCLUDE_SEGMENTS = [
@@ -346,14 +355,17 @@ def main() -> int:
             )
         )
 
-    for source_rel, destination_rel, suffixes in MERGE_TREES:
+    for source_rel, destination_rel, primary_rel, suffixes in MERGE_TREES:
         source = repo / source_rel
         destination = output / destination_rel
-        if not source.is_dir() or not destination.exists():
+        primary = output / primary_rel
+        if not source.is_dir():
             continue
         added = 0
         for item in sorted(source.iterdir()):
             if not item.is_file() or item.suffix.lower() not in suffixes:
+                continue
+            if (primary / item.name).exists():
                 continue
             target = destination / item.name
             if target.exists() or target.is_symlink():
