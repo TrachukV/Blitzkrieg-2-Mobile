@@ -1190,12 +1190,22 @@ alpha/additive conversion mode to bgfx. XDB light instances carry the same
 placement, cycle, speed, offset, and scale timing and produce an additive
 ground pulse through the shipped `LightFX/Flare_Texture.dds`; the unavailable
 desktop animated-light track is approximated with a fast flash envelope. The
-visible wreck remains for ten seconds. The earlier fixed `Fire2`–`Fire5` plus
+shipped `MachineryCombustion` effect now keeps its complete thirty-second
+cycle, and the visible wreck remains until the mission runtime resets. Infantry
+bodies clear after thirty seconds. The debug installer separately synchronizes
+`Scene/Effects/All/Destructions`, `Effects/_Lights`, and
+`Scene/TexAndMats/All/Effects`, so a previously staged data directory cannot
+silently leave a complex effect with zero emitters. The earlier fixed
+`Fire2`–`Fire5` plus
 `Explosion2`/`Explosion3` recipe remains only as a fallback when the content
 has no usable effect descriptor. Legacy effect DDS files that encode
 transparency through RGB
 luminance with a zero alpha channel receive a compatible alpha channel during
-GPU upload. Particle layers depth-test against the scene but do not write the
+GPU upload. Because the original per-particle size curves are compiled into
+desktop-only particle resources, Android derives their missing display scale
+from the shipped smoke, fire, and flash texture families instead of treating a
+64-pixel frame as a two-world-unit sprite. Particle layers depth-test against
+the scene but do not write the
 depth buffer, so overlapping fire and smoke remain visible.
 
 The first model-shadow layer projects every converted Granny vertex along one

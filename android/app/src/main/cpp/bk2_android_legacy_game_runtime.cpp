@@ -962,7 +962,11 @@ uint32_t AppendSceneEffectRecipe(
     }
     return static_cast<uint32_t>(
             std::lround(
-                    std::clamp(lifetime_seconds, 0.1f, 12.0f) *
+                    // Long-running combustion descriptors are what leave
+                    // the burning wrecks visible across an engagement.  The
+                    // previous twelve-second ceiling cut the shipped
+                    // MachineryCombustion 3s x 10-cycle recipe in half.
+                    std::clamp(lifetime_seconds, 0.1f, 60.0f) *
                     1000.0f));
 }
 
@@ -1248,7 +1252,14 @@ void CapturePresentationCorpse(
         corpse.entity.x = AI2Vis(position.x);
         corpse.entity.y = AI2Vis(position.y);
         corpse.entity.z = AI2Vis(position.z);
-        corpse.expires_millis = g_timer_millis + 10000;
+        // Infantry bodies eventually clear, while vehicle wrecks remain as
+        // battlefield state until the mission runtime is reset.  Removing a
+        // tank after ten seconds made both the cover state and the scene look
+        // unlike the desktop game.
+        corpse.expires_millis =
+                mechanized
+                ? std::numeric_limits<uint64_t>::max()
+                : g_timer_millis + 30000;
         g_presentation_corpses[unit_id] = corpse;
         ++g_presentation_death_count;
         PlatformRuntime::instance().log_info(
@@ -1357,7 +1368,13 @@ void CapturePresentationCorpse(
                         "; emitters=" +
                         std::to_string(effect.emitters.size()) +
                         "; lights=" +
-                        std::to_string(effect.lights.size()));
+                        std::to_string(effect.lights.size()) +
+                        "; lifetime_ms=" +
+                        std::to_string(effect.lifetime_millis) +
+                        "; position=" +
+                        std::to_string(effect.x) + "," +
+                        std::to_string(effect.y) + "," +
+                        std::to_string(effect.z));
             }
         }
     }

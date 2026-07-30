@@ -5477,6 +5477,23 @@ void AppendDescriptorParticleEffect(
                     width * aspect,
                     0.8f,
                     16.0f);
+            // The XDB instance keeps the emitter scale, but the actual
+            // per-particle size curves live in the desktop-only compiled
+            // particle resource. A raw 64 px frame therefore became a
+            // two-world-unit postage stamp on Android. Recover the missing
+            // semantic scale from the shipped texture family so vehicle
+            // combustion and explosion smoke read at the original camera
+            // distance without replacing their art or timing.
+            if (smoke) {
+                width = std::clamp(width * 2.4f, 1.6f, 18.0f);
+                height = std::clamp(height * 2.6f, 1.8f, 22.0f);
+            } else if (fire) {
+                width = std::clamp(width * 2.75f, 1.8f, 14.0f);
+                height = std::clamp(height * 3.5f, 2.4f, 18.0f);
+            } else if (flash) {
+                width = std::clamp(width * 2.0f, 1.2f, 14.0f);
+                height = std::clamp(height * 2.0f, 1.2f, 14.0f);
+            }
             const float random_seed =
                     static_cast<float>(
                             (seed & 0xffff) +

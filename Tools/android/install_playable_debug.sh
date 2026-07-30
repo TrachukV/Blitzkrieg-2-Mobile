@@ -14,18 +14,14 @@ CONVERTED_GEOMETRY="${CONVERTED_ROOT}/Geometries"
 TRACE_ASSET_ROOT="Scene/TexAndMats/All/Units/Weapons"
 INFANTRY_TRACE="${TRACE_ASSET_ROOT}/GunShotTraceBlue_Texture.dds"
 MECHANIZED_TRACE="${TRACE_ASSET_ROOT}/GunShotTraceOrange_texture.dds"
-MUZZLE_FLASH_ASSET_ROOT="Scene/TexAndMats/All/Effects/Shots/CannonShot"
-MUZZLE_FLASH="${MUZZLE_FLASH_ASSET_ROOT}/Shot8_Texture.dds"
-DESTRUCTION_FIRE_ASSET_ROOT="Scene/TexAndMats/All/Effects/Destructions/Fire"
-DESTRUCTION_SMOKE_ASSET_ROOT="Scene/TexAndMats/All/Effects/Explosions/GroundExplosion"
-DESTRUCTION_EFFECT_ASSETS=(
-    "${DESTRUCTION_FIRE_ASSET_ROOT}/Fire2_Texture.dds"
-    "${DESTRUCTION_FIRE_ASSET_ROOT}/Fire3_Texture.dds"
-    "${DESTRUCTION_FIRE_ASSET_ROOT}/Fire4_Texture.dds"
-    "${DESTRUCTION_FIRE_ASSET_ROOT}/Fire5_Texture.dds"
-    "${DESTRUCTION_SMOKE_ASSET_ROOT}/Explosion2_Texture.dds"
-    "${DESTRUCTION_SMOKE_ASSET_ROOT}/Explosion3_Texture.dds"
-)
+EFFECT_TEXTURE_ROOT="Scene/TexAndMats/All/Effects"
+DESTRUCTION_DESCRIPTOR_ROOT="Scene/Effects/All/Destructions"
+EFFECT_LIGHT_DESCRIPTOR_ROOT="Effects/_Lights"
+MUZZLE_FLASH="${EFFECT_TEXTURE_ROOT}/Shots/CannonShot/Shot8_Texture.dds"
+MACHINERY_COMBUSTION_DESCRIPTOR="${DESTRUCTION_DESCRIPTOR_ROOT}/MachineryCombustion_ComplexEffect.xdb"
+MACHINERY_COMBUSTION_TEXTURE="${EFFECT_TEXTURE_ROOT}/Destructions/Fire/FireSic0_Texture.dds"
+EFFECT_FLARE_TEXTURE="${EFFECT_TEXTURE_ROOT}/LightFX/Flare_Texture.dds"
+EFFECT_LIGHT_DESCRIPTOR="${EFFECT_LIGHT_DESCRIPTOR_ROOT}/Fires/Default_AnimLight.xdb"
 
 if [[ -z "${ANDROID_HOME:-}" &&
       -d "${HOME}/Library/Android/sdk" ]]; then
@@ -119,32 +115,31 @@ if [[ -d "${DATA_SOURCE}/Overlay" ]]; then
             -C files/DataAndroid/Overlay
 fi
 
-MISSING_EFFECT_ASSET=0
-for EFFECT_ASSET in "${DESTRUCTION_EFFECT_ASSETS[@]}"; do
-    if [[ ! -r "${DATA_SOURCE}/Data/${EFFECT_ASSET}" ]]; then
-        MISSING_EFFECT_ASSET=1
-    fi
-done
 if [[ ! -r "${DATA_SOURCE}/Data/${INFANTRY_TRACE}" ||
       ! -r "${DATA_SOURCE}/Data/${MECHANIZED_TRACE}" ||
       ! -r "${DATA_SOURCE}/Data/${MUZZLE_FLASH}" ||
-      "${MISSING_EFFECT_ASSET}" == "1" ]]; then
-    echo "Original tracer, muzzle-flash, fire, or smoke textures are missing from DataAndroid." >&2
-    echo "Add the Units/Weapons and Effects paths documented in android/README.md to the sparse checkout." >&2
+      ! -r "${DATA_SOURCE}/Data/${MACHINERY_COMBUSTION_DESCRIPTOR}" ||
+      ! -r "${DATA_SOURCE}/Data/${MACHINERY_COMBUSTION_TEXTURE}" ||
+      ! -r "${DATA_SOURCE}/Data/${EFFECT_FLARE_TEXTURE}" ||
+      ! -r "${DATA_SOURCE}/Data/${EFFECT_LIGHT_DESCRIPTOR}" ]]; then
+    echo "Original tracer, particle, destruction, or light assets are missing from DataAndroid." >&2
+    echo "Add the Units/Weapons, Scene/Effects/All/Destructions, Effects/_Lights, and Scene/TexAndMats/All/Effects paths documented in android/README.md to the sparse checkout." >&2
     exit 1
 fi
-echo "Staging original tracer, muzzle-flash, fire, and smoke textures into app-private storage."
+echo "Staging original tracer, particle, destruction, and light assets into app-private storage."
 "${ADB_BIN}" shell run-as "${PACKAGE}" \
     mkdir -p "files/DataAndroid/Data/${TRACE_ASSET_ROOT}"
 "${ADB_BIN}" shell run-as "${PACKAGE}" \
-    mkdir -p "files/DataAndroid/Data/${MUZZLE_FLASH_ASSET_ROOT}"
+    mkdir -p "files/DataAndroid/Data/Scene/Effects/All"
 "${ADB_BIN}" shell run-as "${PACKAGE}" \
-    mkdir -p "files/DataAndroid/Data/${DESTRUCTION_FIRE_ASSET_ROOT}"
+    mkdir -p "files/DataAndroid/Data/Effects"
 "${ADB_BIN}" shell run-as "${PACKAGE}" \
-    mkdir -p "files/DataAndroid/Data/${DESTRUCTION_SMOKE_ASSET_ROOT}"
+    mkdir -p "files/DataAndroid/Data/Scene/TexAndMats/All"
 COPYFILE_DISABLE=1 tar -chf - -C "${DATA_SOURCE}/Data" \
-    "${INFANTRY_TRACE}" "${MECHANIZED_TRACE}" "${MUZZLE_FLASH}" \
-    "${DESTRUCTION_EFFECT_ASSETS[@]}" |
+    "${INFANTRY_TRACE}" "${MECHANIZED_TRACE}" \
+    "${DESTRUCTION_DESCRIPTOR_ROOT}" \
+    "${EFFECT_LIGHT_DESCRIPTOR_ROOT}" \
+    "${EFFECT_TEXTURE_ROOT}" |
     "${ADB_BIN}" shell run-as "${PACKAGE}" tar -xf - \
         -C files/DataAndroid/Data
 

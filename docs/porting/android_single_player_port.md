@@ -73,10 +73,20 @@ run, the scenario triggered `AntitankMineExplosion_ComplexEffect.xdb`; Android
 loaded both emitters, their shipped `Explosion1_Texture.dds`, and one light
 instance backed by `Flare_Texture.dds`, then removed the effect after its
 declared lifetime without a process failure.
+Long combustion recipes retain their full descriptor lifetime instead of being
+clipped to twelve seconds. Mechanized wreck geometry remains until the mission
+runtime resets, while infantry bodies clear after thirty seconds. The debug
+installer explicitly stages `Scene/Effects/All/Destructions`, `Effects/_Lights`,
+and the shipped effect texture tree even when the rest of the multi-gigabyte
+game data was already present on the device.
 The old fixed fire/smoke recipe now runs only when no usable descriptor exists.
 The compiled desktop particle keyframe tracks are not available to this path,
 so per-particle position, size, and color curves remain a billboard
 approximation rather than a byte-identical rendering of the original effect.
+The approximation derives the missing visual size from the original smoke,
+fire, and flash texture families; using the DDS pixel dimensions alone made a
+64-pixel combustion frame only two world units wide and effectively invisible
+at the desktop camera distance.
 The compiled animated-light intensity track is similarly represented by a
 short flash envelope rather than a full dynamic-light shader.
 The Android build packages the required 4.2 MiB original HUD subset and the TGA
