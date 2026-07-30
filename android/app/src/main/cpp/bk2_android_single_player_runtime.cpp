@@ -247,6 +247,16 @@ struct ConvertedGeometryVertex {
     float v;
 };
 
+// Skeleton bone carried by the converted mesh, so a turret or gun subtree can
+// be posed at runtime the way CMOUnitMechanical::AIUpdateTurretTurn does.
+struct ConvertedGeometryBone {
+    std::string name;
+    int32_t parent = -1;
+    float pivot_x = 0.0f;
+    float pivot_y = 0.0f;
+    float pivot_z = 0.0f;
+};
+
 struct ConvertedGeometryGroup {
     uint32_t material_index = 0;
     uint32_t first_index = 0;
@@ -259,6 +269,9 @@ struct ConvertedGeometryPart {
     float animation_duration_seconds = 0.0f;
     std::vector<uint32_t> triangle_indices;
     std::vector<ConvertedGeometryGroup> groups;
+    // Skeleton and per-vertex dominant bone, present from format 4 on.
+    std::vector<ConvertedGeometryBone> bones;
+    std::vector<uint32_t> vertex_bones;
 };
 
 struct ConvertedGeometry {
@@ -1542,7 +1555,7 @@ const ConvertedGeometry* LoadConvertedGeometry(
         std::memcmp(magic, expected_magic, sizeof(magic)) != 0 ||
         !ReadExact(&input, &version, sizeof(version)) ||
         !ReadExact(&input, &mesh_count, sizeof(mesh_count)) ||
-        (version != 1 && version != 2 && version != 3) ||
+        (version < 1 || version > 4) ||
         mesh_count == 0 ||
         mesh_count > 128) {
         missing_converted_geometries->insert(record_id);
@@ -1652,6 +1665,54 @@ const ConvertedGeometry* LoadConvertedGeometry(
                         material_index,
                         first_triangle * 3,
                         triangle_count * 3});
+            }
+        }
+        if (version >= 4) {
+            uint32_t bone_count = 0;
+            if (!ReadExact(&input, &bone_count, sizeof(bone_count)) ||
+                bone_count > 512) {
+                missing_converted_geometries->insert(record_id);
+                return nullptr;
+            }
+            part.bones.reserve(bone_count);
+            for (uint32_t bone_index = 0;
+                 bone_index < bone_count;
+                 ++bone_index) {
+                ConvertedGeometryBone bone;
+                uint32_t name_length = 0;
+                if (!ReadExact(&input, &bone.parent, sizeof(bone.parent)) ||
+                    !ReadExact(
+                            &input, &bone.pivot_x, sizeof(bone.pivot_x)) ||
+                    !ReadExact(
+                            &input, &bone.pivot_y, sizeof(bone.pivot_y)) ||
+                    !ReadExact(
+                            &input, &bone.pivot_z, sizeof(bone.pivot_z)) ||
+                    !ReadExact(
+                            &input, &name_length, sizeof(name_length)) ||
+                    name_length > 256) {
+                    missing_converted_geometries->insert(record_id);
+                    return nullptr;
+                }
+                // Names are padded to a four byte boundary.
+                const uint32_t padded = (name_length + 3u) & ~3u;
+                std::vector<char> name(padded, '\0');
+                if (padded > 0 &&
+                    !ReadExact(&input, name.data(), padded)) {
+                    missing_converted_geometries->insert(record_id);
+                    return nullptr;
+                }
+                bone.name.assign(name.data(), name_length);
+                part.bones.push_back(std::move(bone));
+            }
+            part.vertex_bones.resize(vertex_count);
+            if (vertex_count > 0 &&
+                !ReadExact(
+                        &input,
+                        part.vertex_bones.data(),
+                        static_cast<size_t>(vertex_count) *
+                                sizeof(uint32_t))) {
+                missing_converted_geometries->insert(record_id);
+                return nullptr;
             }
         }
         geometry.parts.push_back(std::move(part));

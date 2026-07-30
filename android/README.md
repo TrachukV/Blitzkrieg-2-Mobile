@@ -662,6 +662,25 @@ layout exactly: the panel lands at `x=779` with 170x42 buttons at `y=143`
 button also reports its original reaction id (`single_player`, `multiplayer`,
 `options`, `LoadMod`, `Credits`, `Encyclopedia`, `exit`, `single_player_back`).
 
+Vehicle animation needs skeleton data the mesh cache did not carry. Vehicle
+models in this game ship an empty `<Animations/>` list with a `Skeleton`
+alongside their geometry: the desktop engine poses them procedurally, rotating
+the turret and gun bones through `CMOUnitMechanical::AIUpdateTurretTurn` from
+the AI's `SAINotifyTurretTurn` feed. The converted mesh cache only stored
+position, normal and UV, so no bone could be posed at runtime and vehicles
+rendered static.
+
+The cache format is now version 4 and carries, per mesh, the skeleton's bones
+with their parent index, bind-pose pivot and name, plus the dominant bone of
+every vertex. Older caches still load; they simply have no bone table.
+Regenerating the cache is what turns bone posing on.
+
+Converting the first 120 numeric geometries produces exactly the bones the
+posing needs: geometry 1030 carries `Basis`, `Basis_a`, `Turret01`,
+`MainBarrel01`, `LMainGun01` and `Tracks1`, and 1035 carries `FrontWheels01`,
+`FrontWheels02`, `RearWheels03` and `RearWheels04`. Those names are what the
+shipped `SMechUnitRPGStats` platforms reference through `RotatePoint`.
+
 Unit movement is the legacy simulation's, not the shell's. The port used to
 advance a single selected unit itself: after issuing the order it drove the
 unit straight at the target with `SetCenter` at a fixed 24 world units per

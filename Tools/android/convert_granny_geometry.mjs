@@ -6,7 +6,7 @@ import { basename, join, resolve } from "node:path";
 import { parseAnimated, parseModel, poseSkeletonAt } from "granny-ro-js";
 
 const MAGIC = Buffer.from([0x42, 0x4b, 0x32, 0x4d, 0x53, 0x48, 0x31, 0x00]);
-const FORMAT_VERSION = 3;
+const FORMAT_VERSION = 4;
 const VERTEX_FLOAT_COUNT = 8;
 const DEFAULT_ANIMATION_FRAME_COUNT = 16;
 const MAX_MESH_COUNT = 128;
@@ -181,6 +181,66 @@ function canUseAnimation(mesh, skeleton, animation) {
   );
 }
 
+
+// Bind-pose world pivot of a bone. The parser exposes the inverse bind matrix,
+// so the pivot is -(R^T . t) of that inverse for the orthonormal rotations
+// these skeletons use.
+function bonePivot(bone) {
+  const m = bone.inverseWorldTransform;
+  if (!m || m.length < 16) {
+    return [0, 0, 0];
+  }
+  const t = [m[12], m[13], m[14]];
+  return [
+    -(m[0] * t[0] + m[1] * t[1] + m[2] * t[2]),
+    -(m[4] * t[0] + m[5] * t[1] + m[6] * t[2]),
+    -(m[8] * t[0] + m[9] * t[1] + m[10] * t[2]),
+  ];
+}
+
+// Index of the skeleton bone that carries most of a vertex's weight, which is
+// what the runtime needs to rotate a turret or gun subtree.
+function dominantBones(mesh, skeleton) {
+  const none = 0xffffffff;
+  const result = new Array(mesh.vertexCount).fill(none);
+  if (!skeleton || !mesh.boneBindings || mesh.boneBindings.length === 0) {
+    return result;
+  }
+  const skeletonIndexByName = new Map(
+    skeleton.bones.map((bone, index) => [bone.name, index]),
+  );
+  const bindingToSkeleton = mesh.boneBindings.map((binding) =>
+    skeletonIndexByName.get(binding.name),
+  );
+  for (let vertex = 0; vertex < mesh.vertexCount; ++vertex) {
+    const weights = mesh.vertexWeights[vertex] ?? [];
+    let best = none;
+    let bestWeight = 0;
+    for (const weight of weights) {
+      const skeletonIndex = bindingToSkeleton[weight.boneIndex];
+      if (!Number.isInteger(skeletonIndex) || weight.weight <= bestWeight) {
+        continue;
+      }
+      best = skeletonIndex;
+      bestWeight = weight.weight;
+    }
+    result[vertex] = best;
+  }
+  return result;
+}
+
+function boneTableBytes(skeleton) {
+  if (!skeleton) {
+    return 4;
+  }
+  let bytes = 4;
+  for (const bone of skeleton.bones) {
+    const name = Buffer.byteLength(bone.name ?? "", "utf8");
+    bytes += 4 + 12 + 4 + ((name + 3) & ~3);
+  }
+  return bytes;
+}
+
 function animatedFrames(mesh, skeleton, animation, frameCount) {
   if (!canUseAnimation(mesh, skeleton, animation)) {
     return [];
@@ -268,6 +328,8 @@ function serializeGeometry(parsed, animation, animationFrameCount) {
     byteLength += frameCount * mesh.vertexCount * VERTEX_FLOAT_COUNT * 4;
     byteLength += mesh.indexCount * 4;
     byteLength += groups.length * 12;
+    byteLength += boneTableBytes(parsed.skeletons[0]);
+    byteLength += mesh.vertexCount * 4;
   }
   const output = Buffer.allocUnsafe(byteLength);
   MAGIC.copy(output, 0);
@@ -341,6 +403,36 @@ function serializeGeometry(parsed, animation, animationFrameCount) {
       output.writeUInt32LE(group.triFirst, offset + 4);
       output.writeUInt32LE(group.triCount, offset + 8);
       offset += 12;
+    }
+
+    const skeleton = parsed.skeletons[0];
+    const bones = skeleton ? skeleton.bones : [];
+    output.writeUInt32LE(bones.length, offset);
+    offset += 4;
+    for (const bone of bones) {
+      output.writeInt32LE(
+        Number.isInteger(bone.parentIndex) ? bone.parentIndex : -1,
+        offset,
+      );
+      const pivot = bonePivot(bone);
+      output.writeFloatLE(Number.isFinite(pivot[0]) ? pivot[0] : 0, offset + 4);
+      output.writeFloatLE(Number.isFinite(pivot[1]) ? pivot[1] : 0, offset + 8);
+      output.writeFloatLE(
+        Number.isFinite(pivot[2]) ? pivot[2] : 0,
+        offset + 12,
+      );
+      const name = Buffer.from(bone.name ?? "", "utf8");
+      const padded = (name.length + 3) & ~3;
+      output.writeUInt32LE(name.length, offset + 16);
+      offset += 20;
+      name.copy(output, offset);
+      output.fill(0, offset + name.length, offset + padded);
+      offset += padded;
+    }
+    const dominant = dominantBones(mesh, skeleton);
+    for (let vertex = 0; vertex < mesh.vertexCount; ++vertex) {
+      output.writeUInt32LE(dominant[vertex] >>> 0, offset);
+      offset += 4;
     }
   }
   return { output, meshes };
