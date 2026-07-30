@@ -21,6 +21,7 @@
 #include "GameX/GetConsts.h"
 #include "Misc/StrProc.h"
 #include "GameX/DBGameRoot.h"
+#include "GameX/DBScenario.h"
 #include "GameX/dbgameoptions.h"
 #include "System/GlobalVars.h"
 #include "Sound/DBMusicSystem.h"
@@ -88,6 +89,9 @@ std::mutex g_menu_mutex;
 std::map<std::string, std::string> g_text_cache;
 // Visibility overrides applied by the menu's own navigation reactions.
 std::map<std::string, bool> g_visibility_overrides;
+// IWindow::SetTexture equivalents: a controller swaps a window's art at
+// runtime, keyed by the window name the original looks it up by.
+std::map<std::string, const NDb::STexture*> g_texture_overrides;
 
 // Template windows a screen's runtime content is cloned from, captured while
 // the descriptor graph is walked.
@@ -257,6 +261,23 @@ NDb::SWindowPlacement MergePlacement(
     placement.verAllign.Merge(shared->placement.verAllign.Get());
     placement.horAllign.Merge(shared->placement.horAllign.Get());
     return placement;
+}
+
+std::string TexturePath(const NDb::STexture* texture) {
+    if (texture == nullptr) {
+        return std::string();
+    }
+    std::string path = NormalizeResourcePath(
+            ToStdString(texture->szDestName));
+    if (path.empty() || path.find('/') != std::string::npos) {
+        return path;
+    }
+    std::string folder = NormalizeResourcePath(
+            ToStdString(NDb::GetFolderName(texture->GetDBID())));
+    while (!folder.empty() && folder.back() == '/') {
+        folder.pop_back();
+    }
+    return folder.empty() ? path : folder + "/" + path;
 }
 
 std::string BackgroundTexturePath(const NDb::SBackground* background) {
@@ -562,15 +583,20 @@ void AppendBackgroundQuads(
         float x,
         float y,
         float width,
-        float height) {
-    if (background == nullptr || !background->pTexture) {
+        float height,
+        const NDb::STexture* texture_override = nullptr) {
+    if (background == nullptr) {
         return;
     }
-    const NDb::STexture* texture_desc = background->pTexture.GetPtr();
+    const NDb::STexture* texture_desc = texture_override != nullptr
+            ? texture_override
+            : background->pTexture.GetPtr();
     if (texture_desc == nullptr) {
         return;
     }
-    const int texture = TextureIndex(BackgroundTexturePath(background));
+    const int texture = texture_override != nullptr
+            ? TextureIndex(TexturePath(texture_override))
+            : TextureIndex(BackgroundTexturePath(background));
     if (texture < 0) {
         return;
     }
@@ -1204,8 +1230,17 @@ void CollectWindow(
     // carries the label, and replacing one with the other loses whichever
     // the button kept its caption in.
     if (visible && shared != nullptr) {
+        const std::map<std::string, const NDb::STexture*>::const_iterator
+                texture_override = g_texture_overrides.find(node.name);
         AppendBackgroundQuads(
-                shared->pBackground.GetPtr(), x, y, width, height);
+                shared->pBackground.GetPtr(),
+                x,
+                y,
+                width,
+                height,
+                texture_override == g_texture_overrides.end()
+                        ? nullptr
+                        : texture_override->second);
         if (window->GetTypeID() == NDb::SWindowMSButton::typeID) {
             const NDb::SWindowMSButtonShared* button_shared =
                     dynamic_cast<const NDb::SWindowMSButtonShared*>(shared);
@@ -1707,10 +1742,52 @@ void ApplyScreenInitVisibilityLocked(const std::string& screen_ref) {
     }
 }
 
+// The chapter the player is about to fight. Campaign progress is not tracked
+// yet, so this is the campaign's first chapter, which is what a new campaign
+// opens on.
+const NDb::SChapter* SelectedChapter() {
+    const NDb::SGameRoot* root = NGameX::GetGameRoot();
+    if (root == nullptr ||
+        g_selected_campaign < 0 ||
+        static_cast<size_t>(g_selected_campaign) >= root->campaigns.size()) {
+        return nullptr;
+    }
+    const NDb::SCampaign* campaign =
+            root->campaigns[g_selected_campaign].GetPtr();
+    if (campaign == nullptr || campaign->chapters.empty()) {
+        return nullptr;
+    }
+    return campaign->chapters[0].GetPtr();
+}
+
+// CInterfaceChapterMapMenu sets the map artwork on the window it looks up as
+// "ChapterMap"; the descriptor ships that window with no texture of its own.
+void ApplyScreenInitTexturesLocked(const std::string& screen_ref) {
+    if (screen_ref != "UI/Game/Menu/ChapterMap_WindowScreen.xdb") {
+        return;
+    }
+    const NDb::SChapter* chapter = SelectedChapter();
+    if (chapter == nullptr || !chapter->pMapPicture) {
+        return;
+    }
+    const NDb::STexture* picture = chapter->pMapPicture.GetPtr();
+    if (picture == nullptr) {
+        return;
+    }
+    g_texture_overrides["ChapterMap"] = picture;
+    std::ostringstream report;
+    report << "original_menu_chapter_map=" << TexturePath(picture)
+           << "; campaign=" << g_selected_campaign
+           << "; missions=" << chapter->missionPath.size();
+    PlatformRuntime::instance().log_info(report.str());
+}
+
 bool LoadOriginalMenuScreen(const std::string& screen_ref) {
     std::lock_guard<std::mutex> guard(g_menu_mutex);
     g_visibility_overrides.clear();
+    g_texture_overrides.clear();
     ApplyScreenInitVisibilityLocked(screen_ref);
+    ApplyScreenInitTexturesLocked(screen_ref);
     g_options_category = 0;
     return RebuildMenuScreenLocked(screen_ref);
 }
