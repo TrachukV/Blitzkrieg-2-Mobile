@@ -314,6 +314,12 @@ struct ConvertedGeometryPart {
 
 struct ConvertedGeometry {
     std::vector<ConvertedGeometryPart> parts;
+    // Tallest vertex in model space, measured once at load. At the shipped
+    // camera a lift of h world units moves a point h*cos(pitch) worth of
+    // pixels up the screen, so a constant offset that clears a tank carries
+    // an infantryman's bar a whole rank up onto the unit behind him. The
+    // model's own roof is the only offset that is right for every unit.
+    float max_z = 0.0f;
 };
 
 enum class GeometryMaterialAlphaMode : uint8_t {
@@ -1876,6 +1882,14 @@ const ConvertedGeometry* LoadConvertedGeometry(
         }
         ClassifyWheelPart(&part);
         geometry.parts.push_back(std::move(part));
+    }
+    for (const ConvertedGeometryPart& part : geometry.parts) {
+        if (part.damage_stage > 0) {
+            continue;
+        }
+        for (const ConvertedGeometryVertex& vertex : part.vertices) {
+            geometry.max_z = std::max(geometry.max_z, vertex.z);
+        }
     }
 
     auto inserted = converted_geometries->emplace(
@@ -4784,7 +4798,8 @@ float CameraDegreesToRadians(float degrees);
 // on screen the way the original's screen-space bar does.
 void AppendUnitHealthBar(
         WorldObjectMesh* mesh,
-        const Bk2PresentationEntity& entity) {
+        const Bk2PresentationEntity& entity,
+        float model_height) {
     if (mesh == nullptr) {
         return;
     }
@@ -4826,8 +4841,13 @@ void AppendUnitHealthBar(
             : 1.0f;
     // The model's own height is world units; the clearance above it is
     // pixels, like the bar itself, so it does not drift with the zoom.
-    const float lift = (mechanized ? 3.4f : 2.4f) * scale +
-            30.0f * world_per_pixel;
+    // The model height is already world units; scaling it again by the
+    // selection scale is what pushed a tank's bar onto the tank behind it.
+    // Only the fallback, for a unit whose geometry has not loaded, uses it.
+    const float lift = (model_height > 0.1f
+                                ? model_height
+                                : (mechanized ? 2.8f : 2.0f) * scale) +
+            6.0f * world_per_pixel;
 
     // Upright billboard: right turns with the camera, up is world up.
     const float right_x = std::cos(g_camera.yaw_radians);
@@ -6266,7 +6286,21 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
             ++g_active_unit_indicator_count;
         }
         if (!dead) {
-            AppendUnitHealthBar(&combined, entity);
+            const GeometryBinding& bar_binding = ResolveGeometryBinding(
+                    entity.rpg_stats_path_hash,
+                    entity.rpg_stats_record_id,
+                    entity.geometry_record_id,
+                    -1);
+            const ConvertedGeometry* bar_geometry = LoadConvertedGeometry(
+                    bar_binding.geometry_record_id,
+                    ConvertedAnimationVariant::Base);
+            AppendUnitHealthBar(
+                    &combined,
+                    entity,
+                    bar_geometry == nullptr
+                            ? 0.0f
+                            : bar_geometry->max_z *
+                                    bar_binding.geometry_scale);
         }
         AppendEntityModel(
                 &combined,
