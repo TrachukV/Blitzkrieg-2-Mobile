@@ -17,6 +17,7 @@ final class NativeBridge {
     static native String runMusicStreamingProbe();
     static native String runLegacyMusicProbe();
     static native String runSinglePlayerCatalogProbe();
+    static native String runOriginalMenuProbe();
     static native String startFirstCampaignMissionProbe();
     static native String runMissionProgressionProbe();
     static native String runMissionCheckpointProbe();

@@ -56,6 +56,7 @@ add_library(blitzkrieg2 SHARED
     bk2_android_pcm_stream.cpp
     bk2_android_database.cpp
     bk2_android_main.cpp
+    bk2_android_menu_runtime.cpp
     bk2_android_mission_runtime.cpp
     bk2_android_mission_script.cpp
     bk2_android_platform.cpp

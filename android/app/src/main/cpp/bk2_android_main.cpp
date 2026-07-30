@@ -2,6 +2,7 @@
 #include "bk2_android_audio_output.h"
 #include "bk2_android_database.h"
 #include "bk2_android_legacy_game_runtime.h"
+#include "bk2_android_menu_runtime.h"
 #include "bk2_android_platform.h"
 #include "bk2_android_single_player_runtime.h"
 #include "bk2_android_vfs.h"
@@ -429,7 +430,12 @@ extern "C" void android_main(android_app* app) {
         platform.log_info(std::string("Save root: ") + paths.save_root());
         platform.log_info(std::string("Log root: ") + paths.log_root());
     }
-    if (bk2::android::InitializeLegacyDatabase() &&
+    if (bk2::android::InitializeLegacyDatabase()) {
+        bk2::android::LoadOriginalMenuScreen(
+                "UI/Game/Menu/MainMenu_WindowScreen.xdb");
+        platform.log_info(bk2::android::OriginalMenuReport());
+    }
+    if (bk2::android::IsLegacyDatabaseOpen() &&
         bk2::android::InitializeSinglePlayerRuntime()) {
         platform.log_info(bk2::android::SinglePlayerRuntimeReport());
     } else {

@@ -317,6 +317,7 @@ git sparse-checkout add \
   Versions/Current/Data/Other/Text \
   Versions/Current/Data/Scene/TexAndMats/All/Effects \
   Versions/Current/Data/Scene/TexAndMats/All/Units/Weapons \
+  Versions/Current/Data/UI \
   Versions/Current/Data/Weapons
 
 python3 tools/android/prepare_data_android.py \
@@ -586,6 +587,28 @@ bank has no column above the minimum precipice height, so the original draws
 nothing there either. US1.2, which has no river, rendered all 36 crag
 precipices and 36 foot skirts with 7 GPU-ready layers. `bStayedOnTerrain`
 bottom-vertex snapping and the `SPeak` collection are still follow-up work.
+
+The original menu screens are now loaded from their shipped descriptors rather
+than approximated by an Android layout. `bk2_android_menu_runtime.*` resolves
+`UI/Game/Menu/MainMenu_WindowScreen.xdb` through the Android game database,
+walks the `SWindowScreenShared` child graph, merges every unset instance
+placement field with its shared descriptor the way `CWindow::InitByDesc` does,
+and positions each window with the desktop `NUITools::ApplyWindowAlign` rules
+(`EPA_LOW_END`, `ERA_CENTER`, `EPA_HIGH_END`, and the `EPA_MARGIN` case that
+also rewrites the window size). Rects stay in the original 1024x768 interface
+space the screens are authored in. Button background and pushed textures come
+from the first `SButtonVisualState`, and captions come from the shipped UTF-16
+files; the inline markup tags such as `<val button>` are split off as the
+requested text style instead of being drawn as characters.
+
+On the ARM64 emulator the main menu screen resolves 28 windows, 16 buttons, 20
+textures, and 17 captions. The right-hand column reproduces the original
+layout exactly: the panel lands at `x=779` with 170x42 buttons at `y=143`
+(Single Player), `193` (Multiplayer), `243` (Options), `293` (Load MOD), `343`
+(Credits), `393` (Encyclopedia), and `443` (Exit), matching the shipped
+`-15,65` / `290x470` panel placement with its 60-pixel button margins. Each
+button also reports its original reaction id (`single_player`, `multiplayer`,
+`options`, `LoadMod`, `Credits`, `Encyclopedia`, `exit`, `single_player_back`).
 
 The Android content step now decodes the shipped Granny format-6/Oodle0
 geometry into a small native `BK2MSH1` cache. The complete current pass yields
