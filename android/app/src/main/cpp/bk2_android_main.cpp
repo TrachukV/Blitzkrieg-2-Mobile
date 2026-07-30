@@ -105,6 +105,8 @@ struct TouchCameraState {
 
 TouchCameraState g_touch_camera;
 
+bool g_menu_input_active = false;
+
 void ResetTouchCameraState() {
     g_touch_camera = TouchCameraState{};
 }
@@ -173,9 +175,43 @@ void QueueTouchSelectionOverlay() {
             kSelectionBorderArgb);
 }
 
+// Routes a pointer through the original menu screen instead of the
+// battlefield while no mission is running.
+void PollMenuInput(android_input_buffer* input_buffer) {
+    for (uint64_t i = 0; i < input_buffer->motionEventsCount; ++i) {
+        const GameActivityMotionEvent& event = input_buffer->motionEvents[i];
+        const int action = event.action & AMOTION_EVENT_ACTION_MASK;
+        if (event.pointerCount == 0) {
+            continue;
+        }
+        const float x = GameActivityPointerAxes_getX(&event.pointers[0]);
+        const float y = GameActivityPointerAxes_getY(&event.pointers[0]);
+        const uint32_t width = bk2::android::RenderBackend().width();
+        const uint32_t height = bk2::android::RenderBackend().height();
+        if (action == AMOTION_EVENT_ACTION_DOWN) {
+            bk2::android::PressOriginalMenu(x, y, width, height);
+        } else if (action == AMOTION_EVENT_ACTION_UP) {
+            const std::string reaction =
+                    bk2::android::ReleaseOriginalMenu(x, y, width, height);
+            if (reaction == "single_player") {
+                bk2::android::ShowOriginalMenuPanel("SinglePlayerMenu");
+            } else if (reaction == "single_player_back") {
+                bk2::android::ShowOriginalMenuPanel("MainMenu");
+            }
+        } else if (action == AMOTION_EVENT_ACTION_CANCEL) {
+            bk2::android::CancelOriginalMenuPress();
+        }
+    }
+    android_app_clear_motion_events(input_buffer);
+}
+
 void PollInput(android_app* app) {
     android_input_buffer* input_buffer = android_app_swap_input_buffers(app);
     if (input_buffer == nullptr) {
+        return;
+    }
+    if (g_menu_input_active) {
+        PollMenuInput(input_buffer);
         return;
     }
 
@@ -445,6 +481,7 @@ extern "C" void android_main(android_app* app) {
     const bool menu_active =
             !bk2::android::IsSinglePlayerRuntimeReady() &&
             bk2::android::IsOriginalMenuReady();
+    g_menu_input_active = menu_active;
     bool first_render_frame_logged = false;
     bool mission_script_tick_logged = false;
     uint64_t last_tick_millis = platform.monotonic_millis();

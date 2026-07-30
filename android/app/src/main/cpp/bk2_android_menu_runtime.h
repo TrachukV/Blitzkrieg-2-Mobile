@@ -27,6 +27,9 @@ struct MenuWindowNode {
     std::string text_format;
     std::string action;
     int depth = 0;
+    // Range of pressed-state quads built for this button.
+    int pressed_quad_begin = 0;
+    int pressed_quad_end = 0;
 };
 
 // Loads the original main menu screen descriptor graph through the Android
@@ -39,6 +42,26 @@ void ShutdownOriginalMenuRuntime();
 // independently to the active resolution, so the same mapping is used here.
 void RenderOriginalMenu(uint32_t screen_width, uint32_t screen_height);
 void ReleaseOriginalMenuGpuResources();
+
+// Touch is mapped back through the original ScreenToVirtual transform and hit
+// tested against the resolved button rects. A release inside the pressed
+// button runs its descriptor reaction.
+void PressOriginalMenu(
+        float screen_x,
+        float screen_y,
+        uint32_t screen_width,
+        uint32_t screen_height);
+void CancelOriginalMenuPress();
+// Returns the reaction id of the activated button, or an empty string.
+std::string ReleaseOriginalMenu(
+        float screen_x,
+        float screen_y,
+        uint32_t screen_width,
+        uint32_t screen_height);
+
+// Shows one of the screen's top-level panels and hides the others, which is
+// what the shipped main_menu_init / single_player_submenu reactions do.
+bool ShowOriginalMenuPanel(const std::string& panel_name);
 
 bool IsOriginalMenuReady();
 const std::vector<MenuWindowNode>& OriginalMenuNodes();

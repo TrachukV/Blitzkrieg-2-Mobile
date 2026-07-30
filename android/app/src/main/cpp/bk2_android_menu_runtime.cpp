@@ -56,6 +56,8 @@ struct MenuQuad {
 };
 
 std::vector<MenuQuad> g_quads;
+std::vector<MenuQuad> g_pressed_quads;
+int g_pressed_button = -1;
 std::vector<std::string> g_texture_paths;
 std::vector<uint16_t> g_texture_handles;
 std::map<std::string, CObj<NGfx::CTexture>> g_menu_textures;
@@ -69,6 +71,9 @@ size_t g_caption_count = 0;
 bool g_ready = false;
 std::mutex g_menu_mutex;
 std::map<std::string, std::string> g_text_cache;
+// Visibility overrides applied by the menu's own navigation reactions.
+std::map<std::string, bool> g_visibility_overrides;
+const char* const kMenuPanels[] = {"MainMenu", "SinglePlayerMenu"};
 
 std::string ToStdString(const string& value) {
     return std::string(value.c_str());
@@ -953,7 +958,13 @@ void CollectWindow(
     node.height = height;
     // CWindow::Reposition defers an invisible window and nothing under it is
     // drawn, so a hidden branch contributes no geometry.
-    const bool visible = parent_visible && window->bVisible;
+    bool window_visible = window->bVisible;
+    const std::map<std::string, bool>::const_iterator override =
+            g_visibility_overrides.find(ToStdString(window->szName));
+    if (override != g_visibility_overrides.end()) {
+        window_visible = override->second;
+    }
+    const bool visible = parent_visible && window_visible;
     node.visible = visible;
     node.enabled = window->bEnabled;
     node.depth = depth;
@@ -1011,6 +1022,33 @@ void CollectWindow(
                 node.caption, node.text_format, x, y, width, height);
     }
 
+    if (node.button && visible && shared != nullptr) {
+        const NDb::SWindowMSButtonShared* button_shared =
+                dynamic_cast<const NDb::SWindowMSButtonShared*>(shared);
+        if (button_shared != nullptr &&
+            !button_shared->visualStates.empty()) {
+            // Build the pushed presentation once so a press can swap to it
+            // without re-walking the descriptor graph.
+            const size_t normal_end = g_quads.size();
+            AppendBackgroundQuads(
+                    button_shared->visualStates[0].pushed.pBackground.GetPtr(),
+                    x,
+                    y,
+                    width,
+                    height);
+            AppendTextQuads(
+                    node.caption, node.text_format, x, y, width, height);
+            node.pressed_quad_begin =
+                    static_cast<int>(g_pressed_quads.size());
+            g_pressed_quads.insert(
+                    g_pressed_quads.end(),
+                    g_quads.begin() + normal_end,
+                    g_quads.end());
+            node.pressed_quad_end = static_cast<int>(g_pressed_quads.size());
+            g_quads.resize(normal_end);
+        }
+    }
+
     if (node.button) {
         ++g_button_count;
     }
@@ -1057,11 +1095,44 @@ void CollectWindow(
 
 }  // namespace
 
+namespace {
+
+bool RebuildMenuScreenLocked(const std::string& screen_ref);
+
+}  // namespace
+
+bool ShowOriginalMenuPanel(const std::string& panel_name) {
+    std::lock_guard<std::mutex> guard(g_menu_mutex);
+    if (!g_ready) {
+        return false;
+    }
+    bool known = false;
+    for (const char* panel : kMenuPanels) {
+        const bool selected = panel_name == panel;
+        known = known || selected;
+        g_visibility_overrides[panel] = selected;
+    }
+    if (!known) {
+        return false;
+    }
+    const std::string screen_ref = g_screen_ref;
+    return RebuildMenuScreenLocked(screen_ref);
+}
+
 bool LoadOriginalMenuScreen(const std::string& screen_ref) {
     std::lock_guard<std::mutex> guard(g_menu_mutex);
+    g_visibility_overrides.clear();
+    return RebuildMenuScreenLocked(screen_ref);
+}
+
+namespace {
+
+bool RebuildMenuScreenLocked(const std::string& screen_ref) {
     g_nodes.clear();
     g_quads.clear();
     g_texture_paths.clear();
+    g_pressed_quads.clear();
+    g_pressed_button = -1;
     g_texture_handles.clear();
     g_fonts.clear();
     g_render_logged = false;
@@ -1100,6 +1171,8 @@ bool LoadOriginalMenuScreen(const std::string& screen_ref) {
     return g_ready;
 }
 
+}  // namespace
+
 void RenderOriginalMenu(uint32_t screen_width, uint32_t screen_height) {
     std::lock_guard<std::mutex> guard(g_menu_mutex);
     if (!g_ready || screen_width == 0 || screen_height == 0) {
@@ -1121,14 +1194,14 @@ void RenderOriginalMenu(uint32_t screen_width, uint32_t screen_height) {
         }
     }
     size_t submitted = 0;
-    for (const MenuQuad& quad : g_quads) {
+    const auto submit = [&](const MenuQuad& quad) {
         if (quad.texture < 0 ||
             static_cast<size_t>(quad.texture) >= g_texture_handles.size()) {
-            continue;
+            return;
         }
         const uint16_t handle = g_texture_handles[quad.texture];
         if (handle == UINT16_MAX) {
-            continue;
+            return;
         }
         RenderBackend().queue_textured_rect(
                 quad.x * scale_x,
@@ -1142,6 +1215,22 @@ void RenderOriginalMenu(uint32_t screen_width, uint32_t screen_height) {
                 quad.v1,
                 quad.argb);
         ++submitted;
+    };
+    for (const MenuQuad& quad : g_quads) {
+        submit(quad);
+    }
+    // A held button repaints in its pushed presentation on top of the normal
+    // one, which is what the desktop button state swap looks like.
+    if (g_pressed_button >= 0 &&
+        static_cast<size_t>(g_pressed_button) < g_nodes.size()) {
+        const MenuWindowNode& node =
+                g_nodes[static_cast<size_t>(g_pressed_button)];
+        for (int index = node.pressed_quad_begin;
+             index < node.pressed_quad_end &&
+             static_cast<size_t>(index) < g_pressed_quads.size();
+             ++index) {
+            submit(g_pressed_quads[static_cast<size_t>(index)]);
+        }
     }
     if (!g_render_logged && submitted > 0) {
         std::ostringstream report;
@@ -1162,6 +1251,85 @@ void RenderOriginalMenu(uint32_t screen_width, uint32_t screen_height) {
     }
 }
 
+namespace {
+
+// CWindowScreen::Pick maps the pointer back into the virtual screen before
+// hit testing, so the same inverse of VirtualToScreen is used here.
+int PickMenuButtonLocked(
+        float screen_x,
+        float screen_y,
+        uint32_t screen_width,
+        uint32_t screen_height) {
+    if (screen_width == 0 || screen_height == 0) {
+        return -1;
+    }
+    const float virtual_x = screen_x * kVirtualScreenWidth /
+            static_cast<float>(screen_width);
+    const float virtual_y = screen_y * kVirtualScreenHeight /
+            static_cast<float>(screen_height);
+    // Later children draw on top, so the last match wins.
+    int picked = -1;
+    for (size_t index = 0; index < g_nodes.size(); ++index) {
+        const MenuWindowNode& node = g_nodes[index];
+        if (!node.button || !node.visible || !node.enabled ||
+            node.pressed_quad_end <= node.pressed_quad_begin) {
+            continue;
+        }
+        if (virtual_x >= node.x &&
+            virtual_x <= node.x + node.width &&
+            virtual_y >= node.y &&
+            virtual_y <= node.y + node.height) {
+            picked = static_cast<int>(index);
+        }
+    }
+    return picked;
+}
+
+}  // namespace
+
+void PressOriginalMenu(
+        float screen_x,
+        float screen_y,
+        uint32_t screen_width,
+        uint32_t screen_height) {
+    std::lock_guard<std::mutex> guard(g_menu_mutex);
+    if (!g_ready) {
+        return;
+    }
+    g_pressed_button = PickMenuButtonLocked(
+            screen_x, screen_y, screen_width, screen_height);
+}
+
+void CancelOriginalMenuPress() {
+    std::lock_guard<std::mutex> guard(g_menu_mutex);
+    g_pressed_button = -1;
+}
+
+std::string ReleaseOriginalMenu(
+        float screen_x,
+        float screen_y,
+        uint32_t screen_width,
+        uint32_t screen_height) {
+    std::lock_guard<std::mutex> guard(g_menu_mutex);
+    const int pressed = g_pressed_button;
+    g_pressed_button = -1;
+    if (!g_ready || pressed < 0) {
+        return std::string();
+    }
+    // The shipped menu buttons trigger on release, matching BCST_ON_RELEASE.
+    const int released = PickMenuButtonLocked(
+            screen_x, screen_y, screen_width, screen_height);
+    if (released != pressed) {
+        return std::string();
+    }
+    const MenuWindowNode& node = g_nodes[static_cast<size_t>(pressed)];
+    std::ostringstream report;
+    report << "original_menu_action=" << node.action
+           << "; button=" << (node.name.empty() ? node.caption : node.name);
+    PlatformRuntime::instance().log_info(report.str());
+    return node.action;
+}
+
 void ReleaseOriginalMenuGpuResources() {
     std::lock_guard<std::mutex> guard(g_menu_mutex);
     g_menu_textures.clear();
@@ -1175,6 +1343,8 @@ void ShutdownOriginalMenuRuntime() {
     g_quads.clear();
     g_texture_paths.clear();
     g_texture_handles.clear();
+    g_pressed_quads.clear();
+    g_pressed_button = -1;
     g_menu_textures.clear();
     g_fonts.clear();
     g_render_logged = false;
