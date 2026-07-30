@@ -547,6 +547,75 @@ def fnv1a64(value: str) -> int:
     return result
 
 
+def stats_visual_binding(
+    data_root: Path,
+    stats_path: Path,
+    stats: ET.Element,
+    converted_geometry_root: Path | None,
+) -> tuple[int, list[int], list[str], float, list[str]] | None:
+    visual = child(stats, "visualObject")
+    if visual is not None:
+        vis_path = reference_path(
+            data_root,
+            stats_path,
+            visual.attrib.get("href", ""),
+        )
+        binding = (
+            binding_from_vis_path(
+                data_root,
+                vis_path,
+                converted_geometry_root,
+            )
+            if vis_path is not None
+            else None
+        )
+        if binding is not None:
+            return binding
+
+    # Several shipped campaign maps still point at the pre-migration
+    # Foo/whole/*RPGStats.xdb. Those descriptors reference the removed
+    # Scene/Geoms tree, while the sibling Foo/*RPGStats.xdb with the same
+    # record ID points at the converted current model.
+    if stats_path.parent.name.casefold() != "whole":
+        return None
+    try:
+        sibling_relative = (
+            stats_path.parent.parent / stats_path.name
+        ).relative_to(data_root)
+    except ValueError:
+        return None
+    sibling_path = resolve_relative_path(
+        str(data_root),
+        sibling_relative.as_posix(),
+    )
+    sibling = (
+        parse_root(sibling_path)
+        if sibling_path is not None and sibling_path != stats_path
+        else None
+    )
+    if sibling is None or sibling.attrib.get(
+        "ObjectRecordID"
+    ) != stats.attrib.get("ObjectRecordID"):
+        return None
+    sibling_visual = child(sibling, "visualObject")
+    if sibling_visual is None:
+        return None
+    sibling_vis_path = reference_path(
+        data_root,
+        sibling_path,
+        sibling_visual.attrib.get("href", ""),
+    )
+    return (
+        binding_from_vis_path(
+            data_root,
+            sibling_vis_path,
+            converted_geometry_root,
+        )
+        if sibling_vis_path is not None
+        else None
+    )
+
+
 def build_index(
     data_root: Path,
     converted_geometry_root: Path | None = None,
@@ -567,38 +636,28 @@ def build_index(
         if not record.isdigit():
             continue
         path_hash = fnv1a64(normalized_path(stats_path, data_root))
-        visual = child(stats, "visualObject")
-        if visual is not None:
-            vis_path = reference_path(
-                data_root,
-                stats_path,
-                visual.attrib.get("href", ""),
+        binding = stats_visual_binding(
+            data_root,
+            stats_path,
+            stats,
+            converted_geometry_root,
+        )
+        if binding is not None:
+            (
+                geometry_record_id,
+                material_quantities,
+                textures,
+                geometry_scale,
+                alpha_modes,
+            ) = binding
+            result[(path_hash, -1)] = (
+                int(record),
+                geometry_record_id,
+                material_quantities,
+                textures,
+                geometry_scale,
+                alpha_modes,
             )
-            binding = (
-                binding_from_vis_path(
-                    data_root,
-                    vis_path,
-                    converted_geometry_root,
-                )
-                if vis_path is not None
-                else None
-            )
-            if binding is not None:
-                (
-                    geometry_record_id,
-                    material_quantities,
-                    textures,
-                    geometry_scale,
-                    alpha_modes,
-                ) = binding
-                result[(path_hash, -1)] = (
-                    int(record),
-                    geometry_record_id,
-                    material_quantities,
-                    textures,
-                    geometry_scale,
-                    alpha_modes,
-                )
         segments = child(stats, "segments")
         if segments is not None:
             for frame_index, item in enumerate(segments):

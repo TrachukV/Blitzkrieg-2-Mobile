@@ -894,6 +894,12 @@ as `damaged1_visobj.xdb` to the available `damaged01.xdb`. This restores the
 original building meshes on GB3.1 and reduces its remaining geometry fallbacks
 from 377 to 33.
 
+Some campaign maps also retain pre-migration
+`Foo/whole/*RPGStats.xdb` paths whose visual objects no longer exist. If the
+normal visual chain is broken, the index may use `Foo/*RPGStats.xdb` only when
+both descriptors have the same `ObjectRecordID`. This restores the matching
+current model without substituting an unrelated object.
+
 Touch controls currently implemented:
 
 - tap a green player unit or formation to select it;
