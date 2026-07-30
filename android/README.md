@@ -321,6 +321,11 @@ git sparse-checkout add \
   Versions/Current/Data/Fonts \
   Versions/Current/Data/Weapons
 
+# The menu click sound descriptor lives under the 18k-file acknowledgement
+# tree, so add just that one path rather than the whole directory.
+git sparse-checkout add \
+  Versions/Current/Data/Other/AckSetRPGStats/ButtonClickSound.xdb
+
 python3 tools/android/prepare_data_android.py \
   --output DataAndroid \
   --mode symlink
