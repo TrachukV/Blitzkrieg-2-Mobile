@@ -4436,7 +4436,12 @@ bool AppendConvertedGeometry(
             const float upper = 1.0f -
                     static_cast<float>(part.damage_stage - 1) * 0.25f;
             const float lower = upper - 0.25f;
-            if (health_fraction > upper || health_fraction <= lower) {
+            // Full health has no damage overlay. At an exact quarter
+            // boundary the next stage owns the value (0.75 -> d2), matching
+            // the existing lower-exclusive intervals.
+            if (health_fraction >= 1.0f ||
+                health_fraction > upper ||
+                health_fraction <= lower) {
                 continue;
             }
         }
