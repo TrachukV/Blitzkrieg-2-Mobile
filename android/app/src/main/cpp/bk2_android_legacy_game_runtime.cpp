@@ -1349,14 +1349,27 @@ bool QueueLegacyHudNotification(
 struct AndroidTurretAim {
     float yaw_radians = 0.0f;
     float pitch_radians = 0.0f;
+    // The two axes arrive in separate notifications. Posing a yaw that never
+    // arrived would swing the turret to world north.
+    bool has_yaw = false;
+    bool has_pitch = false;
 };
 
-std::unordered_map<int, AndroidTurretAim> g_turret_aim;
+// The aim arrives per platform, and a unit can carry a dozen of them, so the
+// key has to say which one turned.
+std::unordered_map<uint64_t, AndroidTurretAim> g_turret_aim;
+
+uint64_t TurretAimKey(int unit_id, int platform) {
+    return (static_cast<uint64_t>(static_cast<uint32_t>(unit_id)) << 16) |
+            static_cast<uint64_t>(static_cast<uint16_t>(platform));
+}
 // Rotating platform bone per unit stats record, cached while entities are
 // published so the renderer can pose that subtree.
 // Keyed by the stats path hash: GetRecordID() is -1 for these runtime stats,
 // so every unit would otherwise collapse onto one entry.
 std::unordered_map<uint64_t, std::string> g_turret_bones;
+std::unordered_map<uint64_t, std::string> g_gun_bones;
+std::unordered_map<uint64_t, int> g_turret_platforms;
 size_t g_turret_update_count = 0;
 // Distance each unit has covered, accumulated from its own centre so wheels
 // roll at the speed the simulation actually moves the vehicle.
@@ -1368,7 +1381,7 @@ struct AndroidUnitOdometer {
 };
 
 std::unordered_map<int, AndroidUnitOdometer> g_unit_odometers;
-bool g_turret_bone_logged = false;
+size_t g_turret_bone_log_count = 0;
 
 // AI angles are a 16-bit turn; the desktop converts with AI2VisRad.
 float AiAngleToRadians(WORD angle) {
@@ -1377,6 +1390,9 @@ float AiAngleToRadians(WORD angle) {
 }
 
 const std::string& LegacyMechTurretBone(uint64_t stats_path_hash);
+const std::string& LegacyMechGunBone(uint64_t stats_path_hash);
+int LegacyMechTurretPlatform(uint64_t stats_path_hash);
+int SelectMechTurretPlatform(const NDb::SMechUnitRPGStats* mech_stats);
 
 void DrainLegacyClientUpdates() {
     if (g_ai_logic == nullptr) {
@@ -1405,12 +1421,16 @@ void DrainLegacyClientUpdates() {
                 dynamic_cast<SAITurretUpdate*>(update.GetPtr());
         if (turret != nullptr) {
             ++g_turret_update_count;
-            AndroidTurretAim& aim = g_turret_aim[turret->info.nObjUniqueID];
+            AndroidTurretAim& aim = g_turret_aim[TurretAimKey(
+                    turret->info.nObjUniqueID,
+                    turret->info.nPlantform)];
             const float angle = AiAngleToRadians(turret->info.wAngle);
             if (turret->eUpdateType == ACTION_NOTIFY_TURRET_VERT_TURN) {
                 aim.pitch_radians = angle;
+                aim.has_pitch = true;
             } else {
                 aim.yaw_radians = angle;
+                aim.has_yaw = true;
             }
             continue;
         }
@@ -1573,8 +1593,14 @@ void PublishPresentationEntities() {
         }
         const CVec3& center = unit->GetCenter();
         const NDb::SUnitBaseRPGStats* stats = unit->GetStats();
-        const std::unordered_map<int, AndroidTurretAim>::const_iterator aim =
-                g_turret_aim.find(unit->GetUniqueIdQU());
+        const int turret_platform = LegacyMechTurretPlatform(
+                StatsPathHash(unit->GetStats()));
+        const std::unordered_map<uint64_t, AndroidTurretAim>::const_iterator
+                aim = turret_platform < 0
+                ? g_turret_aim.end()
+                : g_turret_aim.find(TurretAimKey(
+                          unit->GetUniqueIdQU(),
+                          turret_platform));
         AndroidUnitOdometer& odometer =
                 g_unit_odometers[unit->GetUniqueIdQU()];
         if (odometer.seeded) {
@@ -1591,24 +1617,37 @@ void PublishPresentationEntities() {
             g_turret_bones.find(stats_key) == g_turret_bones.end()) {
             const NDb::SMechUnitRPGStats* mech_stats =
                     dynamic_cast<const NDb::SMechUnitRPGStats*>(stats);
-            const std::string bone =
-                    mech_stats != nullptr && !mech_stats->platforms.empty()
-                            ? std::string(
-                                      mech_stats->platforms[0]
-                                              .szRotatePoint.c_str())
-                            : std::string();
+            // Platform 0 is the hull: its rotate point is the skeleton root
+            // and turning it would swing the whole vehicle. The turret is the
+            // first platform that names a different bone.
+            const int platform = SelectMechTurretPlatform(mech_stats);
+            g_turret_platforms[stats_key] = platform;
+            const std::string bone = platform >= 0
+                    ? std::string(mech_stats->platforms[platform]
+                                          .szRotatePoint.c_str())
+                    : std::string();
             g_turret_bones[stats_key] = bone;
-            if (!bone.empty() && !g_turret_bone_logged) {
+            // The gun carries its own rotate point: that is the pivot the
+            // barrel elevates about, separate from the platform's yaw pivot.
+            const std::string gun_bone =
+                    platform >= 0 &&
+                            !mech_stats->platforms[platform].guns.empty()
+                            ? std::string(mech_stats->platforms[platform]
+                                                  .guns[0]
+                                                  .szRotatePoint.c_str())
+                            : std::string();
+            g_gun_bones[stats_key] = gun_bone;
+            if (!bone.empty() && g_turret_bone_log_count < 4) {
                 std::ostringstream report;
                 report << "mech_turret_bone=" << bone
+                       << "; platform=" << platform
                        << "; stats_key=" << stats_key
                        << "; platforms="
                        << (mech_stats == nullptr
                                    ? 0
                                    : mech_stats->platforms.size())
+                       << "; gun_bone=" << gun_bone
                        << "; turret_updates=" << g_turret_update_count;
-                PlatformRuntime::instance().log_info(report.str());
-                g_turret_bone_logged = true;
             }
         }
         Bk2PresentationEntity entity{
@@ -1626,8 +1665,10 @@ void PublishPresentationEntities() {
                 GeometryRecordId(stats),
                 stats == nullptr ? 1.0f : stats->fSelectionScale,
                 aim == g_turret_aim.end() ? 0.0f : aim->second.yaw_radians,
-                aim == g_turret_aim.end() ? 0.0f : aim->second.pitch_radians,
-                aim == g_turret_aim.end() ? 0u : 1u,
+                aim == g_turret_aim.end() || !aim->second.has_pitch
+                        ? 0.0f
+                        : aim->second.pitch_radians,
+                aim != g_turret_aim.end() && aim->second.has_yaw ? 1u : 0u,
                 odometer.distance};
         entities.push_back(entity);
         if ((entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) != 0) {
@@ -1807,6 +1848,27 @@ bool FeedTerrainObserver(
     return true;
 }
 
+int LegacyMechTurretPlatform(uint64_t stats_path_hash) {
+    const std::unordered_map<uint64_t, int>::const_iterator found =
+            g_turret_platforms.find(stats_path_hash);
+    return found == g_turret_platforms.end() ? -1 : found->second;
+}
+
+int SelectMechTurretPlatform(const NDb::SMechUnitRPGStats* mech_stats) {
+    if (mech_stats == nullptr || mech_stats->platforms.size() < 2) {
+        return -1;
+    }
+    const std::string hull(mech_stats->platforms[0].szRotatePoint.c_str());
+    for (size_t index = 1; index < mech_stats->platforms.size(); ++index) {
+        const std::string bone(
+                mech_stats->platforms[index].szRotatePoint.c_str());
+        if (!bone.empty() && bone != hull) {
+            return static_cast<int>(index);
+        }
+    }
+    return -1;
+}
+
 void ResetReportState() {
     g_ready = false;
     g_ai_logic = nullptr;
@@ -1849,9 +1911,11 @@ void ResetReportState() {
     g_presentation_corpses.clear();
     g_turret_aim.clear();
     g_turret_bones.clear();
+    g_gun_bones.clear();
+    g_turret_platforms.clear();
     g_turret_update_count = 0;
     g_unit_odometers.clear();
-    g_turret_bone_logged = false;
+    g_turret_bone_log_count = 0;
     g_presentation_death_count = 0;
     g_mission_outcome.store(kLegacyMissionRunning);
     g_pending_mission_outcome.store(kLegacyMissionRunning);
@@ -2030,6 +2094,13 @@ const std::string& LegacyMechTurretBone(uint64_t stats_path_hash) {
     const std::unordered_map<uint64_t, std::string>::const_iterator found =
             g_turret_bones.find(stats_path_hash);
     return found == g_turret_bones.end() ? kNone : found->second;
+}
+
+const std::string& LegacyMechGunBone(uint64_t stats_path_hash) {
+    static const std::string kNone;
+    const std::unordered_map<uint64_t, std::string>::const_iterator found =
+            g_gun_bones.find(stats_path_hash);
+    return found == g_gun_bones.end() ? kNone : found->second;
 }
 
 // A unit that dies while selected used to stay selected forever, and every

@@ -156,6 +156,8 @@ size_t g_crag_texture_gpu_count = 0;
 std::unordered_set<std::string> g_crag_texture_paths;
 bool g_crag_texture_logged = false;
 bool g_turret_pose_logged = false;
+bool g_wheel_roll_logged = false;
+size_t g_wheel_roll_part_count = 0;
 WorldObjectMesh g_static_world_object_mesh;
 // Static layers whose texture scrolls (rivers). They have to be rebuilt every
 // frame, so they live apart from the geometry that is uploaded once.
@@ -278,6 +280,13 @@ struct ConvertedGeometryPart {
     // Skeleton and per-vertex dominant bone, present from format 4 on.
     std::vector<ConvertedGeometryBone> bones;
     std::vector<uint32_t> vertex_bones;
+    // Set when the whole part hangs off a road-wheel bone, so it can be
+    // rolled about its axle as the vehicle covers ground. Classified once at
+    // load; the per-frame path only reads it.
+    bool wheel_roll = false;
+    float wheel_pivot_y = 0.0f;
+    float wheel_pivot_z = 0.0f;
+    float wheel_radius = 0.0f;
 };
 
 struct ConvertedGeometry {
@@ -1501,6 +1510,56 @@ bool ReadExact(std::ifstream* input, void* output, size_t size) {
     return input->good();
 }
 
+// Vehicle models name the running gear; a cover panel is not a wheel.
+bool IsWheelBoneName(const std::string& name) {
+    if (name.find("WheelsCover") != std::string::npos) {
+        return false;
+    }
+    return name.find("Wheel") != std::string::npos ||
+            name.find("ReaWheels") != std::string::npos;
+}
+
+// A rigidly bound part carries exactly one bone, which is what the converter
+// writes for vehicle running gear.
+void ClassifyWheelPart(ConvertedGeometryPart* part) {
+    if (part == nullptr ||
+        part->bones.empty() ||
+        part->vertex_bones.size() != part->vertices.size() ||
+        part->vertices.empty()) {
+        return;
+    }
+    const uint32_t bone = part->vertex_bones.front();
+    if (bone >= part->bones.size()) {
+        return;
+    }
+    for (uint32_t vertex_bone : part->vertex_bones) {
+        if (vertex_bone != bone) {
+            return;
+        }
+    }
+    if (!IsWheelBoneName(part->bones[bone].name)) {
+        return;
+    }
+    const float pivot_y = part->bones[bone].pivot_y;
+    const float pivot_z = part->bones[bone].pivot_z;
+    float radius_squared = 0.0f;
+    for (const ConvertedGeometryVertex& vertex : part->vertices) {
+        const float offset_y = vertex.y - pivot_y;
+        const float offset_z = vertex.z - pivot_z;
+        radius_squared = std::max(
+                radius_squared,
+                offset_y * offset_y + offset_z * offset_z);
+    }
+    const float radius = std::sqrt(radius_squared);
+    if (!std::isfinite(radius) || radius < 0.05f) {
+        return;
+    }
+    part->wheel_roll = true;
+    part->wheel_pivot_y = pivot_y;
+    part->wheel_pivot_z = pivot_z;
+    part->wheel_radius = radius;
+}
+
 const ConvertedGeometry* LoadConvertedGeometry(
         int record_id,
         ConvertedAnimationVariant animation_variant) {
@@ -1721,6 +1780,7 @@ const ConvertedGeometry* LoadConvertedGeometry(
                 return nullptr;
             }
         }
+        ClassifyWheelPart(&part);
         geometry.parts.push_back(std::move(part));
     }
 
@@ -4167,7 +4227,10 @@ bool AppendConvertedGeometry(
         int frame_index,
         const std::string& turret_bone = std::string(),
         float turret_yaw = 0.0f,
-        bool turret_aim_valid = false) {
+        bool turret_aim_valid = false,
+        float travelled_distance = 0.0f,
+        const std::string& gun_bone = std::string(),
+        float gun_pitch = 0.0f) {
     if (mesh == nullptr) {
         return false;
     }
@@ -4334,6 +4397,54 @@ bool AppendConvertedGeometry(
         }
         const float turret_cosine = std::cos(turret_local);
         const float turret_sine = std::sin(turret_local);
+        // The barrel elevates about the gun's own rotate point, in the
+        // turret's rest frame; the platform yaw above then carries it round.
+        size_t gun_bone_index = part.bones.size();
+        if (pose_turret && !gun_bone.empty()) {
+            for (size_t index = 0; index < part.bones.size(); ++index) {
+                if (part.bones[index].name == gun_bone) {
+                    gun_bone_index = index;
+                    break;
+                }
+            }
+        }
+        const bool pose_gun =
+                gun_bone_index < part.bones.size() &&
+                part.bones[gun_bone_index].parent >= 0 &&
+                gun_pitch != 0.0f;
+        const std::vector<bool> gun_subtree = pose_gun
+                ? ConvertedGeometryBoneSubtree(part, gun_bone)
+                : std::vector<bool>();
+        const float gun_pivot_y =
+                pose_gun ? part.bones[gun_bone_index].pivot_y : 0.0f;
+        const float gun_pivot_z =
+                pose_gun ? part.bones[gun_bone_index].pivot_z : 0.0f;
+        const float gun_cosine = std::cos(gun_pitch);
+        const float gun_sine = std::sin(gun_pitch);
+        // Road wheels turn with the ground the vehicle has covered, not with
+        // time, so a stopped vehicle keeps its wheels still and a reversing
+        // one turns them back.
+        const bool roll_wheel =
+                part.wheel_roll && travelled_distance != 0.0f;
+        const float wheel_angle = roll_wheel
+                ? -travelled_distance / part.wheel_radius
+                : 0.0f;
+        const float wheel_cosine = std::cos(wheel_angle);
+        const float wheel_sine = std::sin(wheel_angle);
+        if (roll_wheel) {
+            ++g_wheel_roll_part_count;
+            if (!g_wheel_roll_logged) {
+                std::ostringstream report;
+                report << "mech_wheel_roll=active"
+                       << "; radius=" << part.wheel_radius
+                       << "; pivot=" << part.wheel_pivot_y
+                       << "," << part.wheel_pivot_z
+                       << "; distance=" << travelled_distance
+                       << "; angle=" << wheel_angle;
+                PlatformRuntime::instance().log_info(report.str());
+                g_wheel_roll_logged = true;
+            }
+        }
         for (size_t vertex_index = 0;
              vertex_index < vertices->size();
              ++vertex_index) {
@@ -4341,6 +4452,26 @@ bool AppendConvertedGeometry(
                     (*vertices)[vertex_index];
             float local_x = vertex.x;
             float local_y = vertex.y;
+            float local_z = vertex.z;
+            if (roll_wheel) {
+                const float offset_y = local_y - part.wheel_pivot_y;
+                const float offset_z = local_z - part.wheel_pivot_z;
+                local_y = part.wheel_pivot_y +
+                        wheel_cosine * offset_y - wheel_sine * offset_z;
+                local_z = part.wheel_pivot_z +
+                        wheel_sine * offset_y + wheel_cosine * offset_z;
+            }
+            if (pose_gun) {
+                const uint32_t bone = part.vertex_bones[vertex_index];
+                if (bone < gun_subtree.size() && gun_subtree[bone]) {
+                    const float offset_y = local_y - gun_pivot_y;
+                    const float offset_z = local_z - gun_pivot_z;
+                    local_y = gun_pivot_y +
+                            gun_cosine * offset_y - gun_sine * offset_z;
+                    local_z = gun_pivot_z +
+                            gun_sine * offset_y + gun_cosine * offset_z;
+                }
+            }
             if (pose_turret) {
                 const uint32_t bone = part.vertex_bones[vertex_index];
                 if (bone < turret_subtree.size() && turret_subtree[bone]) {
@@ -4359,7 +4490,7 @@ bool AppendConvertedGeometry(
                             (cosine * local_x - sine * local_y),
                     y + binding.geometry_scale *
                             (sine * local_x + cosine * local_y),
-                    z + binding.geometry_scale * vertex.z + 0.05f,
+                    z + binding.geometry_scale * local_z + 0.05f,
                     vertex.u,
                     vertex.v,
                     has_textures ? 0xffffffffu : abgr});
@@ -4636,7 +4767,10 @@ void AppendEntityModel(
                 -1,
                 LegacyMechTurretBone(entity.rpg_stats_path_hash),
                 entity.turret_yaw_radians,
-                entity.turret_aim_valid != 0u)) {
+                entity.turret_aim_valid != 0u,
+                entity.travelled_distance,
+                LegacyMechGunBone(entity.rpg_stats_path_hash),
+                entity.turret_pitch_radians)) {
         return;
     }
     ++g_converted_geometry_fallback_count;
@@ -5623,8 +5757,10 @@ void ReportTickBudgetLocked(std::chrono::steady_clock::time_point now) {
            << "; entities=" << g_dynamic_rendered_object_count
            << "; culled=" << g_culled_entity_count
            << "; shadow_cache=" << g_projected_shadow_hulls.size()
+           << "; wheel_parts=" << g_wheel_roll_part_count
 ;
     PlatformRuntime::instance().log_info(report.str());
+    g_wheel_roll_part_count = 0;
     g_tick_budget = TickBudget();
     g_tick_budget.started = true;
     g_tick_budget.window_start = now;
