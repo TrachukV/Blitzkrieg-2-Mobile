@@ -48,6 +48,10 @@ typedef struct Bk2PresentationEntity {
     int32_t rpg_stats_record_id;
     int32_t geometry_record_id;
     float visual_scale;
+    /* Turret and gun angles the AI aimed this unit's platform to, in radians
+       relative to the hull. Zero when the unit has no rotating platform. */
+    float turret_yaw_radians;
+    float turret_pitch_radians;
 } Bk2PresentationEntity;
 
 typedef struct Bk2PresentationSnapshotInfo {

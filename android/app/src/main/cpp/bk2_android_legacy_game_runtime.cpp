@@ -1344,6 +1344,26 @@ bool QueueLegacyHudNotification(
     return true;
 }
 
+// Turret aim the AI last commanded for a unit's platform, interpolated toward
+// its end time the way CMOUnitMechanical::AIUpdateTurretTurn animates the bone.
+struct AndroidTurretAim {
+    float yaw_radians = 0.0f;
+    float pitch_radians = 0.0f;
+};
+
+std::unordered_map<int, AndroidTurretAim> g_turret_aim;
+// Rotating platform bone per unit stats record, cached while entities are
+// published so the renderer can pose that subtree.
+std::unordered_map<int, std::string> g_turret_bones;
+
+// AI angles are a 16-bit turn; the desktop converts with AI2VisRad.
+float AiAngleToRadians(WORD angle) {
+    constexpr float kTwoPi = 6.28318530717958647692f;
+    return static_cast<float>(angle) * kTwoPi / 65536.0f;
+}
+
+const std::string& LegacyMechTurretBone(int stats_record_id);
+
 void DrainLegacyClientUpdates() {
     if (g_ai_logic == nullptr) {
         return;
@@ -1365,6 +1385,18 @@ void DrainLegacyClientUpdates() {
                                       placement.z),
                     nullptr,
                     dead->dieAnimation.nParam);
+            continue;
+        }
+        SAITurretUpdate* turret =
+                dynamic_cast<SAITurretUpdate*>(update.GetPtr());
+        if (turret != nullptr) {
+            AndroidTurretAim& aim = g_turret_aim[turret->info.nObjUniqueID];
+            const float angle = AiAngleToRadians(turret->info.wAngle);
+            if (turret->eUpdateType == ACTION_NOTIFY_TURRET_VERT_TURN) {
+                aim.pitch_radians = angle;
+            } else {
+                aim.yaw_radians = angle;
+            }
             continue;
         }
         SAIHitUpdate* hit =
@@ -1526,6 +1558,20 @@ void PublishPresentationEntities() {
         }
         const CVec3& center = unit->GetCenter();
         const NDb::SUnitBaseRPGStats* stats = unit->GetStats();
+        const std::unordered_map<int, AndroidTurretAim>::const_iterator aim =
+                g_turret_aim.find(unit->GetUniqueIdQU());
+        if (stats != nullptr &&
+            g_turret_bones.find(stats->GetRecordID()) ==
+                    g_turret_bones.end()) {
+            const NDb::SMechUnitRPGStats* mech_stats =
+                    dynamic_cast<const NDb::SMechUnitRPGStats*>(stats);
+            g_turret_bones[stats->GetRecordID()] =
+                    mech_stats != nullptr && !mech_stats->platforms.empty()
+                            ? std::string(
+                                      mech_stats->platforms[0]
+                                              .szRotatePoint.c_str())
+                            : std::string();
+        }
         Bk2PresentationEntity entity{
                 unit->GetUniqueIdQU(),
                 static_cast<int32_t>(unit->GetPlayer()),
@@ -1539,7 +1585,9 @@ void PublishPresentationEntities() {
                 StatsPathHash(stats),
                 stats == nullptr ? -1 : stats->GetRecordID(),
                 GeometryRecordId(stats),
-                stats == nullptr ? 1.0f : stats->fSelectionScale};
+                stats == nullptr ? 1.0f : stats->fSelectionScale,
+                aim == g_turret_aim.end() ? 0.0f : aim->second.yaw_radians,
+                aim == g_turret_aim.end() ? 0.0f : aim->second.pitch_radians};
         entities.push_back(entity);
         if ((entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) != 0) {
             g_last_presentation_entities[entity.id] = entity;
@@ -1758,6 +1806,8 @@ void ResetReportState() {
     g_forwarded_unit_kill_error_count = 0;
     g_last_presentation_entities.clear();
     g_presentation_corpses.clear();
+    g_turret_aim.clear();
+    g_turret_bones.clear();
     g_presentation_death_count = 0;
     g_mission_outcome.store(kLegacyMissionRunning);
     g_pending_mission_outcome.store(kLegacyMissionRunning);
@@ -1929,6 +1979,13 @@ bool InitializeLegacyGameRuntime(
         return false;
     }
     return true;
+}
+
+const std::string& LegacyMechTurretBone(int stats_record_id) {
+    static const std::string kNone;
+    const std::unordered_map<int, std::string>::const_iterator found =
+            g_turret_bones.find(stats_record_id);
+    return found == g_turret_bones.end() ? kNone : found->second;
 }
 
 void TickLegacyGameRuntime(uint32_t elapsed_millis) {

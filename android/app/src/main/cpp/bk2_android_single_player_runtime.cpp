@@ -154,6 +154,7 @@ size_t g_crag_texture_count = 0;
 size_t g_crag_texture_gpu_count = 0;
 std::unordered_set<std::string> g_crag_texture_paths;
 bool g_crag_texture_logged = false;
+bool g_turret_pose_logged = false;
 WorldObjectMesh g_static_world_object_mesh;
 WorldObjectMesh g_world_object_mesh;
 CObj<NGfx::CTexture> g_terrain_texture;
@@ -4021,6 +4022,34 @@ void ResolveGeometryMaterialAlpha(
     }
 }
 
+
+// Vertices bound to a rotating platform bone (or any bone under it) are the
+// turret/gun subtree the desktop client poses with a bone mutator.
+std::vector<bool> ConvertedGeometryBoneSubtree(
+        const ConvertedGeometryPart& part,
+        const std::string& root_bone) {
+    std::vector<bool> in_subtree(part.bones.size(), false);
+    if (root_bone.empty() || part.bones.empty()) {
+        return in_subtree;
+    }
+    for (size_t index = 0; index < part.bones.size(); ++index) {
+        if (part.bones[index].name == root_bone) {
+            in_subtree[index] = true;
+        }
+    }
+    // Bones are stored parent-first, so one forward pass propagates.
+    for (size_t index = 0; index < part.bones.size(); ++index) {
+        const int32_t parent = part.bones[index].parent;
+        if (parent >= 0 &&
+            static_cast<size_t>(parent) < in_subtree.size() &&
+            in_subtree[static_cast<size_t>(parent)]) {
+            in_subtree[index] = true;
+        }
+    }
+    return in_subtree;
+}
+
+
 bool AppendConvertedGeometry(
         WorldObjectMesh* mesh,
         uint64_t stats_path_hash,
@@ -4037,7 +4066,9 @@ bool AppendConvertedGeometry(
         bool alpha_tested,
         bool cast_projected_shadow,
         bool cast_alpha_masked_shadow,
-        int frame_index) {
+        int frame_index,
+        const std::string& turret_bone = std::string(),
+        float turret_yaw = 0.0f) {
     if (mesh == nullptr) {
         return false;
     }
@@ -4140,12 +4171,85 @@ bool AppendConvertedGeometry(
                         animation_time_seconds);
         const uint32_t vertex_base =
                 static_cast<uint32_t>(mesh->vertices.size());
-        for (const ConvertedGeometryVertex& vertex : *vertices) {
+        // Pose the rotating platform before the hull heading is applied, so
+        // the turret angle stays relative to the hull like the original.
+        // Only a real sub-platform is posed. Many hulls name their root bone
+        // as the rotate point, and turning the root would spin the whole
+        // vehicle on top of the heading the hull already carries.
+        size_t turret_bone_index = part.bones.size();
+        for (size_t index = 0; index < part.bones.size(); ++index) {
+            if (part.bones[index].name == turret_bone) {
+                turret_bone_index = index;
+                break;
+            }
+        }
+        const bool pose_turret =
+                !turret_bone.empty() &&
+                part.vertex_bones.size() == vertices->size() &&
+                turret_bone_index < part.bones.size() &&
+                part.bones[turret_bone_index].parent >= 0;
+        const std::vector<bool> turret_subtree = pose_turret
+                ? ConvertedGeometryBoneSubtree(part, turret_bone)
+                : std::vector<bool>();
+        // The AI reports an absolute aim direction while the vertices are
+        // still in model space, so the hull heading is taken back out.
+        const float turret_local = turret_yaw - heading;
+        if (pose_turret && !g_turret_pose_logged) {
+            size_t posed = 0;
+            for (const bool member : turret_subtree) {
+                posed += member ? 1 : 0;
+            }
+            if (posed > 0) {
+                std::ostringstream report;
+                report << "mech_turret_pose=active"
+                       << "; bone=" << turret_bone
+                       << "; bones=" << part.bones.size()
+                       << "; subtree=" << posed
+                       << "/" << part.bones.size()
+                       << "; yaw=" << turret_yaw
+                       << "; local=" << turret_local;
+                PlatformRuntime::instance().log_info(report.str());
+                g_turret_pose_logged = true;
+            }
+        }
+        float pivot_x = 0.0f;
+        float pivot_y = 0.0f;
+        if (pose_turret) {
+            for (size_t index = 0; index < part.bones.size(); ++index) {
+                if (part.bones[index].name == turret_bone) {
+                    pivot_x = part.bones[index].pivot_x;
+                    pivot_y = part.bones[index].pivot_y;
+                    break;
+                }
+            }
+        }
+        const float turret_cosine = std::cos(turret_local);
+        const float turret_sine = std::sin(turret_local);
+        for (size_t vertex_index = 0;
+             vertex_index < vertices->size();
+             ++vertex_index) {
+            const ConvertedGeometryVertex& vertex =
+                    (*vertices)[vertex_index];
+            float local_x = vertex.x;
+            float local_y = vertex.y;
+            if (pose_turret) {
+                const uint32_t bone = part.vertex_bones[vertex_index];
+                if (bone < turret_subtree.size() && turret_subtree[bone]) {
+                    const float offset_x = local_x - pivot_x;
+                    const float offset_y = local_y - pivot_y;
+                    local_x = pivot_x +
+                            turret_cosine * offset_x -
+                            turret_sine * offset_y;
+                    local_y = pivot_y +
+                            turret_sine * offset_x +
+                            turret_cosine * offset_y;
+                }
+            }
             mesh->vertices.push_back(TerrainVertex{
                     x + binding.geometry_scale *
-                            (cosine * vertex.x - sine * vertex.y),
+                            (cosine * local_x - sine * local_y),
                     y + binding.geometry_scale *
-                            (sine * vertex.x + cosine * vertex.y),
+                            (sine * local_x + cosine * local_y),
                     z + binding.geometry_scale * vertex.z + 0.05f,
                     vertex.u,
                     vertex.v,
@@ -4426,7 +4530,9 @@ void AppendEntityModel(
                 false,
                 true,
                 false,
-                -1)) {
+                -1,
+                LegacyMechTurretBone(entity.rpg_stats_record_id),
+                entity.turret_yaw_radians)) {
         return;
     }
     ++g_converted_geometry_fallback_count;

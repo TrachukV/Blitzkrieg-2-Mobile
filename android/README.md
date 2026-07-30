@@ -681,6 +681,22 @@ posing needs: geometry 1030 carries `Basis`, `Basis_a`, `Turret01`,
 `FrontWheels02`, `RearWheels03` and `RearWheels04`. Those names are what the
 shipped `SMechUnitRPGStats` platforms reference through `RotatePoint`.
 
+The runtime half of that posing is now in place. `SAITurretUpdate` records
+from the AI feed are captured per unit - `ACTION_NOTIFY_TURRET_HOR_TURN` into
+a yaw and `ACTION_NOTIFY_TURRET_VERT_TURN` into a pitch, converting the 16-bit
+AI angle the way `AI2VisRad` does - and published on the presentation entity.
+Each mechanized unit's rotating platform bone comes from
+`SMechUnitRPGStats::platforms[0].szRotatePoint`, and the renderer rotates the
+vertices whose dominant bone is that bone or one of its descendants, around
+the bone's bind-pose pivot, before the hull heading is applied. The AI angle is
+absolute, so the hull heading is taken back out first.
+
+Posing is deliberately skipped when the named bone is the skeleton root. Many
+hulls name their root as the rotate point, and turning the root would spin the
+whole vehicle on top of the heading it already carries. On the ARM64 emulator
+US1.0 renders its vehicles intact with the bone-carrying cache and nothing is
+rotated that should not be.
+
 Unit movement is the legacy simulation's, not the shell's. The port used to
 advance a single selected unit itself: after issuing the order it drove the
 unit straight at the target with `SetCenter` at a fixed 24 world units per
