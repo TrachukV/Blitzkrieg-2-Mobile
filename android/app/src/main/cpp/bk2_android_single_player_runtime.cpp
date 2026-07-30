@@ -6,6 +6,7 @@
 #include "bk2_android_legacy_game_runtime.h"
 #include "bk2_android_mission_runtime.h"
 #include "bk2_android_platform.h"
+#include "bk2_android_vorbis_stream.h"
 #include "bk2_legacy_texture_probe.h"
 #include "bk2_presentation_internal.h"
 #include "bk2_port_paths.h"
@@ -20,6 +21,7 @@
 #include "Stats_B2_M1/DBCameraConsts.h"
 #include "Stats_B2_M1/DBClientConsts.h"
 #include "Stats_B2_M1/DBMapInfo.h"
+#include "Sound/DBMusicSystem.h"
 #include "Stats_B2_M1/DBVisObj.h"
 #include "Stats_B2_M1/UserActions.h"
 #include "Stats_B2_M1/Vis2AI.h"
@@ -162,6 +164,8 @@ bool g_turret_pose_logged = false;
 bool g_shadows_disabled = false;
 bool g_wheel_roll_logged = false;
 size_t g_wheel_roll_part_count = 0;
+size_t g_track_scroll_part_count = 0;
+bool g_track_classify_logged = false;
 WorldObjectMesh g_static_world_object_mesh;
 // Static layers whose texture scrolls (rivers). They have to be rebuilt every
 // frame, so they live apart from the geometry that is uploaded once.
@@ -291,6 +295,10 @@ struct ConvertedGeometryPart {
     float wheel_pivot_y = 0.0f;
     float wheel_pivot_z = 0.0f;
     float wheel_radius = 0.0f;
+    // A tracked hull carries one Tracks mesh instead of wheel bones, so the
+    // belt moves by scrolling its texture rather than by turning.
+    bool track_scroll = false;
+    float track_uv_per_unit = 0.0f;
 };
 
 struct ConvertedGeometry {
@@ -1515,6 +1523,10 @@ bool ReadExact(std::ifstream* input, void* output, size_t size) {
 }
 
 // Vehicle models name the running gear; a cover panel is not a wheel.
+bool IsTrackBoneName(const std::string& name) {
+    return name.compare(0, 6, "Tracks") == 0;
+}
+
 bool IsWheelBoneName(const std::string& name) {
     if (name.find("WheelsCover") != std::string::npos) {
         return false;
@@ -1540,6 +1552,55 @@ void ClassifyWheelPart(ConvertedGeometryPart* part) {
         if (vertex_bone != bone) {
             return;
         }
+    }
+    if (IsTrackBoneName(part->bones[bone].name)) {
+        // The belt texture repeats along the hull, so one model unit of
+        // travel advances the texture by the run it covers. The span of the
+        // part in v gives that run without guessing at the mapping.
+        float min_y = part->vertices.front().y;
+        float max_y = min_y;
+        float min_v = part->vertices.front().v;
+        float max_v = min_v;
+        float sum_y = 0.0f;
+        float sum_v = 0.0f;
+        for (const ConvertedGeometryVertex& vertex : part->vertices) {
+            min_y = std::min(min_y, vertex.y);
+            max_y = std::max(max_y, vertex.y);
+            min_v = std::min(min_v, vertex.v);
+            max_v = std::max(max_v, vertex.v);
+            sum_y += vertex.y;
+            sum_v += vertex.v;
+        }
+        const float span = max_y - min_y;
+        if (span > 0.05f && max_v - min_v > 0.001f) {
+            // Which way v runs along the hull differs per model, so the sign
+            // is measured rather than assumed: a belt that scrolls backwards
+            // is as wrong as one that does not move.
+            const float mean_y =
+                    sum_y / static_cast<float>(part->vertices.size());
+            const float mean_v =
+                    sum_v / static_cast<float>(part->vertices.size());
+            float covariance = 0.0f;
+            for (const ConvertedGeometryVertex& vertex : part->vertices) {
+                covariance += (vertex.y - mean_y) * (vertex.v - mean_v);
+            }
+            const float direction = covariance < 0.0f ? -1.0f : 1.0f;
+            part->track_scroll = true;
+            part->track_uv_per_unit =
+                    direction * (max_v - min_v) / span;
+            if (!g_track_classify_logged) {
+                std::ostringstream report;
+                report << "mech_track_scroll=classified"
+                       << "; bone=" << part->bones[bone].name
+                       << "; span=" << span
+                       << "; v_span=" << (max_v - min_v)
+                       << "; direction=" << direction
+                       << "; uv_per_unit=" << part->track_uv_per_unit;
+                PlatformRuntime::instance().log_info(report.str());
+                g_track_classify_logged = true;
+            }
+        }
+        return;
     }
     if (!IsWheelBoneName(part->bones[bone].name)) {
         return;
@@ -4435,6 +4496,12 @@ bool AppendConvertedGeometry(
                 : 0.0f;
         const float wheel_cosine = std::cos(wheel_angle);
         const float wheel_sine = std::sin(wheel_angle);
+        const float track_offset = part.track_scroll
+                ? travelled_distance * part.track_uv_per_unit
+                : 0.0f;
+        if (track_offset != 0.0f) {
+            ++g_track_scroll_part_count;
+        }
         if (roll_wheel) {
             ++g_wheel_roll_part_count;
             if (!g_wheel_roll_logged) {
@@ -4496,7 +4563,7 @@ bool AppendConvertedGeometry(
                             (sine * local_x + cosine * local_y),
                     z + binding.geometry_scale * local_z + 0.05f,
                     vertex.u,
-                    vertex.v,
+                    vertex.v - track_offset,
                     has_textures ? 0xffffffffu : abgr});
         }
 
@@ -5762,9 +5829,11 @@ void ReportTickBudgetLocked(std::chrono::steady_clock::time_point now) {
            << "; culled=" << g_culled_entity_count
            << "; shadow_cache=" << g_projected_shadow_hulls.size()
            << "; wheel_parts=" << g_wheel_roll_part_count
+           << "; track_parts=" << g_track_scroll_part_count
 ;
     PlatformRuntime::instance().log_info(report.str());
     g_wheel_roll_part_count = 0;
+    g_track_scroll_part_count = 0;
     g_tick_budget = TickBudget();
     g_tick_budget.started = true;
     g_tick_budget.window_start = now;
@@ -7105,6 +7174,138 @@ bool RefreshRenderResourcesLocked() {
     return true;
 }
 
+// Mission music. The map names its own playlists exactly like the main menu
+// does, so the same walk down to SMusicTrack works; the shipped lists are
+// either a fixed order or a weighted random set, and both are honoured.
+std::vector<std::string> g_mission_music_tracks;
+size_t g_mission_music_index = 0;
+std::unique_ptr<AndroidVorbisStream> g_mission_music;
+int g_mission_music_channel = -1;
+std::string g_mission_music_error;
+uint32_t g_mission_music_random = 0x9e3779b9u;
+
+float MissionMusicVolume() {
+    const std::string value(
+            NStr::ToMBCS(NGlobal::GetVar("Sound.MusicVolume", "0.5")).c_str());
+    return std::max(0.0f, std::min(
+            static_cast<float>(std::atof(value.c_str())), 1.0f));
+}
+
+void CollectMissionMusicTracks(const NDb::SMapInfo* map) {
+    g_mission_music_tracks.clear();
+    g_mission_music_index = 0;
+    if (map == nullptr || !map->pMusic) {
+        return;
+    }
+    const NDb::SMapMusic* music = map->pMusic.GetPtr();
+    if (music == nullptr) {
+        return;
+    }
+    const auto append = [](const NDb::SComposition* composition) {
+        if (composition == nullptr || !composition->pTrack) {
+            return;
+        }
+        const NDb::SMusicTrack* track = composition->pTrack.GetPtr();
+        if (track == nullptr) {
+            return;
+        }
+        std::string path(track->szMusicFileName.c_str());
+        std::replace(path.begin(), path.end(), '\\', '/');
+        while (!path.empty() && path.front() == '/') {
+            path.erase(path.begin());
+        }
+        if (!path.empty()) {
+            g_mission_music_tracks.push_back(path);
+        }
+    };
+    for (const CDBPtr<NDb::SPlayList>& list : music->playLists) {
+        const NDb::SPlayList* play_list = list.GetPtr();
+        if (play_list == nullptr) {
+            continue;
+        }
+        for (const CDBPtr<NDb::SComposition>& composition :
+             play_list->stillOrder) {
+            append(composition.GetPtr());
+        }
+        for (const NDb::SCompositionDesc& desc : play_list->randomOrder) {
+            append(desc.pComposition.GetPtr());
+        }
+    }
+}
+
+void StopMissionMusicLocked() {
+    if (g_mission_music_channel >= 0) {
+        AudioBackend().stop(g_mission_music_channel);
+        g_mission_music_channel = -1;
+    }
+    if (g_mission_music) {
+        g_mission_music->stop();
+        g_mission_music.reset();
+    }
+}
+
+void StartNextMissionMusicTrackLocked() {
+    StopMissionMusicLocked();
+    if (g_mission_music_tracks.empty() ||
+        !AudioBackend().is_initialized()) {
+        return;
+    }
+    const float volume = MissionMusicVolume();
+    if (volume <= 0.0f) {
+        return;
+    }
+    // A single-entry list plays that track; a set is shuffled so a long
+    // mission does not repeat the same battle theme back to back.
+    if (g_mission_music_tracks.size() > 1) {
+        g_mission_music_random ^= g_mission_music_random << 13;
+        g_mission_music_random ^= g_mission_music_random >> 17;
+        g_mission_music_random ^= g_mission_music_random << 5;
+        size_t next = g_mission_music_random % g_mission_music_tracks.size();
+        if (next == g_mission_music_index) {
+            next = (next + 1) % g_mission_music_tracks.size();
+        }
+        g_mission_music_index = next;
+    }
+    const std::string& path = g_mission_music_tracks[g_mission_music_index];
+    g_mission_music_error.clear();
+    g_mission_music = AndroidVorbisStream::Open(
+            path, 0, 4, &g_mission_music_error);
+    if (!g_mission_music) {
+        std::ostringstream report;
+        report << "mission_music=failed; path=" << path
+               << "; error=" << g_mission_music_error;
+        PlatformRuntime::instance().log_info(report.str());
+        return;
+    }
+    g_mission_music_channel =
+            AudioBackend().play_stream(g_mission_music->pcm_source());
+    if (g_mission_music_channel >= 0) {
+        AudioBackend().set_volume(g_mission_music_channel, volume);
+    }
+    std::ostringstream report;
+    report << "mission_music=streaming; path=" << path
+           << "; tracks=" << g_mission_music_tracks.size()
+           << "; volume=" << volume;
+    PlatformRuntime::instance().log_info(report.str());
+}
+
+void UpdateMissionMusicLocked() {
+    if (g_mission_music_tracks.empty()) {
+        return;
+    }
+    if (g_mission_music_channel >= 0 &&
+        AudioBackend().is_playing(g_mission_music_channel)) {
+        AudioBackend().set_volume(
+                g_mission_music_channel, MissionMusicVolume());
+        return;
+    }
+    if (g_mission_music &&
+        g_mission_music->state() == VorbisStreamState::Starting) {
+        return;
+    }
+    StartNextMissionMusicTrackLocked();
+}
+
 void ApplyCameraLocked() {
     RenderBackend().set_terrain_camera(g_camera);
 }
@@ -7222,6 +7423,8 @@ bool InitializeSinglePlayerRuntime() {
             g_terrain_mesh,
             g_static_world_object_mesh);
     SplitAnimatedStaticLayersLocked();
+    CollectMissionMusicTracks(map);
+    StartNextMissionMusicTrackLocked();
     if (!InitializeLegacyGameRuntime(
                 map,
                 terrain_info,
@@ -7281,6 +7484,7 @@ void TickSinglePlayerRuntime(uint32_t elapsed_millis) {
     }
     const auto tick_started = std::chrono::steady_clock::now();
     UpdateAudioListenerLocked();
+    UpdateMissionMusicLocked();
     TickLegacyGameRuntime(elapsed_millis);
     const auto legacy_done = std::chrono::steady_clock::now();
     g_animation_elapsed_seconds +=
@@ -7306,6 +7510,8 @@ void TickSinglePlayerRuntime(uint32_t elapsed_millis) {
 
 void ShutdownSinglePlayerRuntime() {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    StopMissionMusicLocked();
+    g_mission_music_tracks.clear();
     ShutdownLegacyGameRuntime();
     ResetMissionHudNotifications();
     RenderBackend().clear_terrain_mesh();

@@ -29,6 +29,8 @@
 #include "Common_RTS_AI/StaticMapHeights.h"
 #include "3Dmotor/DBScene.h"
 #include "GameX/DBGameRoot.h"
+#include "Stats_B2_M1/AckTypes.h"
+#include "Stats_B2_M1/AIAckTypes.h"
 #include "Sound/DBSound.h"
 #include "Sound/DBSoundDesc.h"
 #include "System/GlobalVars.h"
@@ -1035,6 +1037,10 @@ const NDb::SComplexEffect* ResolveHitEffect(
 // go straight through.
 std::unordered_map<std::string, DecodedPcmClip> g_mission_sound_clips;
 size_t g_mission_sound_played = 0;
+size_t g_unit_ack_played = 0;
+size_t g_unit_ack_queued = 0;
+size_t g_unit_ack_unresolved = 0;
+std::unordered_map<std::string, bool> g_unit_ack_logged_paths;
 size_t g_mission_sound_missing = 0;
 std::unordered_map<std::string, bool> g_mission_sound_logged_paths;
 uint32_t g_mission_sound_random = 0x2545f491u;
@@ -2113,6 +2119,10 @@ void ResetReportState() {
     g_mission_sound_played = 0;
     g_mission_sound_missing = 0;
     g_mission_sound_logged_paths.clear();
+    g_unit_ack_played = 0;
+    g_unit_ack_queued = 0;
+    g_unit_ack_unresolved = 0;
+    g_unit_ack_logged_paths.clear();
     g_presentation_death_count = 0;
     g_mission_outcome.store(kLegacyMissionRunning);
     g_pending_mission_outcome.store(kLegacyMissionRunning);
@@ -2337,6 +2347,74 @@ void PruneDeadSelectedLegacyUnits() {
     }
 }
 
+// Unit voices. The AI queues acknowledgements and the client drains them, the
+// same pull the desktop build uses; the set index and ack type select the
+// shipped SComplexSoundDesc on the unit's own stats.
+void PlayUnitAcknowledgment(const SAIAcknowledgment& ack) {
+    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(ack.nObjUniqueID);
+    if (unit == nullptr) {
+        return;
+    }
+    const NDb::SUnitBaseRPGStats* stats = unit->GetStats();
+    if (stats == nullptr ||
+        ack.nSet < 0 ||
+        static_cast<size_t>(ack.nSet) >= stats->acksNames.size()) {
+        // The voice sets are shipped data; without them staged the AI still
+        // queues acknowledgements and nothing can be said out loud.
+        ++g_unit_ack_unresolved;
+        return;
+    }
+    const NDb::SAckSetRPGStats* set = stats->acksNames[ack.nSet].GetPtr();
+    if (set == nullptr) {
+        ++g_unit_ack_unresolved;
+        return;
+    }
+    if (ack.nAck < 0 ||
+        static_cast<size_t>(ack.nAck) >= set->types.size()) {
+        return;
+    }
+    // ToAIUnits reindexes the set so an ack type is its own slot.
+    const NDb::SComplexSoundDesc* sound = set->types[ack.nAck].pAck.GetPtr();
+    if (sound == nullptr) {
+        return;
+    }
+    const CVec3 center = unit->GetCenter();
+    PlayComplexSound(
+            sound,
+            CVec3(center.x, center.y, unit->GetVisZ()));
+    ++g_unit_ack_played;
+    if (g_unit_ack_played <= 6) {
+        std::ostringstream report;
+        report << "unit_ack=played; unit=" << ack.nObjUniqueID
+               << "; ack=" << ack.nAck
+               << "; set=" << ack.nSet
+               << "; sounds=" << sound->sounds.size();
+        PlatformRuntime::instance().log_info(report.str());
+    }
+}
+
+void DrainUnitAcknowledgments() {
+    if (g_ai_logic == nullptr) {
+        return;
+    }
+    SAIAcknowledgment ack;
+    // The queue is drained per segment; the cap is a runaway guard, not a
+    // budget -- the AI never queues anything like this many at once.
+    for (int index = 0; index < 64; ++index) {
+        if (!g_ai_logic->UpdateAcknowledgment(ack)) {
+            break;
+        }
+        ++g_unit_ack_queued;
+        if (g_unit_ack_queued <= 6) {
+            std::ostringstream report;
+            report << "unit_ack=queued; unit=" << ack.nObjUniqueID
+                   << "; ack=" << ack.nAck << "; set=" << ack.nSet;
+            PlatformRuntime::instance().log_info(report.str());
+        }
+        PlayUnitAcknowledgment(ack);
+    }
+}
+
 void TickLegacyGameRuntime(uint32_t elapsed_millis) {
     if (!g_ready || g_ai_logic == nullptr || !g_game_timer) {
         return;
@@ -2354,6 +2432,7 @@ void TickLegacyGameRuntime(uint32_t elapsed_millis) {
     }
     UpdateWarFogSnapshot();
     DrainLegacyClientUpdates();
+    DrainUnitAcknowledgments();
     PruneExpiredCombatEffects();
     FinalizePendingMissionOutcome();
     if (g_mission_outcome.load() != kLegacyMissionRunning) {
@@ -3318,6 +3397,9 @@ std::string LegacyGameRuntimeReport() {
            << "; player_move_commands=" << g_player_move_command_count
            << "; player_attack_commands=" << g_player_attack_command_count
            << "; player_stop_commands=" << g_player_stop_command_count
+           << "; unit_acks_queued=" << g_unit_ack_queued
+           << "; unit_acks_unresolved=" << g_unit_ack_unresolved
+           << "; unit_acks_played=" << g_unit_ack_played
            << "; mission_sounds_played=" << g_mission_sound_played
            << "; mission_sounds_missing=" << g_mission_sound_missing
            << "; mission_sound_clips=" << g_mission_sound_clips.size()
