@@ -331,6 +331,22 @@ python3 tools/android/prepare_data_android.py \
   --output DataAndroid \
   --mode symlink
 
+Unit voices are staged separately. The AI queues acknowledgements whether or
+not the voice sets are present, so without them every lookup misses and units
+stay silent -- `unit_acks_unresolved` in the legacy runtime report counts
+exactly that. The sets are the original content but they dwarf everything else
+on the device: 10331 descriptors beside 7701 PCM wavs, about 1.4 GB. To stage
+them, check the tree out and pass the flag:
+
+```bash
+git sparse-checkout add Versions/Current/Data/Other/AckSetRPGStats
+
+python3 tools/android/prepare_data_android.py \
+  --output DataAndroid \
+  --mode symlink \
+  --with-unit-voices
+```
+
 (
   cd Tools/android
   npm install --ignore-scripts

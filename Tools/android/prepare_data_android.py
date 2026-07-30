@@ -22,6 +22,11 @@ STAGE_ITEMS = [
     ),
 ]
 
+# The shipped unit voice sets are 10331 descriptors next to 7701 PCM wavs --
+# about 1.4 GB. They are the original content, but they dwarf everything else
+# staged for the device, so they are opt-in rather than a silent default.
+UNIT_VOICE_SEGMENT = "acksetrpgstats"
+
 DEFAULT_EXCLUDE_SEGMENTS = [
     "Editor",
     "Multiplayer",
@@ -116,6 +121,18 @@ def should_exclude(path: Path, exclude_segments: set[str]) -> bool:
     return any(segment.lower() in exclude_segments for segment in path.parts)
 
 
+def is_unit_voice_payload(path: Path) -> bool:
+    """A voice set lives in a party folder below AckSetRPGStats.
+
+    Files sitting directly in AckSetRPGStats -- ButtonClickSound among them --
+    are shared UI sounds, not unit voices, and must stay staged.
+    """
+    lowered = [segment.lower() for segment in path.parts]
+    if UNIT_VOICE_SEGMENT not in lowered:
+        return False
+    return lowered.index(UNIT_VOICE_SEGMENT) < len(lowered) - 2
+
+
 def is_single_player_map_info(path: Path, root: Path) -> bool:
     try:
         rel = path.relative_to(root)
@@ -135,10 +152,18 @@ def single_player_map_infos(root: Path) -> list[str]:
     return sorted(paths, key=str.lower)
 
 
-def copy_or_link_tree(source: Path, destination: Path, mode: str, exclude_segments: set[str]) -> None:
+def copy_or_link_tree(
+    source: Path,
+    destination: Path,
+    mode: str,
+    exclude_segments: set[str],
+    skip_unit_voices: bool = False,
+) -> None:
     for item in source.rglob("*"):
         rel = item.relative_to(source)
         if should_exclude(rel, exclude_segments):
+            continue
+        if skip_unit_voices and is_unit_voice_payload(rel):
             continue
         target = destination / rel
         if item.is_dir():
@@ -153,7 +178,13 @@ def copy_or_link_tree(source: Path, destination: Path, mode: str, exclude_segmen
             raise ValueError(f"Unsupported filtered tree mode: {mode}")
 
 
-def link_or_copy(source: Path, destination: Path, mode: str, exclude_segments: set[str]) -> None:
+def link_or_copy(
+    source: Path,
+    destination: Path,
+    mode: str,
+    exclude_segments: set[str],
+    skip_unit_voices: bool = False,
+) -> None:
     if destination.exists() or destination.is_symlink():
         if destination.is_dir() and not destination.is_symlink():
             shutil.rmtree(destination)
@@ -165,14 +196,18 @@ def link_or_copy(source: Path, destination: Path, mode: str, exclude_segments: s
         destination.symlink_to(source.resolve(), target_is_directory=source.is_dir())
     elif mode == "copy":
         if source.is_dir():
-            copy_or_link_tree(source, destination, mode, exclude_segments)
+            copy_or_link_tree(
+                source, destination, mode, exclude_segments, skip_unit_voices
+            )
         else:
             shutil.copy2(source, destination)
     elif mode == "hardlink":
         if source.is_file():
             os.link(source, destination)
             return
-        copy_or_link_tree(source, destination, mode, exclude_segments)
+        copy_or_link_tree(
+            source, destination, mode, exclude_segments, skip_unit_voices
+        )
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
@@ -263,6 +298,15 @@ def main() -> int:
         default=DEFAULT_EXCLUDE_SEGMENTS,
         help="Path segment to skip in copy/hardlink mode. Symlink mode records but cannot filter excludes.",
     )
+    parser.add_argument(
+        "--with-unit-voices",
+        action="store_true",
+        help=(
+            "Stage the AckSetRPGStats voice sets (about 1.4 GB). Without "
+            "them the AI still queues acknowledgements and every lookup "
+            "misses, so units stay silent."
+        ),
+    )
     parser.add_argument("--allow-missing", action="store_true")
     args = parser.parse_args()
 
@@ -270,6 +314,7 @@ def main() -> int:
     output = args.output if args.output.is_absolute() else repo / args.output
     output.mkdir(parents=True, exist_ok=True)
     exclude_segments = {segment.lower() for segment in args.exclude_segment}
+    skip_unit_voices = not args.with_unit_voices
 
     staged: list[StagedItem] = []
     missing: list[str] = []
@@ -280,7 +325,9 @@ def main() -> int:
                 missing.append(source_rel)
             continue
         destination = output / destination_rel
-        link_or_copy(source, destination, args.mode, exclude_segments)
+        link_or_copy(
+            source, destination, args.mode, exclude_segments, skip_unit_voices
+        )
         staged.append(
             StagedItem(
                 source=source_rel,
@@ -302,7 +349,13 @@ def main() -> int:
             if not source.exists():
                 continue
             destination = output / "Overlay" / item
-            link_or_copy(source, destination, args.mode, exclude_segments)
+            link_or_copy(
+                source,
+                destination,
+                args.mode,
+                exclude_segments,
+                skip_unit_voices,
+            )
             overlay_staged.append(
                 StagedItem(
                     source=str(source),
@@ -330,6 +383,7 @@ def main() -> int:
     manifest = {
         "output": display_path(output, repo),
         "exclude_segments": sorted(exclude_segments),
+        "unit_voices": not skip_unit_voices,
         "staged": [asdict(item) for item in staged],
         "overlay_roots": [str(root) for root in overlay_roots],
         "overlay_staged": [asdict(item) for item in overlay_staged],
