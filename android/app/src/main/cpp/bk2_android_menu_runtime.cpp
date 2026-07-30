@@ -39,6 +39,7 @@
 #include <cstdlib>
 #include <memory>
 #include <fstream>
+#include <functional>
 #include <sstream>
 #include <vector>
 
@@ -75,6 +76,7 @@ std::vector<std::string> g_texture_paths;
 std::vector<uint16_t> g_texture_handles;
 std::map<std::string, CObj<NGfx::CTexture>> g_menu_textures;
 bool g_render_logged = false;
+bool g_menu_options_restored = false;
 std::vector<MenuWindowNode> g_nodes;
 std::string g_screen_ref;
 std::string g_error;
@@ -1369,6 +1371,108 @@ namespace {
 
 // Advances one option to its next shipped state, mirroring what the desktop
 // options screen writes when its control changes.
+// The quality preset is not a row of its own: the shipped entry lists the
+// variables it drives, one value per step, and CommandSetQuality writes them
+// all. Without this the phone-relevant levers -- shadows, grass, LOD, tree
+// shadows -- never move, because they have no row on the screen.
+// NGlobal keeps option values in memory only, so a phone that swaps the app
+// out loses every setting. They are mirrored into the save directory and read
+// back before the first screen is built.
+std::string MenuOptionsStorePath() {
+    return JoinHostPath(GetPortPaths().save_root(), "options.cfg");
+}
+
+void ForEachOptionVariable(
+        const std::function<void(const std::string&)>& visit) {
+    const NDb::SGameRoot* root = NGameX::GetGameRoot();
+    if (root == nullptr || !root->pGameOptions) {
+        return;
+    }
+    const NDb::SOptionSystem* options = root->pGameOptions.GetPtr();
+    if (options == nullptr) {
+        return;
+    }
+    for (const NDb::SOptionSystem::SOptionsCategory& category :
+         options->categories) {
+        for (const NDb::SOptionSystem::SOptionsCategory::SOptionEntry& entry :
+             category.options) {
+            visit(ToStdString(entry.szProgName));
+            for (const NDb::SOptionSystem::SOptionsCategory::SOptionEntry::
+                         SSliderSingleValue& slider : entry.sliderValues) {
+                visit(ToStdString(slider.szProgName));
+            }
+        }
+    }
+}
+
+void SaveMenuOptions() {
+    std::ofstream output(MenuOptionsStorePath(), std::ios::trunc);
+    if (!output.is_open()) {
+        return;
+    }
+    size_t written = 0;
+    ForEachOptionVariable([&output, &written](const std::string& name) {
+        const std::string value(
+                NStr::ToMBCS(NGlobal::GetVar(string(name.c_str()), ""))
+                        .c_str());
+        if (value.empty()) {
+            return;
+        }
+        output << name << '=' << value << '\n';
+        ++written;
+    });
+    std::ostringstream report;
+    report << "original_menu_options_saved=" << written;
+    PlatformRuntime::instance().log_info(report.str());
+}
+
+void LoadMenuOptions() {
+    std::ifstream input(MenuOptionsStorePath());
+    if (!input.is_open()) {
+        return;
+    }
+    std::string line;
+    size_t restored = 0;
+    while (std::getline(input, line)) {
+        const size_t separator = line.find('=');
+        if (separator == std::string::npos || separator == 0) {
+            continue;
+        }
+        NGlobal::SetVar(
+                string(line.substr(0, separator).c_str()),
+                line.substr(separator + 1).c_str());
+        ++restored;
+    }
+    std::ostringstream report;
+    report << "original_menu_options_restored=" << restored;
+    PlatformRuntime::instance().log_info(report.str());
+}
+
+size_t ApplyOptionSliderValues(
+        const NDb::SOptionSystem::SOptionsCategory::SOptionEntry& entry,
+        const std::string& value) {
+    if (entry.sliderValues.empty() ||
+        entry.sliderValues[0].values.empty()) {
+        return 0;
+    }
+    const int step_count =
+            static_cast<int>(entry.sliderValues[0].values.size());
+    const float parameter = static_cast<float>(std::atof(value.c_str()));
+    int step = static_cast<int>(std::lround(
+            parameter * static_cast<float>(step_count) - 0.5f));
+    step = std::max(0, std::min(step, step_count - 1));
+    size_t applied = 0;
+    for (const NDb::SOptionSystem::SOptionsCategory::SOptionEntry::
+                 SSliderSingleValue& slider : entry.sliderValues) {
+        if (static_cast<size_t>(step) >= slider.values.size()) {
+            continue;
+        }
+        NGlobal::SetVar(slider.szProgName, slider.values[step].c_str());
+        ++applied;
+    }
+    return applied;
+}
+
 bool CycleOptionValue(const std::string& program_name) {
     const NDb::SGameRoot* root = NGameX::GetGameRoot();
     if (root == nullptr || !root->pGameOptions) {
@@ -1416,10 +1520,13 @@ bool CycleOptionValue(const std::string& program_name) {
                 next = current == "1" ? "0" : "1";
             }
             NGlobal::SetVar(entry.szProgName, next.c_str());
+            const size_t driven = ApplyOptionSliderValues(entry, next);
             std::ostringstream report;
             report << "original_menu_option=" << program_name
-                   << "; from=" << current << "; to=" << next;
+                   << "; from=" << current << "; to=" << next
+                   << "; driven=" << driven;
             PlatformRuntime::instance().log_info(report.str());
+            SaveMenuOptions();
             return true;
         }
     }
@@ -1563,6 +1670,7 @@ bool IsDesktopOnlyOption(const std::string& program_name) {
             "mission_buttons_bind_section",
             "game_camera_mouse_pitch_invert",
             "game_camera_mouse_zoom_invert",
+            "game_camera_mouse_sensetivity",
     };
     for (const char* name : kDesktopOnly) {
         if (program_name == name) {
@@ -1883,6 +1991,10 @@ bool RebuildMenuScreenLocked(const std::string& screen_ref) {
 
     LoadMenuFonts();
     LoadButtonClickSound();
+    if (!g_menu_options_restored) {
+        g_menu_options_restored = true;
+        LoadMenuOptions();
+    }
     if (!g_menu_music) {
         StartMenuMusic();
     }
@@ -2021,8 +2133,11 @@ int PickMenuButtonLocked(
     int picked = -1;
     for (size_t index = 0; index < g_nodes.size(); ++index) {
         const MenuWindowNode& node = g_nodes[index];
+        // A touch target is a button with an area. Requiring a pressed-state
+        // visual too made every options row unpickable, because the shipped
+        // row template draws no pressed art.
         if (!node.button || !node.visible || !node.enabled ||
-            node.pressed_quad_end <= node.pressed_quad_begin) {
+            node.width <= 0.0f || node.height <= 0.0f) {
             continue;
         }
         if (virtual_x >= node.x &&

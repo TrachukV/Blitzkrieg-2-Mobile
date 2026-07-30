@@ -24,6 +24,8 @@
 #include "Stats_B2_M1/UserActions.h"
 #include "Stats_B2_M1/Vis2AI.h"
 #include "System/BinSaver.h"
+#include "System/GlobalVars.h"
+#include "Misc/StrProc.h"
 #include "System/VFSOperations.h"
 #include "libdb/Db.h"
 #include "libdb/Database.h"
@@ -156,6 +158,8 @@ size_t g_crag_texture_gpu_count = 0;
 std::unordered_set<std::string> g_crag_texture_paths;
 bool g_crag_texture_logged = false;
 bool g_turret_pose_logged = false;
+// Mirrors the shipped gfx_noshadows option, refreshed once a frame.
+bool g_shadows_disabled = false;
 bool g_wheel_roll_logged = false;
 size_t g_wheel_roll_part_count = 0;
 WorldObjectMesh g_static_world_object_mesh;
@@ -4284,7 +4288,7 @@ bool AppendConvertedGeometry(
     }
     const float cosine = std::cos(heading);
     const float sine = std::sin(heading);
-    if (cast_projected_shadow) {
+    if (cast_projected_shadow && !g_shadows_disabled) {
         AppendProjectedGeometryShadow(
                 mesh,
                 *geometry,
@@ -4297,7 +4301,7 @@ bool AppendConvertedGeometry(
                 animation_variant,
                 animation_time_seconds);
     }
-    if (cast_alpha_masked_shadow) {
+    if (cast_alpha_masked_shadow && !g_shadows_disabled) {
         AppendAlphaMaskedGeometryShadow(
                 mesh,
                 *geometry,
@@ -5922,7 +5926,16 @@ VisibleWorldBounds ComputeVisibleWorldBoundsLocked() {
     return bounds;
 }
 
+// The options screen writes through the same global the desktop build uses,
+// so the renderer just reads it back.
+bool ReadShadowsDisabledOption() {
+    const std::string value(
+            NStr::ToMBCS(NGlobal::GetVar("gfx_noshadows", "0")).c_str());
+    return value == "1" || value == "true";
+}
+
 bool RefreshDynamicWorldMeshLocked(bool force) {
+    g_shadows_disabled = ReadShadowsDisabledOption();
     const Bk2PresentationSnapshotInfo info =
             bk2_presentation_snapshot_info();
     const std::vector<AndroidCombatEffect> combat_effects =
@@ -7138,6 +7151,9 @@ bool InitializeSinglePlayerRuntime() {
     WaterMesh water_mesh;
     BuildWaterMesh(map, terrain_info, &water_mesh);
     WorldObjectMesh presentation_world_mesh;
+    // Scene object shadows are baked into the static mesh, so the option has
+    // to be read before it is built, not just before the first frame.
+    g_shadows_disabled = ReadShadowsDisabledOption();
     BuildPresentationStaticWorldMesh(map, terrain_info, &presentation_world_mesh);
     LoadMinimapTexture(map);
     if (LoadTerrainLayerTextures(map, &mesh) == 0) {
