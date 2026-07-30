@@ -1,5 +1,7 @@
 #include "bk2_android_menu_runtime.h"
 
+#include "bk2_android_audio_backend.h"
+#include "bk2_android_audio_decode.h"
 #include "bk2_android_platform.h"
 #include "bk2_legacy_texture_probe.h"
 #include "bk2_render_backend.h"
@@ -15,6 +17,8 @@
 #include "3Dmotor/FontFormat.h"
 #include "3Dmotor/GTexture.h"
 #include "GameX/GetConsts.h"
+#include "Sound/DBSound.h"
+#include "Sound/DBSoundDesc.h"
 #include "System/GResource.h"
 #include "System/VFSOperations.h"
 #include "libdb/Database.h"
@@ -73,6 +77,9 @@ std::mutex g_menu_mutex;
 std::map<std::string, std::string> g_text_cache;
 // Visibility overrides applied by the menu's own navigation reactions.
 std::map<std::string, bool> g_visibility_overrides;
+DecodedPcmClip g_click_clip;
+std::string g_click_sound_path;
+std::string g_click_sound_error;
 const char* const kMenuPanels[] = {"MainMenu", "SinglePlayerMenu"};
 
 std::string ToStdString(const string& value) {
@@ -581,6 +588,54 @@ void AppendBackgroundQuads(
             break;
         }
     }
+}
+
+// SUIGameConsts::buttonClickSound points at the UISPlaySound command whose
+// complex sound descriptor names the shipped menu click wav.
+std::string ResolveButtonClickSoundPath() {
+    const NDb::SUIConstsB2* consts = NGameX::GetUIConsts();
+    if (consts == nullptr || consts->buttonClickSound.commands.empty()) {
+        return std::string();
+    }
+    const NDb::SUIStateBase* command =
+            consts->buttonClickSound.commands[0].GetPtr();
+    const NDb::SUISPlaySound* play_sound =
+            dynamic_cast<const NDb::SUISPlaySound*>(command);
+    if (play_sound == nullptr || !play_sound->pSoundToPlay.Get()) {
+        return std::string();
+    }
+    const NDb::SComplexSoundDesc* complex =
+            play_sound->pSoundToPlay.Get().GetPtr();
+    if (complex == nullptr || complex->sounds.empty()) {
+        return std::string();
+    }
+    const NDb::SSoundDesc* sound = complex->sounds[0].pPathName.GetPtr();
+    if (sound == nullptr) {
+        return std::string();
+    }
+    return NormalizeResourcePath(ToStdString(sound->szSoundPath));
+}
+
+void LoadButtonClickSound() {
+    g_click_clip = DecodedPcmClip();
+    g_click_sound_error.clear();
+    g_click_sound_path = ResolveButtonClickSoundPath();
+    if (g_click_sound_path.empty() || NVFS::GetMainVFS() == nullptr) {
+        return;
+    }
+    CFileStream stream(
+            NVFS::GetMainVFS(), string(g_click_sound_path.c_str()));
+    const int byte_count = stream.GetSize();
+    if (!stream.IsOk() || byte_count <= 0 ||
+        stream.GetBuffer() == nullptr) {
+        g_click_sound_error = "unreadable";
+        return;
+    }
+    DecodeWavToPcm16(
+            stream.GetBuffer(),
+            static_cast<size_t>(byte_count),
+            &g_click_clip,
+            &g_click_sound_error);
 }
 
 void LoadMenuFonts() {
@@ -1156,6 +1211,7 @@ bool RebuildMenuScreenLocked(const std::string& screen_ref) {
     }
 
     LoadMenuFonts();
+    LoadButtonClickSound();
     CollectWindow(
             screen,
             0.0f,
@@ -1323,6 +1379,9 @@ std::string ReleaseOriginalMenu(
         return std::string();
     }
     const MenuWindowNode& node = g_nodes[static_cast<size_t>(pressed)];
+    if (g_click_clip.frame_count() > 0) {
+        AudioBackend().play(g_click_clip.view(), false, 0);
+    }
     std::ostringstream report;
     report << "original_menu_action=" << node.action
            << "; button=" << (node.name.empty() ? node.caption : node.name);
@@ -1386,7 +1445,12 @@ std::string OriginalMenuReport() {
            << "; captions=" << g_caption_count
            << "; quads=" << g_quads.size()
            << "; texture_paths=" << g_texture_paths.size()
-           << "; fonts=" << g_fonts.size();
+           << "; fonts=" << g_fonts.size()
+           << "; click_sound="
+           << (g_click_sound_path.empty() ? "<none>" : g_click_sound_path)
+           << "; click_frames=" << g_click_clip.frame_count()
+           << "; click_error="
+           << (g_click_sound_error.empty() ? "<none>" : g_click_sound_error);
     for (const MenuWindowNode& node : g_nodes) {
         if (!node.button || !node.visible) {
             continue;

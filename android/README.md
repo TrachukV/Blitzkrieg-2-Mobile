@@ -355,6 +355,9 @@ clang++ -std=c++17 -Wall -Wextra -Werror \
 
 build/android/audio_decode_smoke \
   Sound/acknowledgements/US/tank/tank1_voice0/tank1-23-1.wav
+
+build/android/audio_decode_smoke \
+  Versions/Current/Data/Sounds/menu/clik01.wav
 ```
 
 From `android/`:

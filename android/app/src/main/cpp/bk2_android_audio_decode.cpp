@@ -14,6 +14,24 @@ namespace {
 constexpr uint16_t kWaveFormatPcm = 0x0001;
 constexpr uint16_t kWaveFormatMsAdpcm = 0x0002;
 constexpr uint16_t kWaveFormatIeeeFloat = 0x0003;
+constexpr uint16_t kWaveFormatImaAdpcm = 0x0011;
+
+// IMA/DVI ADPCM step and index tables, as used by the shipped menu and UI
+// sounds.
+constexpr std::array<int, 89> kImaStepTable = {
+        7,     8,     9,     10,    11,    12,    13,    14,    16,    17,
+        19,    21,    23,    25,    28,    31,    34,    37,    41,    45,
+        50,    55,    60,    66,    73,    80,    88,    97,    107,   118,
+        130,   143,   157,   173,   190,   209,   230,   253,   279,   307,
+        337,   371,   408,   449,   494,   544,   598,   658,   724,   796,
+        876,   963,   1060,  1166,  1282,  1411,  1552,  1707,  1878,  2066,
+        2272,  2499,  2749,  3024,  3327,  3660,  4026,  4428,  4871,  5358,
+        5894,  6484,  7132,  7845,  8630,  9493,  10442, 11487, 12635, 13899,
+        15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767};
+
+constexpr std::array<int, 16> kImaIndexTable = {
+        -1, -1, -1, -1, 2, 4, 6, 8,
+        -1, -1, -1, -1, 2, 4, 6, 8};
 
 constexpr std::array<int, 16> kMsAdpcmAdaptation = {
         230, 230, 230, 230, 307, 409, 512, 614,
@@ -280,6 +298,12 @@ bool ParseFmtChunk(const uint8_t* data, size_t size, WavFormat* fmt, std::string
     fmt->bits_per_sample = ReadU16(data + 14);
     fmt->coefficients.clear();
 
+    if (fmt->format_tag == kWaveFormatImaAdpcm) {
+        if (size >= 20) {
+            fmt->samples_per_block = ReadU16(data + 18);
+        }
+    }
+
     if (fmt->format_tag == kWaveFormatMsAdpcm) {
         if (size < 22) {
             SetError(error, "MS ADPCM fmt chunk is too small");
@@ -298,6 +322,96 @@ bool ParseFmtChunk(const uint8_t* data, size_t size, WavFormat* fmt, std::string
         }
     }
 
+    return true;
+}
+
+// Each IMA ADPCM block starts with a four byte per-channel preamble holding
+// the initial predictor and step index, followed by interleaved nibbles that
+// are grouped per channel in four byte words.
+int16_t DecodeImaNibble(uint8_t nibble, int* predictor, int* step_index) {
+    const int step = kImaStepTable[static_cast<size_t>(*step_index)];
+    // Single-truncation form: the magnitude bits scale the step once, which
+    // is what reference IMA decoders produce.
+    int difference = ((2 * (nibble & 7) + 1) * step) >> 3;
+    if (nibble & 8) {
+        *predictor -= difference;
+    } else {
+        *predictor += difference;
+    }
+    *predictor = std::clamp(*predictor, -32768, 32767);
+    *step_index = std::clamp(
+            *step_index + kImaIndexTable[nibble], 0, 88);
+    return static_cast<int16_t>(*predictor);
+}
+
+bool DecodeImaAdpcmData(const WavFormat& fmt,
+                        const std::vector<uint8_t>& audio_data,
+                        DecodedPcmClip* decoded,
+                        std::string* error) {
+    const size_t channels = fmt.channels;
+    if (channels == 0 || channels > 2) {
+        SetError(error, "unsupported IMA ADPCM channel count");
+        return false;
+    }
+    const size_t block_align = fmt.block_align;
+    const size_t preamble = 4 * channels;
+    if (block_align <= preamble) {
+        SetError(error, "IMA ADPCM block align is too small");
+        return false;
+    }
+    const size_t samples_per_block = fmt.samples_per_block > 0
+            ? static_cast<size_t>(fmt.samples_per_block)
+            : 1 + (block_align - preamble) * 2 / channels;
+
+    std::vector<std::vector<int16_t>> channel_samples(channels);
+    for (size_t block = 0; block + block_align <= audio_data.size();
+         block += block_align) {
+        const uint8_t* data = audio_data.data() + block;
+        for (std::vector<int16_t>& samples : channel_samples) {
+            samples.clear();
+            samples.reserve(samples_per_block);
+        }
+
+        std::vector<int> predictor(channels, 0);
+        std::vector<int> step_index(channels, 0);
+        for (size_t channel = 0; channel < channels; ++channel) {
+            predictor[channel] = ReadS16(data + channel * 4);
+            step_index[channel] = std::clamp(
+                    static_cast<int>(data[channel * 4 + 2]), 0, 88);
+            // The preamble already carries the block's first sample.
+            channel_samples[channel].push_back(
+                    static_cast<int16_t>(predictor[channel]));
+        }
+
+        // Nibbles are grouped into four byte words, one word per channel.
+        size_t offset = preamble;
+        while (offset + 4 * channels <= block_align) {
+            for (size_t channel = 0; channel < channels; ++channel) {
+                const uint8_t* word = data + offset + channel * 4;
+                for (size_t byte = 0; byte < 4; ++byte) {
+                    channel_samples[channel].push_back(DecodeImaNibble(
+                            word[byte] & 0x0fu,
+                            &predictor[channel],
+                            &step_index[channel]));
+                    channel_samples[channel].push_back(DecodeImaNibble(
+                            (word[byte] >> 4) & 0x0fu,
+                            &predictor[channel],
+                            &step_index[channel]));
+                }
+            }
+            offset += 4 * channels;
+        }
+
+        size_t frames = samples_per_block;
+        for (const std::vector<int16_t>& samples : channel_samples) {
+            frames = std::min(frames, samples.size());
+        }
+        for (size_t frame = 0; frame < frames; ++frame) {
+            for (size_t channel = 0; channel < channels; ++channel) {
+                decoded->samples.push_back(channel_samples[channel][frame]);
+            }
+        }
+    }
     return true;
 }
 
@@ -385,6 +499,8 @@ bool DecodeWavToPcm16(const uint8_t* data,
         ok = DecodePcmData(fmt, audio_data, decoded, error);
     } else if (fmt.format_tag == kWaveFormatMsAdpcm) {
         ok = DecodeMsAdpcmData(fmt, audio_data, decoded, error);
+    } else if (fmt.format_tag == kWaveFormatImaAdpcm) {
+        ok = DecodeImaAdpcmData(fmt, audio_data, decoded, error);
     } else {
         SetError(error, "unsupported WAV format tag");
         return false;
