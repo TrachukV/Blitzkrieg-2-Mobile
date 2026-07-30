@@ -2,6 +2,7 @@
 
 #include "bk2_android_audio_backend.h"
 #include "bk2_android_audio_decode.h"
+#include "bk2_android_vorbis_stream.h"
 #include "bk2_android_platform.h"
 #include "bk2_legacy_texture_probe.h"
 #include "bk2_port_paths.h"
@@ -22,6 +23,7 @@
 #include "GameX/DBGameRoot.h"
 #include "GameX/dbgameoptions.h"
 #include "System/GlobalVars.h"
+#include "Sound/DBMusicSystem.h"
 #include "Sound/DBSound.h"
 #include "Sound/DBSoundDesc.h"
 #include "System/GResource.h"
@@ -35,6 +37,7 @@
 #include <map>
 #include <mutex>
 #include <cstdlib>
+#include <memory>
 #include <fstream>
 #include <sstream>
 #include <vector>
@@ -97,6 +100,10 @@ struct MenuTemplate {
 
 std::map<std::string, MenuTemplate> g_templates;
 int g_options_category = 0;
+std::unique_ptr<AndroidVorbisStream> g_menu_music;
+std::string g_menu_music_path;
+std::string g_menu_music_error;
+int g_menu_music_channel = -1;
 DecodedPcmClip g_click_clip;
 std::string g_click_sound_path;
 std::string g_click_sound_error;
@@ -656,6 +663,64 @@ void LoadButtonClickSound() {
             static_cast<size_t>(byte_count),
             &g_click_clip,
             &g_click_sound_error);
+}
+
+// GameRoot -> MapMusic -> PlayList -> Composition -> MusicTrack names the
+// shipped ogg the desktop menu streams.
+std::string ResolveMenuMusicPath() {
+    const NDb::SGameRoot* root = NGameX::GetGameRoot();
+    if (root == nullptr || !root->pMainMenuMusic) {
+        return std::string();
+    }
+    const NDb::SMapMusic* music = root->pMainMenuMusic.GetPtr();
+    if (music == nullptr || music->playLists.empty() ||
+        !music->playLists[0]) {
+        return std::string();
+    }
+    const NDb::SPlayList* play_list = music->playLists[0].GetPtr();
+    if (play_list == nullptr || play_list->stillOrder.empty() ||
+        !play_list->stillOrder[0]) {
+        return std::string();
+    }
+    const NDb::SComposition* composition =
+            play_list->stillOrder[0].GetPtr();
+    if (composition == nullptr || !composition->pTrack) {
+        return std::string();
+    }
+    const NDb::SMusicTrack* track = composition->pTrack.GetPtr();
+    if (track == nullptr) {
+        return std::string();
+    }
+    return NormalizeResourcePath(ToStdString(track->szMusicFileName));
+}
+
+void StartMenuMusic() {
+    g_menu_music_error.clear();
+    g_menu_music_path = ResolveMenuMusicPath();
+    if (g_menu_music_path.empty()) {
+        g_menu_music_error = "unresolved";
+        return;
+    }
+    // Open resolves the data-relative path itself; pre-resolving here would
+    // hand it an absolute path it would prefix a second time.
+    g_menu_music = AndroidVorbisStream::Open(
+            g_menu_music_path, 0, 4, &g_menu_music_error);
+    if (!g_menu_music) {
+        return;
+    }
+    g_menu_music_channel =
+            AudioBackend().play_stream(g_menu_music->pcm_source());
+}
+
+void StopMenuMusic() {
+    if (g_menu_music_channel >= 0) {
+        AudioBackend().stop(g_menu_music_channel);
+        g_menu_music_channel = -1;
+    }
+    if (g_menu_music) {
+        g_menu_music->stop();
+        g_menu_music.reset();
+    }
 }
 
 void LoadMenuFonts() {
@@ -1818,6 +1883,9 @@ bool RebuildMenuScreenLocked(const std::string& screen_ref) {
 
     LoadMenuFonts();
     LoadButtonClickSound();
+    if (!g_menu_music) {
+        StartMenuMusic();
+    }
     CollectWindow(
             screen,
             0.0f,
@@ -2024,6 +2092,7 @@ void ReleaseOriginalMenuGpuResources() {
 
 void ShutdownOriginalMenuRuntime() {
     std::lock_guard<std::mutex> guard(g_menu_mutex);
+    StopMenuMusic();
     g_nodes.clear();
     g_quads.clear();
     g_texture_paths.clear();
@@ -2076,7 +2145,14 @@ std::string OriginalMenuReport() {
            << (g_click_sound_path.empty() ? "<none>" : g_click_sound_path)
            << "; click_frames=" << g_click_clip.frame_count()
            << "; click_error="
-           << (g_click_sound_error.empty() ? "<none>" : g_click_sound_error);
+           << (g_click_sound_error.empty() ? "<none>" : g_click_sound_error)
+           << "; music="
+           << (g_menu_music_path.empty() ? "<none>" : g_menu_music_path)
+           << "; music_state="
+           << (g_menu_music ? "streaming"
+                            : (g_menu_music_error.empty()
+                                       ? "idle"
+                                       : g_menu_music_error));
     for (const MenuWindowNode& node : g_nodes) {
         if (!node.button || !node.visible) {
             continue;
