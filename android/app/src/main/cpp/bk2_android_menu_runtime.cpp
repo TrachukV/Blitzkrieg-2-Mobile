@@ -1300,6 +1300,69 @@ bool RequestCampaignLaunch(int campaign_index) {
 
 }  // namespace
 
+namespace {
+
+// Advances one option to its next shipped state, mirroring what the desktop
+// options screen writes when its control changes.
+bool CycleOptionValue(const std::string& program_name) {
+    const NDb::SGameRoot* root = NGameX::GetGameRoot();
+    if (root == nullptr || !root->pGameOptions) {
+        return false;
+    }
+    const NDb::SOptionSystem* options = root->pGameOptions.GetPtr();
+    if (options == nullptr) {
+        return false;
+    }
+    for (const NDb::SOptionSystem::SOptionsCategory& category :
+         options->categories) {
+        for (const NDb::SOptionSystem::SOptionsCategory::SOptionEntry& entry :
+             category.options) {
+            if (ToStdString(entry.szProgName) != program_name) {
+                continue;
+            }
+            const std::string current = std::string(
+                    NStr::ToMBCS(NGlobal::GetVar(
+                            entry.szProgName,
+                            entry.szDefaultValue)).c_str());
+            std::string next;
+            if (!entry.states.empty()) {
+                size_t index = 0;
+                for (size_t i = 0; i < entry.states.size(); ++i) {
+                    if (ToStdString(entry.states[i].szValue) == current) {
+                        index = i + 1;
+                        break;
+                    }
+                }
+                next = ToStdString(
+                        entry.states[index % entry.states.size()].szValue);
+            } else if (entry.eEditorType ==
+                       NDb::SOptionSystem::SOptionsCategory::SOptionEntry::
+                               OPTION_EDITOR_SLIDER) {
+                // Sliders step in quarters so a tap is still useful on touch.
+                const float value =
+                        static_cast<float>(std::atof(current.c_str()));
+                const float stepped = value + 0.25f > 1.0f
+                        ? 0.0f
+                        : value + 0.25f;
+                std::ostringstream formatted;
+                formatted << stepped;
+                next = formatted.str();
+            } else {
+                next = current == "1" ? "0" : "1";
+            }
+            NGlobal::SetVar(entry.szProgName, next.c_str());
+            std::ostringstream report;
+            report << "original_menu_option=" << program_name
+                   << "; from=" << current << "; to=" << next;
+            PlatformRuntime::instance().log_info(report.str());
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
 bool ConsumeMenuMissionLaunchRequest() {
     const bool requested = g_mission_launch_requested;
     g_mission_launch_requested = false;
@@ -1326,6 +1389,21 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
     }
     if (reaction == "chapter_map") {
         return RequestCampaignLaunch(g_selected_campaign);
+    }
+    // Tapping an option row advances it to its next shipped state and stores
+    // the value through the same global variable the desktop screen uses.
+    if (reaction.compare(0, 13, "option_cycle_") == 0) {
+        const std::string program_name = reaction.substr(13);
+        std::string screen_ref;
+        {
+            std::lock_guard<std::mutex> guard(g_menu_mutex);
+            screen_ref = g_screen_ref;
+        }
+        if (!CycleOptionValue(program_name)) {
+            return false;
+        }
+        std::lock_guard<std::mutex> guard(g_menu_mutex);
+        return RebuildMenuScreenLocked(screen_ref);
     }
     // Options category tabs re-fill the option list for that category.
     if (reaction.compare(0, 16, "option_category_") == 0) {
@@ -1406,6 +1484,29 @@ bool LoadOriginalMenuScreen(const std::string& screen_ref) {
 
 namespace {
 
+// Options that cannot mean anything on a phone: the surface size is fixed by
+// the device, the Android renderer has no 16-bit or fixed-function path, the
+// shadow-map and anisotropic settings drive desktop-only code, and there is no
+// keyboard to rebind or mouse to invert.
+bool IsDesktopOnlyOption(const std::string& program_name) {
+    static const char* const kDesktopOnly[] = {
+            "gfx_resolution",
+            "gfx_16bit_mode",
+            "gfx_tnl_mode",
+            "gfx_anisotropic_filter",
+            "gfx_depth_tex_resolution",
+            "mission_buttons_bind_section",
+            "game_camera_mouse_pitch_invert",
+            "game_camera_mouse_zoom_invert",
+    };
+    for (const char* name : kDesktopOnly) {
+        if (program_name == name) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // CInterfaceOptionsMenu::FillScreen builds this screen at runtime by cloning
 // template windows, so the same construction is reproduced here from the
 // shipped SOptionSystem data.
@@ -1444,7 +1545,8 @@ void PopulateOptionsScreenLocked() {
     for (size_t index = 0; index < options->categories.size(); ++index) {
         for (const NDb::SOptionSystem::SOptionsCategory::SOptionEntry& entry :
              options->categories[index].options) {
-            if (entry.nModeFlags & kOptionModeMask) {
+            if ((entry.nModeFlags & kOptionModeMask) &&
+                !IsDesktopOnlyOption(ToStdString(entry.szProgName))) {
                 visible_categories.push_back(static_cast<int>(index));
                 break;
             }
@@ -1560,7 +1662,8 @@ void PopulateOptionsScreenLocked() {
     float row_y = list->second.y + 12.0f;
     for (const NDb::SOptionSystem::SOptionsCategory::SOptionEntry& entry :
          category.options) {
-        if (!(entry.nModeFlags & kOptionModeMask)) {
+        if (!(entry.nModeFlags & kOptionModeMask) ||
+            IsDesktopOnlyOption(ToStdString(entry.szProgName))) {
             continue;
         }
         const size_t editor = static_cast<size_t>(entry.eEditorType);
@@ -1644,6 +1747,42 @@ void PopulateOptionsScreenLocked() {
                     control->second.height,
                     "body");
         }
+        // The row is a touch target: tapping it advances the option to its
+        // next shipped state, or flips a checkbox.
+        MenuWindowNode node;
+        node.name = ToStdString(entry.szProgName);
+        node.type = "OptionRow";
+        node.x = row->second.x;
+        node.y = row_y;
+        node.width = row->second.width;
+        node.height = row_height;
+        node.visible = true;
+        node.enabled = true;
+        node.button = true;
+        node.action = "option_cycle_" + node.name;
+        node.pressed_quad_begin = static_cast<int>(g_pressed_quads.size());
+        node.pressed_quad_end = node.pressed_quad_begin + 1;
+        // Reuse the row background as the pressed presentation so the hit
+        // test accepts the row; the visual stays the shipped one.
+        if (row->second.shared != nullptr) {
+            const size_t begin = g_quads.size();
+            AppendBackgroundQuads(
+                    row->second.shared->pBackground.GetPtr(),
+                    row->second.x,
+                    row_y,
+                    row->second.width,
+                    row_height);
+            g_pressed_quads.insert(
+                    g_pressed_quads.end(),
+                    g_quads.begin() + begin,
+                    g_quads.end());
+            node.pressed_quad_end =
+                    static_cast<int>(g_pressed_quads.size());
+            g_quads.resize(begin);
+        }
+        ++g_button_count;
+        g_nodes.push_back(node);
+
         row_y += row_height + 4.0f;
     }
 }
