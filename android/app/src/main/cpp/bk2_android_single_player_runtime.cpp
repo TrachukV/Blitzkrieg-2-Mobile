@@ -5210,13 +5210,19 @@ void AppendDescriptorEffectLights(
         const float elevation = std::max(
                 origin_z + light.offset_z - ground_z,
                 0.0f);
+        // The real flare size lives in the binary light resource the uid
+        // points at, which this port does not read yet, so the instance
+        // scale is all there is to go on. It has to stay in the range a
+        // muzzle flash or an impact actually lights: at the old ceiling of
+        // thirty world units a single shot painted a ring six tank-lengths
+        // across on the grass.
         const float radius =
                 std::clamp(
-                        11.0f * light.scale *
+                        2.6f * light.scale *
                                 (0.75f + envelope * 0.35f) +
-                                elevation * 0.25f,
-                        3.5f,
-                        30.0f);
+                                elevation * 0.1f,
+                        0.8f,
+                        7.0f);
         AppendGroundFacingSprite(
                 mesh,
                 light_x,
