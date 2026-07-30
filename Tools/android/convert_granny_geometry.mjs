@@ -212,6 +212,16 @@ function dominantBones(mesh, skeleton) {
   const bindingToSkeleton = mesh.boneBindings.map((binding) =>
     skeletonIndexByName.get(binding.name),
   );
+  // Vehicle parts are rigidly attached: one binding, no per-vertex weights.
+  // The whole mesh then belongs to that single bone.
+  const rigid =
+    mesh.boneBindings.length === 1 &&
+    !(mesh.vertexWeights ?? []).some((weights) => weights && weights.length > 0)
+      ? bindingToSkeleton[0]
+      : undefined;
+  if (Number.isInteger(rigid)) {
+    return result.fill(rigid);
+  }
   for (let vertex = 0; vertex < mesh.vertexCount; ++vertex) {
     const weights = mesh.vertexWeights[vertex] ?? [];
     let best = none;

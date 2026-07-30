@@ -55,6 +55,8 @@ typedef struct Bk2PresentationEntity {
     /* Non-zero once the AI has actually aimed this unit's platform. Without
        it the angles are meaningless and the platform must not be posed. */
     uint32_t turret_aim_valid;
+    /* Distance this unit has travelled, in AI units. Wheels roll by it. */
+    float travelled_distance;
 } Bk2PresentationEntity;
 
 typedef struct Bk2PresentationSnapshotInfo {

@@ -1358,6 +1358,16 @@ std::unordered_map<int, AndroidTurretAim> g_turret_aim;
 // so every unit would otherwise collapse onto one entry.
 std::unordered_map<uint64_t, std::string> g_turret_bones;
 size_t g_turret_update_count = 0;
+// Distance each unit has covered, accumulated from its own centre so wheels
+// roll at the speed the simulation actually moves the vehicle.
+struct AndroidUnitOdometer {
+    float x = 0.0f;
+    float y = 0.0f;
+    float distance = 0.0f;
+    bool seeded = false;
+};
+
+std::unordered_map<int, AndroidUnitOdometer> g_unit_odometers;
 bool g_turret_bone_logged = false;
 
 // AI angles are a 16-bit turn; the desktop converts with AI2VisRad.
@@ -1565,6 +1575,17 @@ void PublishPresentationEntities() {
         const NDb::SUnitBaseRPGStats* stats = unit->GetStats();
         const std::unordered_map<int, AndroidTurretAim>::const_iterator aim =
                 g_turret_aim.find(unit->GetUniqueIdQU());
+        AndroidUnitOdometer& odometer =
+                g_unit_odometers[unit->GetUniqueIdQU()];
+        if (odometer.seeded) {
+            const float step_x = center.x - odometer.x;
+            const float step_y = center.y - odometer.y;
+            odometer.distance +=
+                    std::sqrt(step_x * step_x + step_y * step_y);
+        }
+        odometer.x = center.x;
+        odometer.y = center.y;
+        odometer.seeded = true;
         const uint64_t stats_key = StatsPathHash(stats);
         if (stats != nullptr &&
             g_turret_bones.find(stats_key) == g_turret_bones.end()) {
@@ -1606,7 +1627,8 @@ void PublishPresentationEntities() {
                 stats == nullptr ? 1.0f : stats->fSelectionScale,
                 aim == g_turret_aim.end() ? 0.0f : aim->second.yaw_radians,
                 aim == g_turret_aim.end() ? 0.0f : aim->second.pitch_radians,
-                aim == g_turret_aim.end() ? 0u : 1u};
+                aim == g_turret_aim.end() ? 0u : 1u,
+                odometer.distance};
         entities.push_back(entity);
         if ((entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) != 0) {
             g_last_presentation_entities[entity.id] = entity;
@@ -1828,6 +1850,7 @@ void ResetReportState() {
     g_turret_aim.clear();
     g_turret_bones.clear();
     g_turret_update_count = 0;
+    g_unit_odometers.clear();
     g_turret_bone_logged = false;
     g_presentation_death_count = 0;
     g_mission_outcome.store(kLegacyMissionRunning);
