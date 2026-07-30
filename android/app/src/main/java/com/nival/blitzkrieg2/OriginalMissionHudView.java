@@ -12,7 +12,10 @@ import android.view.View;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 final class OriginalMissionHudView extends View {
     private static final class SelectedMember {
@@ -55,6 +58,12 @@ final class OriginalMissionHudView extends View {
     private final Bitmap yellowHitBar;
     private final Bitmap redHitBar;
     private Bitmap minimap;
+    // Every unit ships its own icon and its own faction plate; the two
+    // generic bitmaps above are only the fallback when a record has none.
+    private final Map<String, Bitmap> unitIcons = new HashMap<>();
+    private final File dataRootDir;
+    private String selectedIconPath = "";
+    private String selectedIconPlatePath = "";
     private String selectedKind = "";
     private int selectedHitPoints;
     private int selectedMaxHitPoints;
@@ -69,6 +78,7 @@ final class OriginalMissionHudView extends View {
     OriginalMissionHudView(Context context, File dataRoot) {
         super(context);
         setClickable(true);
+        dataRootDir = dataRoot;
         panel = loadOriginalBitmap(
                 context,
                 dataRoot,
@@ -124,6 +134,8 @@ final class OriginalMissionHudView extends View {
         int hitPoints = 0;
         int maxHitPoints = 0;
         String membersValue = "";
+        String iconPath = "";
+        String iconPlatePath = "";
         if (snapshot != null && !snapshot.isEmpty()) {
             String[] fields = snapshot.split(";");
             for (String field : fields) {
@@ -141,9 +153,15 @@ final class OriginalMissionHudView extends View {
                     maxHitPoints = parseInt(value);
                 } else if ("members".equals(key)) {
                     membersValue = value;
+                } else if ("icon".equals(key)) {
+                    iconPath = value;
+                } else if ("icon_plate".equals(key)) {
+                    iconPlatePath = value;
                 }
             }
         }
+        selectedIconPath = iconPath;
+        selectedIconPlatePath = iconPlatePath;
         if (!kind.equals(selectedKind)
                 || hitPoints != selectedHitPoints
                 || maxHitPoints != selectedMaxHitPoints
@@ -332,8 +350,12 @@ final class OriginalMissionHudView extends View {
         if (selectedKind.isEmpty()) {
             return;
         }
-        Bitmap icon = "tank".equals(selectedKind) ? tankIcon : soldierIcon;
-        if (icon == null || unitIconBackground == null) {
+        Bitmap icon = unitIcon(selectedIconPath, selectedKind);
+        Bitmap plate = unitIcon(selectedIconPlatePath, "");
+        if (plate == null) {
+            plate = unitIconBackground;
+        }
+        if (icon == null || plate == null) {
             return;
         }
 
@@ -422,9 +444,9 @@ final class OriginalMissionHudView extends View {
             float cardSize,
             SelectedMember member,
             boolean active) {
-        Bitmap icon = "tank".equals(member.kind)
-                ? tankIcon
-                : soldierIcon;
+        Bitmap icon = active
+                ? unitIcon(selectedIconPath, member.kind)
+                : unitIcon("", member.kind);
         if (icon == null ||
             unitIconBackground == null ||
             member.maxHitPoints <= 0) {
@@ -496,13 +518,75 @@ final class OriginalMissionHudView extends View {
         }
     }
 
+    /** The unit's own icon, falling back to the generic pair. */
+    private Bitmap unitIcon(String relativePath, String kind) {
+        if (relativePath != null && !relativePath.isEmpty()) {
+            Bitmap cached = unitIcons.get(relativePath);
+            if (cached == null && !unitIcons.containsKey(relativePath)) {
+                cached = loadOriginalBitmap(
+                        getContext(), dataRootDir, "Data/" + relativePath);
+                unitIcons.put(relativePath, cached);
+            }
+            if (cached != null) {
+                return cached;
+            }
+        }
+        if (kind == null || kind.isEmpty()) {
+            return null;
+        }
+        return "tank".equals(kind) ? tankIcon : soldierIcon;
+    }
+
+    /**
+     * Resolves a data-relative path the way the native VFS does.
+     *
+     * <p>The shipped descriptors mix the case of their references -- a unit
+     * names its icon under "units/technics/..." while the tree on disk is
+     * "Units/Technics/..." -- which Windows resolved for free and Android's
+     * filesystem does not.
+     */
+    private static File resolveIgnoringCase(File root, String relativePath) {
+        File direct = new File(root, relativePath);
+        if (direct.exists()) {
+            return direct;
+        }
+        File current = root;
+        for (String segment : relativePath.split("/")) {
+            if (segment.isEmpty()) {
+                continue;
+            }
+            File candidate = new File(current, segment);
+            if (candidate.exists()) {
+                current = candidate;
+                continue;
+            }
+            String[] names = current.list();
+            if (names == null) {
+                return direct;
+            }
+            String match = null;
+            for (String name : names) {
+                if (name.equalsIgnoreCase(segment)) {
+                    match = name;
+                    break;
+                }
+            }
+            if (match == null) {
+                return direct;
+            }
+            current = new File(current, match);
+        }
+        return current;
+    }
+
     private static Bitmap loadOriginalBitmap(
             Context context,
             File dataRoot,
             String relativePath) {
-        return TgaDecoder.decode(
-                context,
-                new File(dataRoot, relativePath),
-                relativePath);
+        File file = resolveIgnoringCase(dataRoot, relativePath);
+        if (relativePath.toLowerCase(Locale.US).endsWith(".dds")) {
+            return DdsDecoder.decode(file);
+        }
+        return TgaDecoder.decode(context, file, relativePath);
     }
 }
