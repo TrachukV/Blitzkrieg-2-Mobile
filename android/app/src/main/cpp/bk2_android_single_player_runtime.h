@@ -11,6 +11,14 @@ void TickSinglePlayerRuntime(uint32_t elapsed_millis);
 void ShutdownSinglePlayerRuntime();
 
 void PanSinglePlayerCamera(float delta_x_pixels, float delta_y_pixels);
+// Drag panning that keeps the terrain point under the finger.
+void PanSinglePlayerCameraDrag(
+        float from_x,
+        float from_y,
+        float to_x,
+        float to_y,
+        uint32_t viewport_width,
+        uint32_t viewport_height);
 void ZoomSinglePlayerCamera(float scale);
 void RotateSinglePlayerCamera(float delta_radians);
 bool HandleSinglePlayerTap(

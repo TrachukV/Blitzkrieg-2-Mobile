@@ -289,6 +289,17 @@ bool AnySelectedLegacyUnitCanMove() {
     return false;
 }
 
+// CSelector::DoGroupCommand registers the group, issues the command and
+// unregisters straight away. Leaving the group alive keeps CGroupLogic
+// managing its subgroup shifts between orders, which makes units drift.
+void ReleaseSelectedLegacyCommandGroup() {
+    if (!g_android_command_group_registered) {
+        return;
+    }
+    theGroupLogic.UnregisterGroup(g_android_command_group);
+    g_android_command_group_registered = false;
+}
+
 bool RegisterSelectedLegacyCommandGroup(
         int user_action,
         bool movable_only,
@@ -2231,6 +2242,7 @@ bool MoveSelectedLegacyUnit(float world_x, float world_y) {
     SAIUnitCmd command(ACTION_COMMAND_MOVE_TO, target);
     command.bFromAI = false;
     theGroupLogic.GroupCommand(command, group, false);
+    ReleaseSelectedLegacyCommandGroup();
     g_android_move_target = target;
     g_android_move_active = unit_count == 1;
     g_attack_target_unit_id = -1;
@@ -2289,6 +2301,7 @@ bool PerformSelectedLegacyUnitPointAction(
         return false;
     }
     theGroupLogic.GroupCommand(command, group, place_in_queue);
+    ReleaseSelectedLegacyCommandGroup();
     g_android_move_active = false;
     g_android_move_log_millis = 0;
     g_attack_target_unit_id = -1;
@@ -2342,6 +2355,7 @@ bool PerformSelectedLegacyUnitSegmentAction(
     }
     theGroupLogic.GroupCommand(begin_command, group, false);
     theGroupLogic.GroupCommand(end_command, group, true);
+    ReleaseSelectedLegacyCommandGroup();
 
     g_android_move_active = false;
     g_android_move_log_millis = 0;
@@ -2400,6 +2414,7 @@ bool AttackSelectedLegacyUnit(int target_unit_id) {
         return false;
     }
     theGroupLogic.GroupCommand(command, group, false);
+    ReleaseSelectedLegacyCommandGroup();
     g_android_move_active = false;
     g_android_move_log_millis = 0;
     g_attack_target_unit_id = target->GetUniqueIdQU();
@@ -2426,6 +2441,7 @@ bool StopSelectedLegacyUnit() {
     SAIUnitCmd command(ACTION_COMMAND_STOP);
     command.bFromAI = false;
     theGroupLogic.GroupCommand(command, group, false);
+    ReleaseSelectedLegacyCommandGroup();
     g_android_move_active = false;
     g_android_move_log_millis = 0;
     g_attack_target_unit_id = -1;
@@ -2469,6 +2485,7 @@ bool PerformSelectedLegacyUnitAction(int user_action) {
         return false;
     }
     theGroupLogic.GroupCommand(command, group, false);
+    ReleaseSelectedLegacyCommandGroup();
     g_android_move_active = false;
     g_android_move_log_millis = 0;
     g_attack_target_unit_id = -1;

@@ -6661,6 +6661,55 @@ void ShutdownSinglePlayerRuntime() {
     g_animation_elapsed_seconds = 0.0f;
 }
 
+void PanSinglePlayerCameraDrag(
+        float from_x,
+        float from_y,
+        float to_x,
+        float to_y,
+        uint32_t viewport_width,
+        uint32_t viewport_height) {
+    std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    if (!g_ready) {
+        return;
+    }
+    // Drag the ground itself: intersect both pointer positions with the
+    // terrain and shift the camera by the difference, so the spot under the
+    // finger stays under the finger at any zoom or pitch.
+    float from_world_x = 0.0f;
+    float from_world_y = 0.0f;
+    float to_world_x = 0.0f;
+    float to_world_y = 0.0f;
+    if (!ScreenToTerrainIntersectionLocked(
+                from_x,
+                from_y,
+                viewport_width,
+                viewport_height,
+                false,
+                &from_world_x,
+                &from_world_y) ||
+        !ScreenToTerrainIntersectionLocked(
+                to_x,
+                to_y,
+                viewport_width,
+                viewport_height,
+                false,
+                &to_world_x,
+                &to_world_y)) {
+        return;
+    }
+    g_camera.target_x -= to_world_x - from_world_x;
+    g_camera.target_y -= to_world_y - from_world_y;
+    const float maximum_x =
+            static_cast<float>(std::max(g_height_width - 1, 0)) *
+            VIS_TILE_SIZE;
+    const float maximum_y =
+            static_cast<float>(std::max(g_height_height - 1, 0)) *
+            VIS_TILE_SIZE;
+    g_camera.target_x = std::clamp(g_camera.target_x, 0.0f, maximum_x);
+    g_camera.target_y = std::clamp(g_camera.target_y, 0.0f, maximum_y);
+    ApplyCameraLocked();
+}
+
 void PanSinglePlayerCamera(float delta_x_pixels, float delta_y_pixels) {
     std::lock_guard<std::mutex> lock(g_runtime_mutex);
     if (!g_ready) {
@@ -6853,7 +6902,12 @@ bool HandleSinglePlayerTap(
     if (!g_ready || g_user_paused) {
         return false;
     }
-    constexpr float kEntityTapRadiusPixels = 52.0f;
+    // A fingertip covers far more of a phone screen than a mouse cursor does,
+    // so the pick radius scales with the viewport instead of staying at the
+    // desktop-sized constant.
+    const float kEntityTapRadiusPixels = std::max(
+            52.0f,
+            static_cast<float>(viewport_width) * 0.03f);
     if (g_touch_command_mode == TouchCommandMode::Attack) {
         constexpr float kAttackCommandRadiusPixels = 96.0f;
         const int hostile_unit = FindEntityNearScreenLocked(

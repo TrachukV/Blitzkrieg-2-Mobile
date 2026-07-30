@@ -661,6 +661,19 @@ layout exactly: the panel lands at `x=779` with 170x42 buttons at `y=143`
 button also reports its original reaction id (`single_player`, `multiplayer`,
 `options`, `LoadMod`, `Credits`, `Encyclopedia`, `exit`, `single_player_back`).
 
+Player command dispatch now matches `CSelector::DoGroupCommand`: the command
+group is registered, the order is issued, and the group is unregistered
+immediately. The port previously left the group registered until the next
+order, so `CGroupLogic` kept managing its subgroup assignments and `vShift`
+offsets between commands and units drifted instead of executing a single
+order. Every dispatch site releases its group now.
+
+Camera dragging intersects both pointer positions with the terrain and shifts
+the camera by the difference, so the ground stays under the finger at any zoom
+and pitch instead of following a fixed pixel-to-world constant. The touch pick
+radius also scales with the viewport rather than staying at the desktop-sized
+52 pixels, which a fingertip overshoots on a phone.
+
 The Android content step now decodes the shipped Granny format-6/Oodle0
 geometry into a small native `BK2MSH1` cache. The complete current pass yields
 2,510 renderable geometry files (1,126,692 vertices and 731,200 triangles);

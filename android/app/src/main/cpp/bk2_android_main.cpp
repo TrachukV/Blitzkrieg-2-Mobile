@@ -314,9 +314,13 @@ void PollInput(android_app* app) {
                     }
                 }
                 if (g_touch_camera.panning) {
-                    bk2::android::PanSinglePlayerCamera(
-                            x - g_touch_camera.center_x,
-                            y - g_touch_camera.center_y);
+                    bk2::android::PanSinglePlayerCameraDrag(
+                            g_touch_camera.center_x,
+                            g_touch_camera.center_y,
+                            x,
+                            y,
+                            bk2::android::RenderBackend().width(),
+                            bk2::android::RenderBackend().content_height());
                 }
                 g_touch_camera.center_x = x;
                 g_touch_camera.center_y = y;
