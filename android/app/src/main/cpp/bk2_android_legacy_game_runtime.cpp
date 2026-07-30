@@ -674,13 +674,17 @@ void NormalizeMapObjectRPGStats(
         return;
     }
 
-    NDb::SHPObjectRPGStats* stats =
-            const_cast<NDb::SHPObjectRPGStats*>(loaded_stats);
-    stats->PostLoad(false);
+    // PostLoad is ToAIUnits, and the database has already run it on every
+    // record it loaded: speed is converted from km/h to AI units per
+    // millisecond by a factor of about 1/112, so running it again squares
+    // that and leaves the whole simulation crawling at a hundredth of its
+    // speed. The pass stays as a survey of what the map references -- the
+    // missing-payload counters below feed the runtime report -- but it must
+    // not convert anything a second time.
     ++g_normalized_rpg_stats_count;
-    if (IsUnitStats(stats)) {
+    if (IsUnitStats(loaded_stats)) {
         ++g_normalized_unit_stats_count;
-    } else if (IsSquadStats(stats)) {
+    } else if (IsSquadStats(loaded_stats)) {
         ++g_normalized_squad_stats_count;
     }
 }
@@ -2684,12 +2688,6 @@ bool MoveSelectedLegacyUnit(float world_x, float world_y) {
     ReleaseSelectedLegacyCommandGroup();
     g_attack_target_unit_id = -1;
     ++g_player_move_command_count;
-    PlatformRuntime::instance().log_info(
-            std::string("player_move_command=") +
-            std::to_string(g_selected_unit_id) +
-            "; units=" + std::to_string(unit_count) +
-            "; target=" + std::to_string(world_x) +
-            "," + std::to_string(world_y));
     return true;
 }
 
@@ -2966,6 +2964,32 @@ std::string SelectedLegacyUnitHudStatus() {
     return text.str();
 }
 
+// The HUD had one generic tank icon and one generic soldier icon for the
+// whole game, so a German armoured car came up as a Soviet tank. Every unit
+// ships its own icon and its own faction plate on its stats.
+std::string UnitIconPath(const NDb::STexture* texture) {
+    if (texture == nullptr) {
+        return std::string();
+    }
+    std::string path(texture->szDestName.c_str());
+    std::replace(path.begin(), path.end(), '\\', '/');
+    while (!path.empty() && path.front() == '/') {
+        path.erase(path.begin());
+    }
+    if (path.empty() || path.find('/') != std::string::npos) {
+        return path;
+    }
+    std::string folder(NDb::GetFolderName(texture->GetDBID()).c_str());
+    std::replace(folder.begin(), folder.end(), '\\', '/');
+    while (!folder.empty() && folder.front() == '/') {
+        folder.erase(folder.begin());
+    }
+    while (!folder.empty() && folder.back() == '/') {
+        folder.pop_back();
+    }
+    return folder.empty() ? path : folder + "/" + path;
+}
+
 std::string SelectedLegacyUnitHudSnapshot() {
     if (!g_ready || g_selected_unit_id < 0) {
         return std::string();
@@ -2987,7 +3011,10 @@ std::string SelectedLegacyUnitHudSnapshot() {
              << ";hp=" << static_cast<int>(std::round(
                     std::max(unit->GetHitPoints(), 0.0f)))
              << ";max_hp="
-             << static_cast<int>(std::round(stats->fMaxHP));
+             << static_cast<int>(std::round(stats->fMaxHP))
+             << ";icon=" << UnitIconPath(stats->pIconTexture.GetPtr())
+             << ";icon_plate="
+             << UnitIconPath(stats->pIconFlagBackground.GetPtr());
     snapshot << ";selection_count=" << SelectedLegacyUnitCount()
              << ";members=";
     bool first_member = true;

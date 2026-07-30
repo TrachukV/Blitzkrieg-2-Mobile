@@ -207,6 +207,7 @@ size_t g_active_scene_effect_count = 0;
 size_t g_active_destruction_effect_count = 0;
 size_t g_active_unit_indicator_count = 0;
 size_t g_health_bar_count = 0;
+size_t g_health_bar_skipped = 0;
 bool g_combat_effect_trace_texture_logged = false;
 bool g_muzzle_flash_texture_logged = false;
 bool g_descriptor_particle_texture_logged = false;
@@ -4750,10 +4751,22 @@ float CameraDegreesToRadians(float degrees);
 void AppendUnitHealthBar(
         WorldObjectMesh* mesh,
         const Bk2PresentationEntity& entity) {
-    if (mesh == nullptr ||
-        !std::isfinite(entity.hit_points) ||
+    if (mesh == nullptr) {
+        return;
+    }
+    if (!std::isfinite(entity.hit_points) ||
         !std::isfinite(entity.max_hit_points) ||
         entity.max_hit_points <= 0.0f) {
+        ++g_health_bar_skipped;
+        if (g_health_bar_skipped <= 4) {
+            std::ostringstream report;
+            report << "health_bar_skipped; unit=" << entity.id
+                   << "; hp=" << entity.hit_points
+                   << "; max_hp=" << entity.max_hit_points
+                   << "; stats=" << entity.rpg_stats_record_id
+                   << "; flags=" << entity.flags;
+            PlatformRuntime::instance().log_info(report.str());
+        }
         return;
     }
     const uint32_t viewport_width = RenderBackend().width();
