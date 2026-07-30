@@ -142,6 +142,18 @@ size_t g_river_carved_vertex_count = 0;
 size_t g_river_disturbed_vertex_count = 0;
 size_t g_river_animated_layer_count = 0;
 bool g_river_texture_logged = false;
+size_t g_crag_precipice_count = 0;
+size_t g_river_bank_precipice_count = 0;
+bool g_river_bank_precipice_logged = false;
+size_t g_crag_node_count = 0;
+size_t g_crag_triangle_count = 0;
+size_t g_crag_foot_count = 0;
+size_t g_crag_foot_segment_count = 0;
+size_t g_crag_foot_triangle_count = 0;
+size_t g_crag_texture_count = 0;
+size_t g_crag_texture_gpu_count = 0;
+std::unordered_set<std::string> g_crag_texture_paths;
+bool g_crag_texture_logged = false;
 WorldObjectMesh g_static_world_object_mesh;
 WorldObjectMesh g_world_object_mesh;
 CObj<NGfx::CTexture> g_terrain_texture;
@@ -2295,6 +2307,761 @@ void AppendTerrainRoads(
     PlatformRuntime::instance().log_info(report.str());
 }
 
+// PrecipicesManager.cpp collects crag precipices under the plain crag VSO id
+// and the two river bank precipices under the river VSO id plus the
+// 0x10000 (left) or 0x20000 (right) marker bit.
+constexpr int kRiverPrecipiceIDBase = 0x10000;
+constexpr int kPrecipiceSourceIDMask = 0xffff;
+
+const NDb::SRiverDesc* ResolvePrecipiceRiverDescriptor(
+        const NDb::SMapInfo* map,
+        const STerrainInfo::SPrecipice& precipice) {
+    if (map == nullptr ||
+        precipice.nID < kRiverPrecipiceIDBase) {
+        return nullptr;
+    }
+    const int river_id =
+            precipice.nID & kPrecipiceSourceIDMask;
+    for (const NDb::SVSOInstance& river : map->rivers) {
+        if (river.nVSOID != river_id ||
+            !river.pDescriptor ||
+            river.pDescriptor->GetTypeID() !=
+                    NDb::SRiverDesc::typeID) {
+            continue;
+        }
+        return static_cast<const NDb::SRiverDesc*>(
+                river.pDescriptor.GetPtr());
+    }
+    return nullptr;
+}
+
+const NDb::SMaterial* ResolvePrecipiceMaterial(
+        const NDb::SMapInfo* map,
+        const STerrainInfo::SPrecipice& precipice,
+        const NDb::SRiverDesc* river_descriptor) {
+    if (precipice.pMaterial) {
+        const NDb::SMaterial* material =
+                precipice.pMaterial.GetPtr();
+        if (material != nullptr) {
+            return material;
+        }
+    }
+    if (river_descriptor != nullptr) {
+        return river_descriptor->pPrecipiceMaterial
+                ? river_descriptor->pPrecipiceMaterial.GetPtr()
+                : nullptr;
+    }
+    if (map == nullptr) {
+        return nullptr;
+    }
+    for (const NDb::SVSOInstance& crag : map->crags) {
+        if (crag.nVSOID != precipice.nID ||
+            !crag.pDescriptor ||
+            crag.pDescriptor->GetTypeID() !=
+                    NDb::SCragDesc::typeID) {
+            continue;
+        }
+        const NDb::SCragDesc* descriptor =
+                static_cast<const NDb::SCragDesc*>(
+                        crag.pDescriptor.GetPtr());
+        return descriptor != nullptr &&
+                        descriptor->pRidgeMaterial
+                ? descriptor->pRidgeMaterial.GetPtr()
+                : nullptr;
+    }
+    return nullptr;
+}
+
+std::string PrecipiceTexturePath(
+        const NDb::SMaterial* material) {
+    if (material == nullptr) {
+        return std::string();
+    }
+    const NDb::STexture* texture =
+            material->pTexture
+            ? material->pTexture.GetPtr()
+            : nullptr;
+    if (texture != nullptr && !texture->szDestName.empty()) {
+        std::string texture_path = texture->szDestName.c_str();
+        std::replace(
+                texture_path.begin(),
+                texture_path.end(),
+                '\\',
+                '/');
+        while (!texture_path.empty() &&
+               texture_path.front() == '/') {
+            texture_path.erase(texture_path.begin());
+        }
+        if (texture_path.find('/') == std::string::npos) {
+            std::string folder = ToStdString(
+                    NDb::GetFolderName(material->GetDBID()));
+            std::replace(
+                    folder.begin(),
+                    folder.end(),
+                    '\\',
+                    '/');
+            while (!folder.empty() &&
+                   folder.back() == '/') {
+                folder.pop_back();
+            }
+            texture_path = folder + "/" + texture_path;
+        }
+        return texture_path;
+    }
+    std::string material_path =
+            material->GetDBID().ToString().c_str();
+    std::replace(
+            material_path.begin(),
+            material_path.end(),
+            '\\',
+            '/');
+    while (!material_path.empty() &&
+           material_path.front() == '/') {
+        material_path.erase(material_path.begin());
+    }
+    std::string lower_path = material_path;
+    std::transform(
+            lower_path.begin(),
+            lower_path.end(),
+            lower_path.begin(),
+            [](unsigned char value) {
+                return static_cast<char>(std::tolower(value));
+            });
+    constexpr const char* kMaterialSuffix = "ridge_material.xdb";
+    const size_t suffix = lower_path.rfind(kMaterialSuffix);
+    if (suffix == std::string::npos) {
+        return std::string();
+    }
+    material_path.replace(
+            suffix,
+            std::strlen(kMaterialSuffix),
+            "ridge_Texture.dds");
+    return material_path;
+}
+
+std::string FallbackRiverTexturePath(
+        const NDb::SVSODesc* descriptor,
+        const char* texture_name);
+
+bool AppendPrecipiceMesh(
+        const NDb::SMapInfo* map,
+        const STerrainInfo& terrain_info,
+        const STerrainInfo::SPrecipice& precipice,
+        WorldObjectMesh* mesh,
+        std::unordered_set<std::string>* texture_paths,
+        bool* river_bank) {
+    if (river_bank != nullptr) {
+        *river_bank = false;
+    }
+    if (mesh == nullptr ||
+        precipice.nodes.size() < 2 ||
+        precipice.minHeights.size() !=
+                precipice.nodes.size() ||
+        precipice.maxHeights.size() !=
+                precipice.nodes.size()) {
+        return false;
+    }
+    const NDb::SRiverDesc* river_descriptor =
+            ResolvePrecipiceRiverDescriptor(map, precipice);
+    const NDb::SMaterial* material =
+            ResolvePrecipiceMaterial(
+                    map,
+                    precipice,
+                    river_descriptor);
+    // River bank precipices carry the river's own precipice material, whose
+    // shipped texture lives beside the water assets. Resolve it the way the
+    // river water layers do instead of through the crag material naming
+    // convention, which would invent an unstaged Scene/TexAndMats path.
+    std::string texture_path;
+    if (river_descriptor != nullptr) {
+        const NDb::STexture* river_texture =
+                material != nullptr && material->pTexture
+                ? material->pTexture.GetPtr()
+                : nullptr;
+        texture_path =
+                river_texture != nullptr &&
+                                !river_texture->szDestName.empty()
+                ? std::string(river_texture->szDestName.c_str())
+                : FallbackRiverTexturePath(
+                          river_descriptor,
+                          "crags");
+    } else {
+        texture_path = PrecipiceTexturePath(material);
+    }
+    if (texture_path.empty()) {
+        return false;
+    }
+    if (river_bank != nullptr) {
+        *river_bank = river_descriptor != nullptr;
+    }
+    if (river_descriptor != nullptr &&
+        !g_river_bank_precipice_logged) {
+        std::ostringstream report;
+        report << "terrain_river_bank_precipice="
+               << NormalizedDescriptorPath(river_descriptor)
+               << "; precipice_id=" << precipice.nID
+               << "; side="
+               << ((precipice.nID & (kRiverPrecipiceIDBase << 1))
+                           ? "right"
+                           : "left")
+               << "; material="
+               << (material == nullptr
+                           ? std::string("<none>")
+                           : std::string(
+                                     material->GetDBID()
+                                             .ToString()
+                                             .c_str()))
+               << "; texture=" << texture_path;
+        PlatformRuntime::instance().log_info(report.str());
+        g_river_bank_precipice_logged = true;
+    }
+    const NDb::STexture* texture =
+            material != nullptr && material->pTexture
+            ? material->pTexture.GetPtr()
+            : nullptr;
+    const float texture_scale_x =
+            precipice.fTexGeomScale /
+            static_cast<float>(
+                    texture == nullptr
+                    ? 512
+                    : std::max(texture->nWidth, 1));
+    const float texture_scale_y =
+            precipice.fTexGeomScale /
+            static_cast<float>(
+                    texture == nullptr
+                    ? 512
+                    : std::max(texture->nHeight, 1));
+    const size_t layer_index =
+            FindOrAddOpaqueWorldObjectLayer(
+                    mesh,
+                    texture_path);
+    if (layer_index == std::numeric_limits<size_t>::max()) {
+        return false;
+    }
+    if (texture_paths != nullptr) {
+        texture_paths->insert(texture_path);
+    }
+
+    constexpr float kMinimumPrecipiceHeight = 0.025f;
+    constexpr float kHeightEpsilon = 0.001f;
+    uint32_t previous_vertex_offset = 0;
+    int previous_vertex_count = 0;
+    int previous_node_index = -1;
+    float texture_x = 0.0f;
+    bool appended = false;
+    for (size_t node_position = 0;
+         node_position < precipice.nodes.size();
+         ++node_position) {
+        const bool visible =
+                precipice.visibles.empty() ||
+                (node_position < precipice.visibles.size() &&
+                 precipice.visibles[node_position] != 0);
+        const int node_index = precipice.nodes[node_position];
+        if (!visible ||
+            node_index < 0 ||
+            node_index >=
+                    static_cast<int>(
+                            terrain_info.precNodes.size())) {
+            previous_vertex_count = 0;
+            previous_node_index = -1;
+            continue;
+        }
+        const STerrainInfo::SPrecipiceNode& node =
+                terrain_info.precNodes[
+                        static_cast<size_t>(node_index)];
+        const float minimum_height =
+                precipice.minHeights[node_position];
+        const float maximum_height =
+                precipice.maxHeights[node_position];
+        const bool low_column =
+                maximum_height <=
+                minimum_height + kMinimumPrecipiceHeight;
+        const bool previous_low_column =
+                node_position == 0 ||
+                precipice.maxHeights[node_position - 1] <=
+                        precipice.minHeights[node_position - 1] +
+                                kMinimumPrecipiceHeight;
+        const bool next_low_column =
+                node_position + 1 >= precipice.nodes.size() ||
+                precipice.maxHeights[node_position + 1] <=
+                        precipice.minHeights[node_position + 1] +
+                                kMinimumPrecipiceHeight;
+        if (node.verts.size() < 2 ||
+            (low_column &&
+             previous_low_column &&
+             next_low_column)) {
+            previous_vertex_count = 0;
+            previous_node_index = -1;
+            continue;
+        }
+
+        size_t first_vertex = 0;
+        while (first_vertex + 1 < node.verts.size() &&
+               node.verts[first_vertex].z >
+                       maximum_height + kHeightEpsilon) {
+            ++first_vertex;
+        }
+        size_t last_vertex = first_vertex;
+        while (last_vertex + 1 < node.verts.size() &&
+               node.verts[last_vertex].z >
+                       minimum_height + kHeightEpsilon) {
+            ++last_vertex;
+        }
+        const int current_vertex_count =
+                static_cast<int>(
+                        last_vertex - first_vertex + 1);
+        if (current_vertex_count < 1) {
+            previous_vertex_count = 0;
+            previous_node_index = -1;
+            continue;
+        }
+
+        if (previous_vertex_count > 0 &&
+            previous_node_index != node_index) {
+            const int maximum_vertex_count =
+                    std::max(
+                            previous_vertex_count,
+                            current_vertex_count);
+            const float previous_coefficient =
+                    previous_vertex_count > current_vertex_count
+                    ? 1.0f
+                    : static_cast<float>(previous_vertex_count) /
+                            static_cast<float>(
+                                    current_vertex_count);
+            const float current_coefficient =
+                    current_vertex_count > previous_vertex_count
+                    ? 1.0f
+                    : static_cast<float>(current_vertex_count) /
+                            static_cast<float>(
+                                    previous_vertex_count);
+            float maximum_distance = 0.0f;
+            for (int index = 0;
+                 index < maximum_vertex_count;
+                 ++index) {
+                const uint32_t previous_index =
+                        previous_vertex_offset +
+                        static_cast<uint32_t>(
+                                previous_coefficient *
+                                static_cast<float>(index));
+                const size_t current_index =
+                        first_vertex +
+                        static_cast<size_t>(
+                                current_coefficient *
+                                static_cast<float>(index));
+                if (previous_index >= mesh->vertices.size() ||
+                    current_index >= node.verts.size()) {
+                    continue;
+                }
+                const TerrainVertex& previous =
+                        mesh->vertices[previous_index];
+                const CVec3& current =
+                        node.verts[current_index];
+                const float dx = current.x - previous.x;
+                const float dy = current.y - previous.y;
+                maximum_distance = std::max(
+                        maximum_distance,
+                        std::sqrt(dx * dx + dy * dy));
+            }
+            texture_x += maximum_distance * texture_scale_x;
+        }
+
+        const uint32_t current_vertex_offset =
+                static_cast<uint32_t>(mesh->vertices.size());
+        std::vector<float> texture_y(
+                static_cast<size_t>(current_vertex_count),
+                0.0f);
+        texture_y.back() =
+                node.verts[last_vertex].z *
+                texture_scale_y;
+        for (size_t local_index =
+                     texture_y.size() - 1;
+             local_index > 0;
+             --local_index) {
+                const CVec3& lower = node.verts[
+                        first_vertex + local_index];
+                const CVec3& current = node.verts[
+                        first_vertex + local_index - 1];
+                const float dx = current.x - lower.x;
+                const float dy = current.y - lower.y;
+                const float dz = current.z - lower.z;
+                texture_y[local_index - 1] =
+                        texture_y[local_index] +
+                        std::sqrt(
+                                dx * dx + dy * dy + dz * dz) *
+                        texture_scale_y;
+        }
+        for (size_t local_index = 0;
+             local_index < texture_y.size();
+             ++local_index) {
+            const size_t vertex_index =
+                    first_vertex + local_index;
+            const CVec3& source = node.verts[vertex_index];
+            mesh->vertices.push_back(TerrainVertex{
+                    source.x,
+                    source.y,
+                    source.z,
+                    texture_x,
+                    texture_y[local_index],
+                    0xffffffffu});
+        }
+
+        if (previous_vertex_count > 0 &&
+            previous_node_index != node_index) {
+            const int maximum_vertex_count =
+                    std::max(
+                            previous_vertex_count,
+                            current_vertex_count);
+            const float previous_coefficient =
+                    previous_vertex_count > current_vertex_count
+                    ? 1.0f
+                    : static_cast<float>(previous_vertex_count) /
+                            static_cast<float>(
+                                    current_vertex_count);
+            const float current_coefficient =
+                    current_vertex_count > previous_vertex_count
+                    ? 1.0f
+                    : static_cast<float>(current_vertex_count) /
+                            static_cast<float>(
+                                    previous_vertex_count);
+            WorldObjectMesh::Layer& layer =
+                    mesh->layers[layer_index];
+            for (int index = 0;
+                 index + 1 < maximum_vertex_count;
+                 ++index) {
+                const uint32_t previous_top =
+                        previous_vertex_offset +
+                        static_cast<uint32_t>(
+                                previous_coefficient *
+                                static_cast<float>(index));
+                const uint32_t previous_bottom =
+                        previous_vertex_offset +
+                        static_cast<uint32_t>(
+                                previous_coefficient *
+                                static_cast<float>(index + 1));
+                const uint32_t current_top =
+                        current_vertex_offset +
+                        static_cast<uint32_t>(
+                                current_coefficient *
+                                static_cast<float>(index));
+                const uint32_t current_bottom =
+                        current_vertex_offset +
+                        static_cast<uint32_t>(
+                                current_coefficient *
+                                static_cast<float>(index + 1));
+                if (previous_top != previous_bottom) {
+                    layer.triangle_indices.push_back(previous_top);
+                    layer.triangle_indices.push_back(previous_bottom);
+                    layer.triangle_indices.push_back(current_bottom);
+                    ++g_crag_triangle_count;
+                    appended = true;
+                }
+                if (current_top != current_bottom) {
+                    layer.triangle_indices.push_back(current_bottom);
+                    layer.triangle_indices.push_back(current_top);
+                    layer.triangle_indices.push_back(previous_top);
+                    ++g_crag_triangle_count;
+                    appended = true;
+                }
+            }
+        }
+        ++g_crag_node_count;
+        previous_vertex_offset = current_vertex_offset;
+        previous_vertex_count = current_vertex_count;
+        previous_node_index = node_index;
+    }
+    return appended;
+}
+
+void AppendTerrainFoots(
+        const STerrainInfo& terrain_info,
+        WorldObjectMesh* mesh,
+        std::unordered_set<std::string>* texture_paths) {
+    g_crag_foot_count = 0;
+    g_crag_foot_segment_count = 0;
+    g_crag_foot_triangle_count = 0;
+    if (mesh == nullptr) {
+        return;
+    }
+    constexpr float kFootWidthBase = 1.5f;
+    constexpr float kFootWidthPerRadius = 0.3f;
+    for (const STerrainInfo::SFoot& foot : terrain_info.foots) {
+        const NDb::SMaterial* material =
+                foot.pFootMaterial
+                ? foot.pFootMaterial.GetPtr()
+                : nullptr;
+        const std::string texture_path =
+                PrecipiceTexturePath(material);
+        if (texture_path.empty()) {
+            continue;
+        }
+        const NDb::STexture* texture =
+                material != nullptr && material->pTexture
+                ? material->pTexture.GetPtr()
+                : nullptr;
+        const float texture_scale_x =
+                foot.fTexGeomScale /
+                static_cast<float>(
+                        texture == nullptr
+                        ? 512
+                        : std::max(texture->nWidth, 1));
+        const float texture_scale_y =
+                foot.fTexGeomScale /
+                static_cast<float>(
+                        texture == nullptr
+                        ? 512
+                        : std::max(texture->nHeight, 1));
+        const size_t layer_index =
+                FindOrAddAlphaWorldObjectLayer(mesh, texture_path);
+        if (layer_index == std::numeric_limits<size_t>::max()) {
+            continue;
+        }
+        if (texture_paths != nullptr) {
+            texture_paths->insert(texture_path);
+        }
+        bool appended = false;
+        for (const vector<STerrainInfo::SVSOPoint>& points :
+             foot.points) {
+            if (points.size() < 2) {
+                continue;
+            }
+            float texture_x = 0.0f;
+            for (size_t point_index = 0;
+                 point_index < points.size();
+                 ++point_index) {
+                const STerrainInfo::SVSOPoint& point =
+                        points[point_index];
+                const float width =
+                        kFootWidthBase +
+                        kFootWidthPerRadius * point.fRadius;
+                const float inner_x = point.vPos.x;
+                const float inner_y = point.vPos.y;
+                const float outer_x =
+                        inner_x + point.vNorm.x * width;
+                const float outer_y =
+                        inner_y + point.vNorm.y * width;
+                const float inner_z =
+                        std::max(
+                                TerrainHeightAt(
+                                        terrain_info,
+                                        inner_x,
+                                        inner_y),
+                                0.0f) +
+                        kLegacyRoadHeight;
+                const float outer_z =
+                        std::max(
+                                TerrainHeightAt(
+                                        terrain_info,
+                                        outer_x,
+                                        outer_y),
+                                0.0f) +
+                        kLegacyRoadHeight;
+                float inner_alpha = 1.0f;
+                if (point_index == 0 ||
+                    point_index + 1 == points.size()) {
+                    inner_alpha = 0.0f;
+                }
+                const uint32_t inner_color =
+                        (static_cast<uint32_t>(
+                                 std::lround(inner_alpha * 255.0f))
+                         << 24) |
+                        0x00ffffffu;
+                const uint32_t vertex_base =
+                        static_cast<uint32_t>(mesh->vertices.size());
+                mesh->vertices.push_back(TerrainVertex{
+                        inner_x,
+                        inner_y,
+                        inner_z,
+                        texture_x,
+                        point.vPos.z * texture_scale_y,
+                        inner_color});
+                mesh->vertices.push_back(TerrainVertex{
+                        outer_x,
+                        outer_y,
+                        outer_z,
+                        texture_x,
+                        point.vPos.z * texture_scale_y -
+                                width * texture_scale_y,
+                        0x00ffffffu});
+                if (point_index > 0) {
+                    WorldObjectMesh::Layer& layer =
+                            mesh->layers[layer_index];
+                    layer.triangle_indices.push_back(
+                            vertex_base - 2);
+                    layer.triangle_indices.push_back(vertex_base);
+                    layer.triangle_indices.push_back(
+                            vertex_base - 1);
+                    layer.triangle_indices.push_back(
+                            vertex_base - 1);
+                    layer.triangle_indices.push_back(vertex_base);
+                    layer.triangle_indices.push_back(
+                            vertex_base + 1);
+                    ++g_crag_foot_segment_count;
+                    g_crag_foot_triangle_count += 2;
+                    appended = true;
+                }
+                if (point_index + 1 < points.size()) {
+                    const STerrainInfo::SVSOPoint& next =
+                            points[point_index + 1];
+                    const float dx = next.vPos.x - point.vPos.x;
+                    const float dy = next.vPos.y - point.vPos.y;
+                    texture_x +=
+                            std::sqrt(dx * dx + dy * dy) *
+                            texture_scale_x;
+                }
+            }
+        }
+        if (appended) {
+            ++g_crag_foot_count;
+        }
+    }
+}
+
+void AppendTerrainPrecipices(
+        const NDb::SMapInfo* map,
+        const STerrainInfo& terrain_info,
+        WorldObjectMesh* mesh) {
+    g_crag_precipice_count = 0;
+    g_river_bank_precipice_count = 0;
+    g_river_bank_precipice_logged = false;
+    g_crag_node_count = 0;
+    g_crag_triangle_count = 0;
+    g_crag_foot_count = 0;
+    g_crag_foot_segment_count = 0;
+    g_crag_foot_triangle_count = 0;
+    g_crag_texture_count = 0;
+    g_crag_texture_gpu_count = 0;
+    g_crag_texture_paths.clear();
+    g_crag_texture_logged = false;
+    if (mesh == nullptr) {
+        return;
+    }
+    std::unordered_set<std::string> texture_paths;
+    float rendered_min_x = std::numeric_limits<float>::max();
+    float rendered_min_y = std::numeric_limits<float>::max();
+    float rendered_max_x = std::numeric_limits<float>::lowest();
+    float rendered_max_y = std::numeric_limits<float>::lowest();
+    float largest_min_x = 0.0f;
+    float largest_min_y = 0.0f;
+    float largest_max_x = 0.0f;
+    float largest_max_y = 0.0f;
+    int largest_id = -1;
+    size_t largest_triangles = 0;
+    for (const STerrainInfo::SPrecipice& precipice :
+         terrain_info.precipices) {
+        const size_t triangles_before = g_crag_triangle_count;
+        bool river_bank = false;
+        if (AppendPrecipiceMesh(
+                    map,
+                    terrain_info,
+                    precipice,
+                    mesh,
+                    &texture_paths,
+                    &river_bank)) {
+            ++g_crag_precipice_count;
+            if (river_bank) {
+                ++g_river_bank_precipice_count;
+            }
+            float precipice_min_x =
+                    std::numeric_limits<float>::max();
+            float precipice_min_y =
+                    std::numeric_limits<float>::max();
+            float precipice_max_x =
+                    std::numeric_limits<float>::lowest();
+            float precipice_max_y =
+                    std::numeric_limits<float>::lowest();
+            for (int node_index : precipice.nodes) {
+                if (node_index < 0 ||
+                    node_index >= static_cast<int>(
+                            terrain_info.precNodes.size())) {
+                    continue;
+                }
+                const CVec2& position =
+                        terrain_info
+                                .precNodes[static_cast<size_t>(node_index)]
+                                .vPos;
+                precipice_min_x =
+                        std::min(precipice_min_x, position.x);
+                precipice_min_y =
+                        std::min(precipice_min_y, position.y);
+                precipice_max_x =
+                        std::max(precipice_max_x, position.x);
+                precipice_max_y =
+                        std::max(precipice_max_y, position.y);
+            }
+            if (precipice_min_x <= precipice_max_x &&
+                precipice_min_y <= precipice_max_y) {
+                rendered_min_x =
+                        std::min(rendered_min_x, precipice_min_x);
+                rendered_min_y =
+                        std::min(rendered_min_y, precipice_min_y);
+                rendered_max_x =
+                        std::max(rendered_max_x, precipice_max_x);
+                rendered_max_y =
+                        std::max(rendered_max_y, precipice_max_y);
+                const size_t triangle_count =
+                        g_crag_triangle_count - triangles_before;
+                if (triangle_count > largest_triangles) {
+                    largest_id = precipice.nID;
+                    largest_triangles = triangle_count;
+                    largest_min_x = precipice_min_x;
+                    largest_min_y = precipice_min_y;
+                    largest_max_x = precipice_max_x;
+                    largest_max_y = precipice_max_y;
+                }
+            }
+        }
+    }
+    AppendTerrainFoots(
+            terrain_info,
+            mesh,
+            &texture_paths);
+    g_crag_texture_count = texture_paths.size();
+    g_crag_texture_paths = texture_paths;
+    std::ostringstream report;
+    report << "terrain_crags="
+           << (g_crag_precipice_count > 0
+                       ? "ready"
+                       : "empty")
+           << "; descriptors="
+           << (map == nullptr ? 0 : map->crags.size())
+           << "; river_descriptors="
+           << (map == nullptr ? 0 : map->rivers.size())
+           << "; serialized_precipices="
+           << terrain_info.precipices.size()
+           << "; serialized_nodes="
+           << terrain_info.precNodes.size()
+           << "; rendered_precipices="
+           << g_crag_precipice_count
+           << "; rendered_river_banks="
+           << g_river_bank_precipice_count
+           << "; rendered_nodes="
+           << g_crag_node_count
+           << "; triangles="
+           << g_crag_triangle_count
+           << "; serialized_foots="
+           << terrain_info.foots.size()
+           << "; rendered_foots="
+           << g_crag_foot_count
+           << "; foot_segments="
+           << g_crag_foot_segment_count
+           << "; foot_triangles="
+           << g_crag_foot_triangle_count
+           << "; textures="
+           << g_crag_texture_count;
+    if (rendered_min_x <= rendered_max_x &&
+        rendered_min_y <= rendered_max_y) {
+        report << "; bounds="
+               << rendered_min_x << "," << rendered_min_y
+               << "-" << rendered_max_x << "," << rendered_max_y
+               << "; largest_id=" << largest_id
+               << "; largest_triangles=" << largest_triangles
+               << "; largest_bounds="
+               << largest_min_x << "," << largest_min_y
+               << "-" << largest_max_x << "," << largest_max_y;
+    }
+    PlatformRuntime::instance().log_info(report.str());
+}
+
 std::string FallbackRiverTexturePath(
         const NDb::SVSODesc* descriptor,
         const char* texture_name) {
@@ -4420,6 +5187,7 @@ void BuildPresentationStaticWorldMesh(
     const size_t total = g_map_object_count + g_scenario_object_count;
     mesh->vertices.reserve(total * 5);
     mesh->triangle_indices.reserve(total * 18);
+    AppendTerrainPrecipices(map, terrain_info, mesh);
     AppendMapObjects(
             map->objects,
             terrain_info,
@@ -5346,6 +6114,8 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
     size_t road_texture_ready = 0;
     size_t river_texture_layers = 0;
     size_t river_texture_ready = 0;
+    size_t crag_texture_layers = 0;
+    size_t crag_texture_ready = 0;
     for (WorldObjectMesh::Layer& layer : mesh->layers) {
         layer.texture_handle =
                 ModelTextureHandle(layer.texture_path);
@@ -5355,7 +6125,17 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
                 ++road_texture_ready;
             }
         }
-        if (layer.texture_path.find("Terrain/Water/") == 0) {
+        // River bank precipices also resolve into Terrain/Water, so the
+        // precipice pass reports its exact texture set instead of a path
+        // prefix and the river gate keeps counting only water layers.
+        const bool crag_layer =
+                g_crag_texture_paths.count(layer.texture_path) != 0;
+        if (crag_layer) {
+            ++crag_texture_layers;
+            if (layer.texture_handle != UINT16_MAX) {
+                ++crag_texture_ready;
+            }
+        } else if (layer.texture_path.find("Terrain/Water/") == 0) {
             ++river_texture_layers;
             if (layer.texture_handle != UINT16_MAX) {
                 ++river_texture_ready;
@@ -5436,6 +6216,18 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
                    << "; total=" << river_texture_layers;
             PlatformRuntime::instance().log_info(report.str());
             g_river_texture_logged = true;
+        }
+    }
+    if (crag_texture_layers > 0) {
+        g_crag_texture_gpu_count = crag_texture_ready;
+        if (!g_crag_texture_logged &&
+            crag_texture_ready == crag_texture_layers) {
+            std::ostringstream report;
+            report << "terrain_crag_textures_gpu=ready"
+                   << "; ready=" << crag_texture_ready
+                   << "; total=" << crag_texture_layers;
+            PlatformRuntime::instance().log_info(report.str());
+            g_crag_texture_logged = true;
         }
     }
 }
@@ -5783,6 +6575,18 @@ void ShutdownSinglePlayerRuntime() {
     g_river_disturbed_vertex_count = 0;
     g_river_animated_layer_count = 0;
     g_river_texture_logged = false;
+    g_crag_precipice_count = 0;
+    g_river_bank_precipice_count = 0;
+    g_river_bank_precipice_logged = false;
+    g_crag_node_count = 0;
+    g_crag_triangle_count = 0;
+    g_crag_foot_count = 0;
+    g_crag_foot_segment_count = 0;
+    g_crag_foot_triangle_count = 0;
+    g_crag_texture_count = 0;
+    g_crag_texture_gpu_count = 0;
+    g_crag_texture_paths.clear();
+    g_crag_texture_logged = false;
     g_converted_geometry_instance_count = 0;
     g_converted_geometry_fallback_count = 0;
     g_animated_geometry_part_count = 0;
@@ -6596,6 +7400,24 @@ std::string SinglePlayerRuntimeReport() {
            << g_road_texture_count
            << "; terrain_road_textures_gpu="
            << g_road_texture_gpu_count
+           << "; terrain_crag_precipices="
+           << g_crag_precipice_count
+           << "; terrain_river_bank_precipices="
+           << g_river_bank_precipice_count
+           << "; terrain_crag_nodes="
+           << g_crag_node_count
+           << "; terrain_crag_triangles="
+           << g_crag_triangle_count
+           << "; terrain_crag_foots="
+           << g_crag_foot_count
+           << "; terrain_crag_foot_segments="
+           << g_crag_foot_segment_count
+           << "; terrain_crag_foot_triangles="
+           << g_crag_foot_triangle_count
+           << "; terrain_crag_textures="
+           << g_crag_texture_count
+           << "; terrain_crag_textures_gpu="
+           << g_crag_texture_gpu_count
            << "; texture_gpu="
            << ((g_terrain_layer_texture_count > 0 ||
                 g_terrain_mesh.texture_handle != UINT16_MAX)

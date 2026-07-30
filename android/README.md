@@ -553,6 +553,40 @@ On ARM64 GB3.1 the one 279-point river produced 11,676 triangles, disturbed
 border displacement, animated two layers at their descriptor speeds, and
 loaded all three Summer DDS files into valid GPU handles.
 
+Terrain precipices now follow the original `PrecipicesRender.cpp`
+`CreatePrecipiceMesh` path. Every serialized `STerrainInfo::SPrecipice` is
+walked node by node; each visible node contributes the vertex column between
+its `minHeights`/`maxHeights` entries, columns shorter than the desktop
+`DEF_MIN_PRECIPICE_HEIGHT` of `0.025` are skipped exactly as in the original,
+and consecutive columns are stitched with the same `nMaxVertsNum`/`fCoeff`
+index interpolation. Texture U advances by the largest planar gap between the
+interpolated column pairs and V accumulates the 3D edge length downward from
+the top vertex, both scaled by `fTexGeomScale` over the material texture size.
+The `SFoot` skirts are rebuilt from the same terrain data and use their
+`pFootMaterial` as alpha-blended layers.
+
+`PrecipicesManager.cpp` collects two kinds of precipice, and both are now
+rendered. Crag precipices keep the crag VSO id and take `SCragDesc`'s
+`pRidgeMaterial`; river precipices carry the river VSO id plus the `0x10000`
+(left) or `0x20000` (right) bank marker and take `SRiverDesc`'s
+`pPrecipiceMaterial`. River bank materials are resolved the same way the river
+water layers are — the texture's `szDestName` first, then the seasonal
+`Terrain/Water/<season>/crags.dds` — because the crag material naming
+convention would otherwise point at an unstaged `Scene/TexAndMats` path. The
+precipice pass reports its exact texture set, so the river gate keeps counting
+only the three water layers.
+
+On ARM64 GB3.1 all 7 serialized precipices rendered, including both banks of
+its single river, for 867 node columns and 8,658 triangles plus 5 foot skirts
+with 1,094 triangles across 3 textures and 5 GPU-ready layers; the river bank
+resolved `River_RiverDesc.xdb` to `Terrain/Water/summer/crags.dds`. GER1.1
+rendered 35 of its 36 serialized precipices — 34 crags and one river bank —
+with 5,472 triangles, 34 foot skirts, and 11 GPU-ready layers; its remaining
+bank has no column above the minimum precipice height, so the original draws
+nothing there either. US1.2, which has no river, rendered all 36 crag
+precipices and 36 foot skirts with 7 GPU-ready layers. `bStayedOnTerrain`
+bottom-vertex snapping and the `SPeak` collection are still follow-up work.
+
 The Android content step now decodes the shipped Granny format-6/Oodle0
 geometry into a small native `BK2MSH1` cache. The complete current pass yields
 2,510 renderable geometry files (1,126,692 vertices and 731,200 triangles);

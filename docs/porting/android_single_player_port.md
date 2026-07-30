@@ -163,6 +163,29 @@ signed `fStreamSpeed` against simulation animation time.
 GB3.1 verified one 279-point river, 278 segments, 11,676 triangles, 3,348
 disturbed internal water vertices, 1,933 carved heightfield vertices, two
 animated water layers, and three ready Summer DDS GPU handles.
+Terrain precipices complete the same terrain layer. The runtime walks every
+serialized `STerrainInfo::SPrecipice` with the original
+`PrecipicesRender.cpp` `CreatePrecipiceMesh` rules: per-node vertex columns
+clipped to the node's `minHeights`/`maxHeights`, the desktop
+`DEF_MIN_PRECIPICE_HEIGHT` skip for flat columns, the same interpolated column
+stitching, and `fTexGeomScale`-scaled U/V from planar column distance and 3D
+edge length. `SFoot` skirts are rebuilt from their `pFootMaterial` as blended
+layers. Both precipice sources from `PrecipicesManager.cpp` are covered: crag
+precipices resolve `SCragDesc::pRidgeMaterial` by crag VSO id, and river bank
+precipices resolve `SRiverDesc::pPrecipiceMaterial` through the `0x10000` /
+`0x20000` bank markers. Bank textures use the river texture resolution rather
+than the crag material naming convention, which would otherwise select an
+unstaged `Scene/TexAndMats` path.
+
+GB3.1 verified all 7 serialized precipices including both river banks, 867
+node columns, 8,658 triangles, 5 foot skirts with 1,094 triangles, and 5 ready
+GPU layers over 3 textures, with the bank resolving to
+`Terrain/Water/summer/crags.dds`. GER1.1 verified 35 of 36 precipices — 34
+crags and one river bank — with 5,472 triangles, 34 foot skirts, and 11 ready
+GPU layers; its remaining bank has no column above the minimum precipice
+height. US1.2, which has no river, verified 36 crag precipices, 36 foot skirts,
+and 7 ready GPU layers. `bStayedOnTerrain` bottom snapping and `SPeak`
+collection remain follow-up work.
 
 ## Implemented In This Slice
 
