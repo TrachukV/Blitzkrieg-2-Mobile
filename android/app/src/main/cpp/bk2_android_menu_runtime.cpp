@@ -1,11 +1,15 @@
 #include "bk2_android_menu_runtime.h"
 
 #include "bk2_android_platform.h"
+#include "bk2_legacy_texture_probe.h"
+#include "bk2_render_backend.h"
 
 #include "UI/stdafx.h"
 #include "UI/DBUserInterface.h"
 #include "3Dmotor/DBScene.h"
+#include "3Dmotor/GTexture.h"
 #include "System/VFSOperations.h"
+#include "libdb/Database.h"
 #include "libdb/Db.h"
 
 #include <algorithm>
@@ -26,6 +30,26 @@ constexpr int kMaxMenuWindowDepth = 24;
 constexpr size_t kMaxMenuWindowNodes = 512;
 constexpr int kMaxCaptionCharacters = 120;
 
+// One submitted rectangle in the 1024x768 virtual screen space, with texture
+// coordinates already normalized out of the descriptor's pixel maps.
+struct MenuQuad {
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+    float u0 = 0.0f;
+    float v0 = 0.0f;
+    float u1 = 1.0f;
+    float v1 = 1.0f;
+    uint32_t argb = 0xffffffffu;
+    int texture = -1;
+};
+
+std::vector<MenuQuad> g_quads;
+std::vector<std::string> g_texture_paths;
+std::vector<uint16_t> g_texture_handles;
+std::map<std::string, CObj<NGfx::CTexture>> g_menu_textures;
+bool g_render_logged = false;
 std::vector<MenuWindowNode> g_nodes;
 std::string g_screen_ref;
 std::string g_error;
@@ -208,6 +232,319 @@ std::string BackgroundTexturePath(const NDb::SBackground* background) {
         }
     }
     return path;
+}
+
+// Same immediate CFileTexture path the world renderer uses, so shipped menu
+// DDS/TGA art reaches bgfx without the legacy resource loader threads.
+uint16_t MenuTextureHandle(const std::string& texture_path) {
+    if (texture_path.empty()) {
+        return UINT16_MAX;
+    }
+    auto cached = g_menu_textures.find(texture_path);
+    if (cached == g_menu_textures.end()) {
+        CPtr<NDb::STexture> texture_desc = new NDb::STexture();
+        NDb::CResourceHelper::SetDBID(
+                texture_desc.GetPtr(),
+                CDBID("Android/OriginalMenuTexture.xdb"));
+        NDb::CResourceHelper::SetLoaded(texture_desc.GetPtr());
+        texture_desc->szDestName = texture_path.c_str();
+        texture_desc->eType = NDb::STexture::REGULAR;
+        texture_desc->eAddrType = NDb::STexture::CLAMP;
+        texture_desc->bInstantLoad = true;
+        CObj<NGScene::CFileTexture> texture_node =
+                new NGScene::CFileTexture();
+        GUID uid;
+        Zero(uid);
+        texture_node->SetKey(NGScene::GetKey(texture_desc.GetPtr()), uid);
+        CDGPtr<NGScene::CFileTexture> texture_ref(texture_node.GetPtr());
+        texture_ref.Refresh();
+        CObj<NGfx::CTexture> texture = texture_ref->GetValue();
+        cached = g_menu_textures.emplace(texture_path, texture).first;
+    }
+    if (!IsValid(cached->second)) {
+        return UINT16_MAX;
+    }
+    EnsureLegacyTextureMipChainUploaded(cached->second);
+    return LegacyTextureHandleIndex(cached->second);
+}
+
+int TextureIndex(const std::string& path) {
+    if (path.empty()) {
+        return -1;
+    }
+    for (size_t index = 0; index < g_texture_paths.size(); ++index) {
+        if (g_texture_paths[index] == path) {
+            return static_cast<int>(index);
+        }
+    }
+    g_texture_paths.push_back(path);
+    return static_cast<int>(g_texture_paths.size() - 1);
+}
+
+// UI/Tools.cpp ApplyTextureAllign; the maps it produces are texture pixels.
+void ApplyTextureAlign(
+        NDb::EPositionAllign align,
+        float width,
+        float texture_width,
+        float* map1,
+        float* map2,
+        float* position) {
+    switch (align) {
+        case NDb::EPA_HIGH_END:
+            if (width < texture_width) {
+                *map1 = texture_width - width;
+                *map2 = texture_width;
+            } else {
+                *position += width - texture_width;
+                *map1 = 0.0f;
+                *map2 = texture_width;
+            }
+            break;
+        case NDb::EPA_LOW_END:
+        default:
+            *map1 = 0.0f;
+            *map2 = std::min(width, texture_width);
+            break;
+    }
+}
+
+// CBackgroundSimpleTexture::Visit draws one rect clipped to the texture size.
+void AppendSimpleTextureQuads(
+        const NDb::SBackgroundSimpleTexture* background,
+        float x,
+        float y,
+        float width,
+        float height,
+        int texture,
+        float texture_width,
+        float texture_height) {
+    if (background == nullptr ||
+        width <= 0.0f ||
+        height <= 0.0f ||
+        texture_width <= 0.0f ||
+        texture_height <= 0.0f) {
+        return;
+    }
+    MenuQuad quad;
+    quad.x = x;
+    quad.y = y;
+    quad.width = std::min(width, texture_width);
+    quad.height = std::min(height, texture_height);
+    quad.texture = texture;
+    quad.argb = static_cast<uint32_t>(background->nColor);
+    float map_x1 = 0.0f;
+    float map_x2 = 0.0f;
+    float map_y1 = 0.0f;
+    float map_y2 = 0.0f;
+    ApplyTextureAlign(
+            background->eTextureX,
+            width,
+            texture_width,
+            &map_x1,
+            &map_x2,
+            &quad.x);
+    ApplyTextureAlign(
+            background->eTextureY,
+            height,
+            texture_height,
+            &map_y1,
+            &map_y2,
+            &quad.y);
+    quad.u0 = map_x1 / texture_width;
+    quad.u1 = map_x2 / texture_width;
+    quad.v0 = map_y1 / texture_height;
+    quad.v1 = map_y2 / texture_height;
+    g_quads.push_back(quad);
+}
+
+// CBackgroundTiledTexture::DivideSubrects repeats one sub-rect over its
+// destination band, clipping the final row/column's texture maps.
+void DivideSubrect(
+        const NDb::SSubRect& sub_rect,
+        uint32_t argb,
+        int texture,
+        float texture_width,
+        float texture_height) {
+    if (sub_rect.ptSize.x <= 0.0f || sub_rect.ptSize.y <= 0.0f) {
+        return;
+    }
+    const float map_width = sub_rect.rcMaps.x2 - sub_rect.rcMaps.x1;
+    const float map_height = sub_rect.rcMaps.y2 - sub_rect.rcMaps.y1;
+    for (float y = sub_rect.rcRect.y1;
+         y < sub_rect.rcRect.y2;
+         y += sub_rect.ptSize.y) {
+        float size_y = sub_rect.ptSize.y;
+        float map_y2 = sub_rect.rcMaps.y2;
+        if (y + sub_rect.ptSize.y > sub_rect.rcRect.y2) {
+            size_y = sub_rect.rcRect.y2 - y;
+            map_y2 = sub_rect.rcMaps.y1 +
+                    (size_y / sub_rect.ptSize.y) * map_height;
+        }
+        for (float x = sub_rect.rcRect.x1;
+             x < sub_rect.rcRect.x2;
+             x += sub_rect.ptSize.x) {
+            float size_x = sub_rect.ptSize.x;
+            float map_x2 = sub_rect.rcMaps.x2;
+            if (x + sub_rect.ptSize.x > sub_rect.rcRect.x2) {
+                size_x = sub_rect.rcRect.x2 - x;
+                map_x2 = sub_rect.rcMaps.x1 +
+                        (size_x / sub_rect.ptSize.x) * map_width;
+            }
+            MenuQuad quad;
+            quad.x = x;
+            quad.y = y;
+            quad.width = size_x;
+            quad.height = size_y;
+            quad.u0 = sub_rect.rcMaps.x1 / texture_width;
+            quad.u1 = map_x2 / texture_width;
+            quad.v0 = sub_rect.rcMaps.y1 / texture_height;
+            quad.v1 = map_y2 / texture_height;
+            quad.argb = argb;
+            quad.texture = texture;
+            g_quads.push_back(quad);
+        }
+    }
+}
+
+// CBackgroundTiledTexture::InitBorderAndFill lays the nine bands out from the
+// window rect and the corner sub-rect sizes.
+void AppendTiledTextureQuads(
+        const NDb::SBackgroundTiledTexture* background,
+        float x,
+        float y,
+        float width,
+        float height,
+        int texture,
+        float texture_width,
+        float texture_height) {
+    if (background == nullptr ||
+        width <= 0.0f ||
+        height <= 0.0f ||
+        texture_width <= 0.0f ||
+        texture_height <= 0.0f) {
+        return;
+    }
+    const float left = x;
+    const float top_edge = y;
+    const float right = x + width;
+    const float bottom = y + height;
+    const float border_left = background->rL.ptSize.x;
+    const float border_right = background->rR.ptSize.x;
+    const float border_top = background->rT.ptSize.y;
+    const float border_bottom = background->rB.ptSize.y;
+
+    NDb::SSubRect left_top = background->rLT;
+    NDb::SSubRect right_top = background->rRT;
+    NDb::SSubRect left_bottom = background->rLB;
+    NDb::SSubRect right_bottom = background->rRB;
+    NDb::SSubRect top = background->rT;
+    NDb::SSubRect bottom_band = background->rB;
+    NDb::SSubRect left_band = background->rL;
+    NDb::SSubRect right_band = background->rR;
+    NDb::SSubRect fill = background->rF;
+    left_top.rcRect.Set(left, top_edge, left + border_left, top_edge + border_top);
+    right_top.rcRect.Set(right - border_right, top_edge, right, top_edge + border_top);
+    left_bottom.rcRect.Set(left, bottom - border_bottom, left + border_left, bottom);
+    right_bottom.rcRect.Set(
+            right - border_right, bottom - border_bottom, right, bottom);
+    top.rcRect.Set(
+            left + border_left, top_edge, right - border_right, top_edge + border_top);
+    bottom_band.rcRect.Set(
+            left + border_left,
+            bottom - border_bottom,
+            right - border_right,
+            bottom);
+    left_band.rcRect.Set(
+            left,
+            top_edge + border_top,
+            left + border_left,
+            bottom - border_bottom);
+    right_band.rcRect.Set(
+            right - border_right,
+            top_edge + border_top,
+            right,
+            bottom - border_bottom);
+    fill.rcRect.Set(
+            left + border_left,
+            top_edge + border_top,
+            right - border_right,
+            bottom - border_bottom);
+
+    const uint32_t argb = static_cast<uint32_t>(background->nColor);
+    const NDb::SSubRect* order[] = {
+            &left_top,   &top,         &right_top,
+            &left_band,  &fill,        &right_band,
+            &left_bottom, &bottom_band, &right_bottom};
+    for (const NDb::SSubRect* sub_rect : order) {
+        DivideSubrect(
+                *sub_rect,
+                argb,
+                texture,
+                texture_width,
+                texture_height);
+    }
+}
+
+void AppendBackgroundQuads(
+        const NDb::SBackground* background,
+        float x,
+        float y,
+        float width,
+        float height) {
+    if (background == nullptr || !background->pTexture) {
+        return;
+    }
+    const NDb::STexture* texture_desc = background->pTexture.GetPtr();
+    if (texture_desc == nullptr) {
+        return;
+    }
+    const int texture = TextureIndex(BackgroundTexturePath(background));
+    if (texture < 0) {
+        return;
+    }
+    const float texture_width =
+            static_cast<float>(std::max(texture_desc->nWidth, 1));
+    const float texture_height =
+            static_cast<float>(std::max(texture_desc->nHeight, 1));
+    switch (background->GetTypeID()) {
+        case NDb::SBackgroundTiledTexture::typeID:
+            AppendTiledTextureQuads(
+                    static_cast<const NDb::SBackgroundTiledTexture*>(
+                            background),
+                    x,
+                    y,
+                    width,
+                    height,
+                    texture,
+                    texture_width,
+                    texture_height);
+            break;
+        case NDb::SBackgroundSimpleTexture::typeID:
+            AppendSimpleTextureQuads(
+                    static_cast<const NDb::SBackgroundSimpleTexture*>(
+                            background),
+                    x,
+                    y,
+                    width,
+                    height,
+                    texture,
+                    texture_width,
+                    texture_height);
+            break;
+        default: {
+            // BackgroundSimpleScallingTexture and any other variant stretch
+            // the whole texture over the window rect.
+            MenuQuad quad;
+            quad.x = x;
+            quad.y = y;
+            quad.width = width;
+            quad.height = height;
+            quad.argb = static_cast<uint32_t>(background->nColor);
+            quad.texture = texture;
+            g_quads.push_back(quad);
+            break;
+        }
+    }
 }
 
 const NDb::SWindowShared* SharedOf(const NDb::SWindow* window) {
@@ -409,6 +746,24 @@ void CollectWindow(
         }
     }
 
+    // CWindow draws its own background, then its foreground, then children.
+    if (node.visible && shared != nullptr) {
+        const NDb::SBackground* background = shared->pBackground.GetPtr();
+        if (window->GetTypeID() == NDb::SWindowMSButton::typeID) {
+            const NDb::SWindowMSButtonShared* button_shared =
+                    dynamic_cast<const NDb::SWindowMSButtonShared*>(shared);
+            if (button_shared != nullptr &&
+                !button_shared->visualStates.empty() &&
+                button_shared->visualStates[0].normal.pBackground) {
+                background = button_shared->visualStates[0]
+                                     .normal.pBackground.GetPtr();
+            }
+        }
+        AppendBackgroundQuads(background, x, y, width, height);
+        AppendBackgroundQuads(
+                shared->pForeground.GetPtr(), x, y, width, height);
+    }
+
     if (node.button) {
         ++g_button_count;
     }
@@ -441,6 +796,10 @@ void CollectWindow(
 bool LoadOriginalMenuScreen(const std::string& screen_ref) {
     std::lock_guard<std::mutex> guard(g_menu_mutex);
     g_nodes.clear();
+    g_quads.clear();
+    g_texture_paths.clear();
+    g_texture_handles.clear();
+    g_render_logged = false;
     g_text_cache.clear();
     g_button_count = 0;
     g_texture_count = 0;
@@ -474,9 +833,83 @@ bool LoadOriginalMenuScreen(const std::string& screen_ref) {
     return g_ready;
 }
 
+void RenderOriginalMenu(uint32_t screen_width, uint32_t screen_height) {
+    std::lock_guard<std::mutex> guard(g_menu_mutex);
+    if (!g_ready || screen_width == 0 || screen_height == 0) {
+        return;
+    }
+    // UI.cpp VirtualToScreenX/Y scale each axis independently, so the shipped
+    // 1024x768 layout stretches to whatever resolution is active.
+    const float scale_x =
+            static_cast<float>(screen_width) / kVirtualScreenWidth;
+    const float scale_y =
+            static_cast<float>(screen_height) / kVirtualScreenHeight;
+    if (g_texture_handles.size() != g_texture_paths.size()) {
+        g_texture_handles.assign(g_texture_paths.size(), UINT16_MAX);
+    }
+    for (size_t index = 0; index < g_texture_paths.size(); ++index) {
+        if (g_texture_handles[index] == UINT16_MAX) {
+            g_texture_handles[index] = MenuTextureHandle(
+                    g_texture_paths[index]);
+        }
+    }
+    size_t submitted = 0;
+    for (const MenuQuad& quad : g_quads) {
+        if (quad.texture < 0 ||
+            static_cast<size_t>(quad.texture) >= g_texture_handles.size()) {
+            continue;
+        }
+        const uint16_t handle = g_texture_handles[quad.texture];
+        if (handle == UINT16_MAX) {
+            continue;
+        }
+        RenderBackend().queue_textured_rect(
+                quad.x * scale_x,
+                quad.y * scale_y,
+                quad.width * scale_x,
+                quad.height * scale_y,
+                handle,
+                quad.u0,
+                quad.v0,
+                quad.u1,
+                quad.v1,
+                quad.argb);
+        ++submitted;
+    }
+    if (!g_render_logged && submitted > 0) {
+        std::ostringstream report;
+        size_t ready_textures = 0;
+        for (uint16_t handle : g_texture_handles) {
+            if (handle != UINT16_MAX) {
+                ++ready_textures;
+            }
+        }
+        report << "original_menu_render=ready"
+               << "; quads=" << g_quads.size()
+               << "; submitted=" << submitted
+               << "; textures=" << ready_textures
+               << "/" << g_texture_handles.size()
+               << "; surface=" << screen_width << "x" << screen_height;
+        PlatformRuntime::instance().log_info(report.str());
+        g_render_logged = true;
+    }
+}
+
+void ReleaseOriginalMenuGpuResources() {
+    std::lock_guard<std::mutex> guard(g_menu_mutex);
+    g_menu_textures.clear();
+    g_texture_handles.clear();
+    g_render_logged = false;
+}
+
 void ShutdownOriginalMenuRuntime() {
     std::lock_guard<std::mutex> guard(g_menu_mutex);
     g_nodes.clear();
+    g_quads.clear();
+    g_texture_paths.clear();
+    g_texture_handles.clear();
+    g_menu_textures.clear();
+    g_render_logged = false;
     g_text_cache.clear();
     g_screen_ref.clear();
     g_error.clear();
@@ -512,7 +945,9 @@ std::string OriginalMenuReport() {
            << "; windows=" << g_nodes.size()
            << "; buttons=" << g_button_count
            << "; textures=" << g_texture_count
-           << "; captions=" << g_caption_count;
+           << "; captions=" << g_caption_count
+           << "; quads=" << g_quads.size()
+           << "; texture_paths=" << g_texture_paths.size();
     for (const MenuWindowNode& node : g_nodes) {
         if (!node.button) {
             continue;

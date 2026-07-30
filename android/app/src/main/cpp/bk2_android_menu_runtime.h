@@ -34,6 +34,12 @@ struct MenuWindowNode {
 bool LoadOriginalMenuScreen(const std::string& screen_ref);
 void ShutdownOriginalMenuRuntime();
 
+// Submits the resolved screen through the bgfx 2D path. The original client
+// lays screens out in a fixed 1024x768 virtual space and then scales X and Y
+// independently to the active resolution, so the same mapping is used here.
+void RenderOriginalMenu(uint32_t screen_width, uint32_t screen_height);
+void ReleaseOriginalMenuGpuResources();
+
 bool IsOriginalMenuReady();
 const std::vector<MenuWindowNode>& OriginalMenuNodes();
 float OriginalMenuVirtualWidth();

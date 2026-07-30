@@ -601,8 +601,25 @@ from the first `SButtonVisualState`, and captions come from the shipped UTF-16
 files; the inline markup tags such as `<val button>` are split off as the
 requested text style instead of being drawn as characters.
 
+The resolved screen is also submitted through the existing bgfx 2D path.
+`SBackgroundTiledTexture` panels are rebuilt with the desktop
+`InitBorderAndFill` / `DivideSubrects` nine-band algorithm, including the
+clipped texture maps on the last repeated row and column, and
+`SBackgroundSimpleTexture` follows `CBackgroundSimpleTexture::Visit` with
+`NUITools::ApplyTextureAllign`. Descriptor texture maps are authored in texture
+pixels and are normalized against each `STexture` size. Submission uses the
+desktop `VirtualToScreenX`/`VirtualToScreenY` mapping, which scales X and Y
+independently from the 1024x768 layout to the active surface, so the screen
+adapts to any device aspect exactly like the original does to any resolution.
+
+Launching `Blitzkrieg2Activity` with the `SHOW_MENU` extra writes `menu=1` into
+`selected_mission.txt`; the single-player runtime then reports
+`menu_requested` instead of falling back to the first campaign mission, and the
+shell renders the menu with no mission HUD over it.
+
 On the ARM64 emulator the main menu screen resolves 28 windows, 16 buttons, 20
-textures, and 17 captions. The right-hand column reproduces the original
+textures, and 17 captions, and submits 174 quads with all 3 referenced menu
+textures on valid GPU handles over a 2856x1280 surface. The right-hand column reproduces the original
 layout exactly: the panel lands at `x=779` with 170x42 buttons at `y=143`
 (Single Player), `193` (Multiplayer), `243` (Options), `293` (Load MOD), `343`
 (Credits), `393` (Encyclopedia), and `443` (Exit), matching the shipped

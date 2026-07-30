@@ -442,6 +442,9 @@ extern "C" void android_main(android_app* app) {
         platform.log_warn(bk2::android::SinglePlayerRuntimeReport());
     }
 
+    const bool menu_active =
+            !bk2::android::IsSinglePlayerRuntimeReady() &&
+            bk2::android::IsOriginalMenuReady();
     bool first_render_frame_logged = false;
     bool mission_script_tick_logged = false;
     uint64_t last_tick_millis = platform.monotonic_millis();
@@ -475,6 +478,13 @@ extern "C" void android_main(android_app* app) {
         }
         bk2::android::AudioOutput().service();
         if (bk2::android::RenderBackend().is_ready()) {
+            // Without a selected mission the shell shows the original menu
+            // screen instead of an empty battlefield.
+            if (menu_active) {
+                bk2::android::RenderOriginalMenu(
+                        bk2::android::RenderBackend().width(),
+                        bk2::android::RenderBackend().height());
+            }
             QueueTouchSelectionOverlay();
             bk2::android::RenderLegacyGfxFrame();
             if (!first_render_frame_logged &&

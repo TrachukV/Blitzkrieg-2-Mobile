@@ -314,6 +314,9 @@ float TerrainMeshHeightAtLocked(float world_x, float world_y);
 
 struct MissionLaunchOverride {
     bool present = false;
+    // The original client boots into its menu; "menu = 1" asks the shell for
+    // that instead of dropping straight into a mission.
+    bool menu = false;
     bool tutorial = false;
     bool continue_campaign = false;
     int campaign_index = -1;
@@ -424,6 +427,11 @@ MissionLaunchOverride ReadMissionLaunchOverride() {
             result.mission_id = value;
             continue;
         }
+        if (key == "menu") {
+            result.menu = value != "0";
+            result.present = true;
+            continue;
+        }
         int parsed = 0;
         if (!ParseIntValue(value, &parsed)) {
             result.error = "selected_mission_bad_int:" + key;
@@ -455,6 +463,11 @@ MissionRuntimeResult StartConfiguredMissionState() {
     if (!launch.error.empty()) {
         MissionRuntimeResult result;
         result.error = launch.error;
+        return result;
+    }
+    if (launch.menu) {
+        MissionRuntimeResult result;
+        result.error = "menu_requested";
         return result;
     }
     if (!launch.present) {

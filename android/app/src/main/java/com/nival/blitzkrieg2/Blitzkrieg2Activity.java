@@ -35,6 +35,7 @@ import java.util.Set;
 
 public final class Blitzkrieg2Activity extends GameActivity {
     public static final String EXTRA_MISSION_ID = "com.nival.blitzkrieg2.MISSION_ID";
+    public static final String EXTRA_SHOW_MENU = "com.nival.blitzkrieg2.SHOW_MENU";
     public static final String EXTRA_DIFFICULTY = "com.nival.blitzkrieg2.DIFFICULTY";
     private final Handler outcomeHandler = new Handler(Looper.getMainLooper());
     private LinearLayout outcomePanel;
@@ -44,6 +45,7 @@ public final class Blitzkrieg2Activity extends GameActivity {
     private TextView missionStatus;
     private TextView pauseIndicator;
     private OriginalMissionHudView originalHud;
+    private boolean menuMode;
     private GridLayout commandGrid;
     private ImageButton moveCommandButton;
     private ImageButton attackCommandButton;
@@ -125,6 +127,12 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 externalFilesDir);
         super.onCreate(savedInstanceState);
         enterImmersiveMode();
+        if (menuMode) {
+            // No mission HUD over the menu screen; the whole surface belongs
+            // to the original interface.
+            NativeBridge.setMissionHudHeightPixels(0);
+            return;
+        }
         addContentView(
                 createHud(),
                 new ViewGroup.LayoutParams(
@@ -782,6 +790,22 @@ public final class Blitzkrieg2Activity extends GameActivity {
     }
 
     private void persistMissionSelectionFromIntent(Intent intent) {
+        if (intent != null && intent.getBooleanExtra(EXTRA_SHOW_MENU, false)) {
+            // The original client boots into its own menu screen, which the
+            // native shell renders instead of a mission.
+            menuMode = true;
+            for (File target : selectionTargets()) {
+                File parent = target.getParentFile();
+                if (parent != null) {
+                    parent.mkdirs();
+                }
+                try (FileWriter writer = new FileWriter(target, false)) {
+                    writer.write("menu=1\n");
+                } catch (IOException ignored) {
+                }
+            }
+            return;
+        }
         if (intent == null || !intent.hasExtra(EXTRA_MISSION_ID)) {
             return;
         }
