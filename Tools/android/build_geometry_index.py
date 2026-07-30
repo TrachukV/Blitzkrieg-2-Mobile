@@ -76,6 +76,12 @@ UNSUPPORTED_MODEL_FALLBACKS = {
     ),
 }
 
+# The converter reconstructs this Oodle1-compressed German assault boat under
+# its original runtime geometry ID and keeps the original model material.
+PROCEDURAL_GEOMETRY_RESOURCES = {
+    "8E1CF9C4-6B9E-4930-90A2-2B92D658005E",
+}
+
 
 def child(element: ET.Element, name: str) -> ET.Element | None:
     wanted = name.lower()
@@ -167,6 +173,18 @@ def converted_geometry_exists(
         converted_geometry_root is None
         or (converted_geometry_root / f"{runtime_id}.bk2mesh").is_file()
     )
+
+
+def geometry_resource_available(
+    data_root: Path,
+    converted_geometry_root: Path | None,
+    value: str,
+    runtime_id: int,
+) -> bool:
+    return (
+        geometry_resource_supported(data_root, value)
+        or value.upper() in PROCEDURAL_GEOMETRY_RESOURCES
+    ) and converted_geometry_exists(converted_geometry_root, runtime_id)
 
 
 def validate_geometry_resource_ids(data_root: Path) -> None:
@@ -355,12 +373,11 @@ def geometry_info(
     if geometry_record_id is None:
         return None
     geometry_scale = 1.0
-    if (
-        not geometry_resource_supported(data_root, value)
-        or not converted_geometry_exists(
-            converted_geometry_root,
-            geometry_record_id,
-        )
+    if not geometry_resource_available(
+        data_root,
+        converted_geometry_root,
+        value,
+        geometry_record_id,
     ):
         ai_geometry_path = href_child_path(
             data_root,

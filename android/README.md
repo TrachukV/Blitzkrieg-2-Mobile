@@ -385,6 +385,14 @@ there. A phone with room for the whole set needs no such trimming.
     --all
 )
 
+`convert_granny_geometry.mjs` also emits a low-poly reconstruction for the
+German assault boat resource
+`8E1CF9C4-6B9E-4930-90A2-2B92D658005E`. The shipped mesh uses Granny Oodle1
+compression, which the open converter cannot decode without the proprietary
+Granny runtime. The reconstruction preserves the original dimensions and
+uses the original boat material instead of substituting an unrelated vehicle
+or leaving an Android debug marker.
+
 python3 Tools/android/build_geometry_index.py \
   --data-root Versions/Current/Data \
   --converted-geometry-root DataAndroid/Converted/Geometries \

@@ -12,6 +12,12 @@ const DEFAULT_ANIMATION_FRAME_COUNT = 16;
 const MAX_MESH_COUNT = 128;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PROCEDURAL_GEOMETRY_BUILDERS = new Map([
+  [
+    "8E1CF9C4-6B9E-4930-90A2-2B92D658005E",
+    buildGermanAssaultBoat,
+  ],
+]);
 
 function isResourceId(value) {
   return /^\d+$/.test(value) || UUID_PATTERN.test(value);
@@ -157,6 +163,243 @@ function normalize(value) {
   return length > 1e-8
     ? [value[0] / length, value[1] / length, value[2] / length]
     : [0, 0, 1];
+}
+
+// The shipped German assault boat is one of the old Oodle1-compressed Granny
+// resources that the open decoder cannot read. Keep its original dimensions
+// and material instead of substituting an unrelated vehicle or drawing the
+// runtime debug marker. This modest reconstruction is a narrow wooden assault
+// boat with a flared hull, gunwales, floor, benches and motor.
+function buildGermanAssaultBoat() {
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+
+  const addQuad = (corners, uvRect) => {
+    const edgeA = corners[1].map((value, index) => value - corners[0][index]);
+    const edgeB = corners[2].map((value, index) => value - corners[0][index]);
+    const normal = normalize([
+      edgeA[1] * edgeB[2] - edgeA[2] * edgeB[1],
+      edgeA[2] * edgeB[0] - edgeA[0] * edgeB[2],
+      edgeA[0] * edgeB[1] - edgeA[1] * edgeB[0],
+    ]);
+    const base = positions.length;
+    const [u0, v0, u1, v1] = uvRect;
+    const faceUvs = [
+      [u0, v1],
+      [u1, v1],
+      [u1, v0],
+      [u0, v0],
+    ];
+    for (let corner = 0; corner < 4; ++corner) {
+      positions.push(corners[corner]);
+      normals.push(normal);
+      uvs.push(faceUvs[corner]);
+    }
+    // Keep the open interior readable with the original one-sided material
+    // from any gameplay camera angle.
+    indices.push(
+      base,
+      base + 1,
+      base + 2,
+      base,
+      base + 2,
+      base + 3,
+      base,
+      base + 2,
+      base + 1,
+      base,
+      base + 3,
+      base + 2,
+    );
+  };
+
+  const addBox = (minX, maxX, minY, maxY, minZ, maxZ, uvRect) => {
+    addQuad(
+      [
+        [minX, minY, maxZ],
+        [maxX, minY, maxZ],
+        [maxX, maxY, maxZ],
+        [minX, maxY, maxZ],
+      ],
+      uvRect,
+    );
+    addQuad(
+      [
+        [minX, minY, minZ],
+        [minX, maxY, minZ],
+        [maxX, maxY, minZ],
+        [maxX, minY, minZ],
+      ],
+      uvRect,
+    );
+    addQuad(
+      [
+        [minX, minY, minZ],
+        [maxX, minY, minZ],
+        [maxX, minY, maxZ],
+        [minX, minY, maxZ],
+      ],
+      uvRect,
+    );
+    addQuad(
+      [
+        [maxX, minY, minZ],
+        [maxX, maxY, minZ],
+        [maxX, maxY, maxZ],
+        [maxX, minY, maxZ],
+      ],
+      uvRect,
+    );
+    addQuad(
+      [
+        [maxX, maxY, minZ],
+        [minX, maxY, minZ],
+        [minX, maxY, maxZ],
+        [maxX, maxY, maxZ],
+      ],
+      uvRect,
+    );
+    addQuad(
+      [
+        [minX, maxY, minZ],
+        [minX, minY, minZ],
+        [minX, minY, maxZ],
+        [minX, maxY, maxZ],
+      ],
+      uvRect,
+    );
+  };
+
+  const centerY = -1.46791;
+  const sections = [
+    { y: centerY - 4.355685, width: 0.54 },
+    { y: centerY - 3.45, width: 0.69 },
+    { y: centerY - 0.15, width: 0.73 },
+    { y: centerY + 3.25, width: 0.55 },
+    { y: centerY + 4.355685, width: 0.04 },
+  ];
+  const hullUv = [0.24, 0.38, 0.79, 0.72];
+  for (let section = 0; section + 1 < sections.length; ++section) {
+    const current = sections[section];
+    const next = sections[section + 1];
+    for (const side of [-1, 1]) {
+      addQuad(
+        [
+          [side * current.width, current.y, 0.84],
+          [side * current.width * 0.58, current.y, -0.08],
+          [side * next.width * 0.58, next.y, -0.08],
+          [side * next.width, next.y, 0.84],
+        ],
+        hullUv,
+      );
+    }
+    addQuad(
+      [
+        [-current.width * 0.58, current.y, -0.08],
+        [current.width * 0.58, current.y, -0.08],
+        [next.width * 0.58, next.y, -0.08],
+        [-next.width * 0.58, next.y, -0.08],
+      ],
+      [0.27, 0.53, 0.76, 0.70],
+    );
+  }
+
+  addQuad(
+    [
+      [-0.54, centerY - 3.55, 0.31],
+      [0.54, centerY - 3.55, 0.31],
+      [0.43, centerY + 3.05, 0.31],
+      [-0.43, centerY + 3.05, 0.31],
+    ],
+    [0.30, 0.43, 0.73, 0.66],
+  );
+
+  const timberUv = [0.31, 0.11, 0.72, 0.24];
+  for (const section of sections.slice(0, -1)) {
+    addBox(
+      -section.width,
+      -Math.max(0.0, section.width - 0.09),
+      section.y - 0.38,
+      section.y + 0.38,
+      0.78,
+      0.88,
+      timberUv,
+    );
+    addBox(
+      Math.max(0.0, section.width - 0.09),
+      section.width,
+      section.y - 0.38,
+      section.y + 0.38,
+      0.78,
+      0.88,
+      timberUv,
+    );
+  }
+  for (const benchY of [
+    centerY - 2.55,
+    centerY - 1.25,
+    centerY + 0.05,
+    centerY + 1.35,
+    centerY + 2.55,
+  ]) {
+    addBox(
+      -0.58,
+      0.58,
+      benchY - 0.09,
+      benchY + 0.09,
+      0.61,
+      0.72,
+      timberUv,
+    );
+  }
+
+  const metalUv = [0.83, 0.32, 0.96, 0.65];
+  addBox(
+    -0.24,
+    0.24,
+    centerY - 4.32,
+    centerY - 3.88,
+    0.34,
+    1.11,
+    metalUv,
+  );
+  addBox(
+    -0.08,
+    0.08,
+    centerY - 4.62,
+    centerY - 4.18,
+    -0.01,
+    0.39,
+    metalUv,
+  );
+
+  return {
+    meshes: [
+      {
+        vertexCount: positions.length,
+        indexCount: indices.length,
+        positions,
+        normals,
+        uvs,
+        indices,
+        triangleGroups: [
+          {
+            materialIndex: 0,
+            triFirst: 0,
+            triCount: indices.length / 3,
+          },
+        ],
+        vertexWeights: Array.from(
+          { length: positions.length },
+          () => [],
+        ),
+        boneBindings: [],
+      },
+    ],
+    skeletons: [],
+  };
 }
 
 function canUseAnimation(mesh, skeleton, animation) {
@@ -515,9 +758,12 @@ async function convertOne(
   // The decoder defaults to 32 meshes, but shipped bridges and large ships
   // contain up to 60. Match the Android cache reader's validated limit so
   // multi-part original models are not silently truncated.
-  const parsed = parseModel(toArrayBuffer(sourceBytes), {
-    maxMeshes: MAX_MESH_COUNT,
-  });
+  const proceduralBuilder = PROCEDURAL_GEOMETRY_BUILDERS.get(id.toUpperCase());
+  const parsed = proceduralBuilder
+    ? proceduralBuilder()
+    : parseModel(toArrayBuffer(sourceBytes), {
+        maxMeshes: MAX_MESH_COUNT,
+      });
   const primary = serializeGeometry(
     parsed,
     idleAnimation,
@@ -591,6 +837,7 @@ async function convertOne(
     lyingIdleAnimatedMeshes: lyingIdle.animatedMeshes,
     lyingMoveAnimatedMeshes: lyingMove.animatedMeshes,
     lyingAttackAnimatedMeshes: lyingAttack.animatedMeshes,
+    procedural: proceduralBuilder !== undefined,
   };
 }
 
@@ -729,6 +976,7 @@ async function main() {
       if (!options.all) {
         process.stdout.write(
           `geometry=${result.id}; runtime_id=${result.runtimeId}; ` +
+            `procedural=${result.procedural ? 1 : 0}; ` +
             `meshes=${result.meshes}; ` +
             `animated_meshes=${result.animatedMeshes}; ` +
             `move_animated_meshes=${result.moveAnimatedMeshes}; ` +

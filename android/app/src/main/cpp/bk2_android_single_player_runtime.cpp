@@ -5954,6 +5954,53 @@ void BuildPresentationStaticWorldMesh(
     PlatformRuntime::instance().log_info(material_report.str());
 }
 
+void ReportGeometryFallbacksLocked() {
+    std::vector<std::pair<std::string, size_t> > static_fallbacks(
+            g_static_fallback_stats_paths.begin(),
+            g_static_fallback_stats_paths.end());
+    std::sort(
+            static_fallbacks.begin(),
+            static_fallbacks.end(),
+            [](const auto& left, const auto& right) {
+                return left.second > right.second;
+            });
+    std::vector<std::pair<uint64_t, size_t> > dynamic_fallbacks(
+            g_dynamic_fallback_stats_hashes.begin(),
+            g_dynamic_fallback_stats_hashes.end());
+    std::sort(
+            dynamic_fallbacks.begin(),
+            dynamic_fallbacks.end(),
+            [](const auto& left, const auto& right) {
+                return left.second > right.second;
+            });
+
+    std::ostringstream report;
+    report << "geometry_fallbacks=ready"
+           << "; static_types=" << static_fallbacks.size()
+           << "; static_sample=";
+    for (size_t index = 0;
+         index < std::min<size_t>(static_fallbacks.size(), 8);
+         ++index) {
+        if (index > 0) {
+            report << "|";
+        }
+        report << static_fallbacks[index].first
+               << ":" << static_fallbacks[index].second;
+    }
+    report << "; dynamic_types=" << dynamic_fallbacks.size()
+           << "; dynamic_sample=";
+    for (size_t index = 0;
+         index < std::min<size_t>(dynamic_fallbacks.size(), 8);
+         ++index) {
+        if (index > 0) {
+            report << "|";
+        }
+        report << std::hex << dynamic_fallbacks[index].first
+               << std::dec << ":" << dynamic_fallbacks[index].second;
+    }
+    PlatformRuntime::instance().log_info(report.str());
+}
+
 std::vector<Bk2PresentationVertex> PresentationVertices(
         const std::vector<TerrainVertex>& vertices) {
     std::vector<Bk2PresentationVertex> result;
@@ -7712,6 +7759,7 @@ bool InitializeSinglePlayerRuntime() {
         g_last_error = "dynamic_world_snapshot_failed";
         return false;
     }
+    ReportGeometryFallbacksLocked();
     if (!ApplyMissionCameraLocked(map, 0)) {
         FocusCameraOnPlayerLocked(0);
     }
