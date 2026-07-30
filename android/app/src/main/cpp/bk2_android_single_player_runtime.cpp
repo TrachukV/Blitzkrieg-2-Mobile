@@ -7109,6 +7109,49 @@ void ApplyCameraLocked() {
     RenderBackend().set_terrain_camera(g_camera);
 }
 
+// The mission sounds are spatialised against the shipped min/max distances,
+// so the listener has to sit where the camera actually is rather than at the
+// world origin.
+void UpdateAudioListenerLocked() {
+    if (!AudioBackend().is_initialized()) {
+        return;
+    }
+    const float horizontal_distance =
+            g_camera.distance * std::cos(g_camera.pitch_radians);
+    const float eye_x =
+            g_camera.target_x +
+            std::sin(g_camera.yaw_radians) * horizontal_distance;
+    const float eye_y =
+            g_camera.target_y -
+            std::cos(g_camera.yaw_radians) * horizontal_distance;
+    const float eye_z =
+            g_camera.target_z +
+            std::sin(g_camera.pitch_radians) * g_camera.distance;
+    AudioListener listener;
+    listener.position[0] = eye_x;
+    listener.position[1] = eye_y;
+    listener.position[2] = eye_z;
+    float forward_x = g_camera.target_x - eye_x;
+    float forward_y = g_camera.target_y - eye_y;
+    float forward_z = g_camera.target_z - eye_z;
+    const float length = std::sqrt(
+            forward_x * forward_x +
+            forward_y * forward_y +
+            forward_z * forward_z);
+    if (length > 0.0001f) {
+        forward_x /= length;
+        forward_y /= length;
+        forward_z /= length;
+    }
+    listener.forward[0] = forward_x;
+    listener.forward[1] = forward_y;
+    listener.forward[2] = forward_z;
+    listener.up[0] = 0.0f;
+    listener.up[1] = 0.0f;
+    listener.up[2] = 1.0f;
+    AudioBackend().update_listener(listener);
+}
+
 }  // namespace
 
 bool InitializeSinglePlayerRuntime() {
@@ -7237,6 +7280,7 @@ void TickSinglePlayerRuntime(uint32_t elapsed_millis) {
         return;
     }
     const auto tick_started = std::chrono::steady_clock::now();
+    UpdateAudioListenerLocked();
     TickLegacyGameRuntime(elapsed_millis);
     const auto legacy_done = std::chrono::steady_clock::now();
     g_animation_elapsed_seconds +=

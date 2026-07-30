@@ -1,6 +1,8 @@
 #include "bk2_android_legacy_game_runtime.h"
 
 #include "bk2_android_mission_runtime.h"
+#include "bk2_android_audio_backend.h"
+#include "bk2_android_audio_decode.h"
 #include "bk2_android_platform.h"
 #include "bk2_presentation_internal.h"
 
@@ -27,6 +29,11 @@
 #include "Common_RTS_AI/StaticMapHeights.h"
 #include "3Dmotor/DBScene.h"
 #include "GameX/DBGameRoot.h"
+#include "Sound/DBSound.h"
+#include "Sound/DBSoundDesc.h"
+#include "System/GlobalVars.h"
+#include "System/VFSOperations.h"
+#include "Misc/StrProc.h"
 #include "GameX/GetConsts.h"
 #include "GameX/ScenarioTracker.h"
 #include "Main/GameTimer.h"
@@ -1022,10 +1029,142 @@ const NDb::SComplexEffect* ResolveHitEffect(
     }
 }
 
+// Mission sound. The effect descriptors the port already resolves for hits and
+// explosions carry the shipped SComplexSoundDesc, and the audio backend
+// already attenuates by distance, so the descriptor's own fMinDist/fMaxDist
+// go straight through.
+std::unordered_map<std::string, DecodedPcmClip> g_mission_sound_clips;
+size_t g_mission_sound_played = 0;
+size_t g_mission_sound_missing = 0;
+std::unordered_map<std::string, bool> g_mission_sound_logged_paths;
+uint32_t g_mission_sound_random = 0x2545f491u;
+
+float MissionSfxVolume() {
+    const std::string value(
+            NStr::ToMBCS(NGlobal::GetVar(string("Sound.SFXVolume"), "0.5"))
+                    .c_str());
+    const float volume = static_cast<float>(std::atof(value.c_str()));
+    return std::max(0.0f, std::min(volume, 1.0f));
+}
+
+uint32_t NextMissionSoundRandom() {
+    g_mission_sound_random ^= g_mission_sound_random << 13;
+    g_mission_sound_random ^= g_mission_sound_random >> 17;
+    g_mission_sound_random ^= g_mission_sound_random << 5;
+    return g_mission_sound_random;
+}
+
+const DecodedPcmClip* LoadMissionSound(const std::string& path) {
+    const std::unordered_map<std::string, DecodedPcmClip>::const_iterator
+            cached = g_mission_sound_clips.find(path);
+    if (cached != g_mission_sound_clips.end()) {
+        return cached->second.samples.empty() ? nullptr : &cached->second;
+    }
+    DecodedPcmClip clip;
+    if (NVFS::GetMainVFS() != nullptr) {
+        CFileStream stream(NVFS::GetMainVFS(), string(path.c_str()));
+        const int byte_count = stream.GetSize();
+        if (stream.IsOk() && byte_count > 0 &&
+            stream.GetBuffer() != nullptr) {
+            std::string error;
+            DecodeWavToPcm16(
+                    stream.GetBuffer(),
+                    static_cast<size_t>(byte_count),
+                    &clip,
+                    &error);
+        }
+    }
+    if (clip.samples.empty()) {
+        ++g_mission_sound_missing;
+    }
+    const DecodedPcmClip& stored =
+            g_mission_sound_clips.emplace(path, std::move(clip))
+                    .first->second;
+    return stored.samples.empty() ? nullptr : &stored;
+}
+
+void PlayComplexSound(
+        const NDb::SComplexSoundDesc* sound,
+        const CVec3& ai_position) {
+    if (sound == nullptr || sound->sounds.empty()) {
+        return;
+    }
+    const float volume = MissionSfxVolume();
+    if (volume <= 0.0f) {
+        return;
+    }
+    // The shipped entries carry a weight each; pick one of them the way a
+    // varied set is meant to be heard rather than always the first.
+    float total = 0.0f;
+    for (const NDb::SComplexSoundDesc::SSoundStats& entry : sound->sounds) {
+        total += std::max(entry.fProbability, 0.0f);
+    }
+    const NDb::SComplexSoundDesc::SSoundStats* chosen = &sound->sounds[0];
+    if (total > 0.0f) {
+        float ticket =
+                static_cast<float>(NextMissionSoundRandom() & 0xffffffu) /
+                static_cast<float>(0x1000000u) * total;
+        for (const NDb::SComplexSoundDesc::SSoundStats& entry :
+             sound->sounds) {
+            ticket -= std::max(entry.fProbability, 0.0f);
+            if (ticket <= 0.0f) {
+                chosen = &entry;
+                break;
+            }
+        }
+    }
+    if (!chosen->pPathName) {
+        return;
+    }
+    const NDb::SSoundDesc* desc = chosen->pPathName.GetPtr();
+    if (desc == nullptr) {
+        return;
+    }
+    const std::string path(desc->szSoundPath.c_str());
+    if (path.empty()) {
+        return;
+    }
+    const DecodedPcmClip* clip = LoadMissionSound(path);
+    if (clip == nullptr) {
+        return;
+    }
+    const int channel = AudioBackend().play(clip->view(), false, 0);
+    if (channel < 0) {
+        return;
+    }
+    AudioBackend().set_volume(channel, volume);
+    const float position[3] = {
+            AI2Vis(ai_position.x),
+            AI2Vis(ai_position.y),
+            AI2Vis(ai_position.z)};
+    const float velocity[3] = {0.0f, 0.0f, 0.0f};
+    AudioBackend().set_spatial_position(
+            channel,
+            position,
+            velocity,
+            std::max(chosen->fMinDist, 0.1f),
+            std::max(chosen->fMaxDist, chosen->fMinDist + 0.1f));
+    ++g_mission_sound_played;
+    if (g_mission_sound_logged_paths.size() < 6 &&
+        g_mission_sound_logged_paths.emplace(path, true).second) {
+        std::ostringstream report;
+        report << "mission_sound=active; path=" << path
+               << "; frames=" << clip->frame_count()
+               << "; rate=" << clip->sample_rate
+               << "; volume=" << volume
+               << "; min=" << chosen->fMinDist
+               << "; max=" << chosen->fMaxDist;
+        PlatformRuntime::instance().log_info(report.str());
+    }
+}
+
 void CaptureDescriptorSceneEffect(
         const NDb::SComplexEffect* complex_effect,
         int32_t victim_unit_id,
         const CVec3& position) {
+    if (complex_effect != nullptr) {
+        PlayComplexSound(complex_effect->pSoundEffect.GetPtr(), position);
+    }
     TimedSceneEffect timed;
     timed.effect.victim_unit_id = victim_unit_id;
     timed.effect.x = AI2Vis(position.x);
@@ -1212,6 +1351,45 @@ void CapturePresentationCorpse(
             }
         }
     }
+}
+
+const NDb::SWeaponRPGStats* ResolveMechShotWeapon(
+        int unit_id,
+        int platform_index,
+        int gun_index) {
+    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(unit_id);
+    if (unit == nullptr) {
+        return nullptr;
+    }
+    const NDb::SMechUnitRPGStats* mech_stats =
+            dynamic_cast<const NDb::SMechUnitRPGStats*>(unit->GetStats());
+    if (mech_stats == nullptr ||
+        platform_index < 0 ||
+        static_cast<size_t>(platform_index) >= mech_stats->platforms.size()) {
+        return nullptr;
+    }
+    const NDb::SMechUnitRPGStats::SPlatform& platform =
+            mech_stats->platforms[platform_index];
+    if (gun_index < 0 ||
+        static_cast<size_t>(gun_index) >= platform.guns.size()) {
+        return nullptr;
+    }
+    return platform.guns[gun_index].pWeapon.GetPtr();
+}
+
+// Gun fire carries its own complex effect on the shell, the same record the
+// desktop build plays the muzzle report from.
+const NDb::SComplexSoundDesc* ResolveGunFireSound(
+        const NDb::SWeaponRPGStats* weapon,
+        int shell_index) {
+    if (weapon == nullptr ||
+        shell_index < 0 ||
+        static_cast<size_t>(shell_index) >= weapon->shells.size()) {
+        return nullptr;
+    }
+    const NDb::SComplexEffect* effect =
+            weapon->shells[shell_index].pEffectGunFire.GetPtr();
+    return effect == nullptr ? nullptr : effect->pSoundEffect.GetPtr();
 }
 
 void CaptureCombatEffect(
@@ -1450,6 +1628,11 @@ void DrainLegacyClientUpdates() {
                     infantry_shot->info.nObjUniqueID,
                     infantry_shot->info.vDestPos,
                     AndroidCombatEffectType::InfantryShot);
+            PlayComplexSound(
+                    ResolveGunFireSound(
+                            infantry_shot->info.pWeapon.GetPtr(),
+                            infantry_shot->info.cShell),
+                    infantry_shot->info.vDestPos);
             continue;
         }
         SAIMechShotUpdate* mechanized_shot =
@@ -1459,6 +1642,16 @@ void DrainLegacyClientUpdates() {
                     mechanized_shot->info.nObjUniqueID,
                     mechanized_shot->info.vDestPos,
                     AndroidCombatEffectType::MechanizedShot);
+            // A mech shot names the platform and gun rather than the weapon,
+            // so the weapon comes back through the unit's own stats.
+            PlayComplexSound(
+                    ResolveGunFireSound(
+                            ResolveMechShotWeapon(
+                                    mechanized_shot->info.nObjUniqueID,
+                                    mechanized_shot->info.cPlatform,
+                                    mechanized_shot->info.cGun),
+                            mechanized_shot->info.cShell),
+                    mechanized_shot->info.vDestPos);
             continue;
         }
         SAIFeedbackUpdate* feedback =
@@ -1916,6 +2109,10 @@ void ResetReportState() {
     g_turret_update_count = 0;
     g_unit_odometers.clear();
     g_turret_bone_log_count = 0;
+    g_mission_sound_clips.clear();
+    g_mission_sound_played = 0;
+    g_mission_sound_missing = 0;
+    g_mission_sound_logged_paths.clear();
     g_presentation_death_count = 0;
     g_mission_outcome.store(kLegacyMissionRunning);
     g_pending_mission_outcome.store(kLegacyMissionRunning);
@@ -3121,6 +3318,9 @@ std::string LegacyGameRuntimeReport() {
            << "; player_move_commands=" << g_player_move_command_count
            << "; player_attack_commands=" << g_player_attack_command_count
            << "; player_stop_commands=" << g_player_stop_command_count
+           << "; mission_sounds_played=" << g_mission_sound_played
+           << "; mission_sounds_missing=" << g_mission_sound_missing
+           << "; mission_sound_clips=" << g_mission_sound_clips.size()
            << "; client_updates=" << g_client_update_count
            << "; objective_updates=" << g_objective_update_count
            << "; hud_notifications=" << g_hud_notification_count
