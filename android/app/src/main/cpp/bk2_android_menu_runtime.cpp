@@ -18,6 +18,10 @@
 #include "3Dmotor/FontFormat.h"
 #include "3Dmotor/GTexture.h"
 #include "GameX/GetConsts.h"
+#include "Misc/StrProc.h"
+#include "GameX/DBGameRoot.h"
+#include "GameX/dbgameoptions.h"
+#include "System/GlobalVars.h"
 #include "Sound/DBSound.h"
 #include "Sound/DBSoundDesc.h"
 #include "System/GResource.h"
@@ -79,6 +83,20 @@ std::mutex g_menu_mutex;
 std::map<std::string, std::string> g_text_cache;
 // Visibility overrides applied by the menu's own navigation reactions.
 std::map<std::string, bool> g_visibility_overrides;
+
+// Template windows a screen's runtime content is cloned from, captured while
+// the descriptor graph is walked.
+struct MenuTemplate {
+    const NDb::SWindow* window = nullptr;
+    const NDb::SWindowShared* shared = nullptr;
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+};
+
+std::map<std::string, MenuTemplate> g_templates;
+int g_options_category = 0;
 DecodedPcmClip g_click_clip;
 std::string g_click_sound_path;
 std::string g_click_sound_error;
@@ -1134,6 +1152,18 @@ void CollectWindow(
         }
     }
 
+    if (!node.name.empty() &&
+        g_templates.find(node.name) == g_templates.end()) {
+        MenuTemplate entry;
+        entry.window = window;
+        entry.shared = shared;
+        entry.x = x;
+        entry.y = y;
+        entry.width = width;
+        entry.height = height;
+        g_templates[node.name] = entry;
+    }
+
     if (node.button) {
         ++g_button_count;
     }
@@ -1183,6 +1213,7 @@ void CollectWindow(
 namespace {
 
 bool RebuildMenuScreenLocked(const std::string& screen_ref);
+std::string ScreenLayoutReportLocked();
 
 }  // namespace
 
@@ -1296,6 +1327,18 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
     if (reaction == "chapter_map") {
         return RequestCampaignLaunch(g_selected_campaign);
     }
+    // Options category tabs re-fill the option list for that category.
+    if (reaction.compare(0, 16, "option_category_") == 0) {
+        const int index = std::atoi(reaction.c_str() + 16);
+        std::string screen_ref;
+        {
+            std::lock_guard<std::mutex> guard(g_menu_mutex);
+            g_options_category = index;
+            screen_ref = g_screen_ref;
+        }
+        std::lock_guard<std::mutex> guard(g_menu_mutex);
+        return RebuildMenuScreenLocked(screen_ref);
+    }
     // Panel swaps stay inside the current screen.
     if (reaction == "single_player") {
         return ShowOriginalMenuPanel("SinglePlayerMenu");
@@ -1318,6 +1361,11 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
             return false;
         }
         g_screen_stack.push_back(previous);
+        {
+            std::lock_guard<std::mutex> guard(g_menu_mutex);
+            PlatformRuntime::instance().log_info(
+                    ScreenLayoutReportLocked());
+        }
         return true;
     }
     // Every shipped back button ends in "back"; pop the pushed screen.
@@ -1352,10 +1400,253 @@ bool ShowOriginalMenuPanel(const std::string& panel_name) {
 bool LoadOriginalMenuScreen(const std::string& screen_ref) {
     std::lock_guard<std::mutex> guard(g_menu_mutex);
     g_visibility_overrides.clear();
+    g_options_category = 0;
     return RebuildMenuScreenLocked(screen_ref);
 }
 
 namespace {
+
+// CInterfaceOptionsMenu::FillScreen builds this screen at runtime by cloning
+// template windows, so the same construction is reproduced here from the
+// shipped SOptionSystem data.
+void PopulateOptionsScreenLocked() {
+    const std::map<std::string, MenuTemplate>::const_iterator button =
+            g_templates.find("CategoryButton");
+    const std::map<std::string, MenuTemplate>::const_iterator offset =
+            g_templates.find("CategoryButtonOffset");
+    const std::map<std::string, MenuTemplate>::const_iterator list =
+            g_templates.find("OptionList");
+    if (button == g_templates.end() ||
+        offset == g_templates.end() ||
+        list == g_templates.end()) {
+        PlatformRuntime::instance().log_info(
+                "original_menu_options=no_templates");
+        return;
+    }
+    const NDb::SGameRoot* root = NGameX::GetGameRoot();
+    if (root == nullptr || !root->pGameOptions) {
+        PlatformRuntime::instance().log_info(
+                "original_menu_options=no_game_options");
+        return;
+    }
+    const NDb::SOptionSystem* options = root->pGameOptions.GetPtr();
+    if (options == nullptr) {
+        PlatformRuntime::instance().log_info(
+                "original_menu_options=options_unloaded");
+        return;
+    }
+    // The desktop screen derives its category step from the offset template.
+    const float step_x = offset->second.x - button->second.x;
+    const float step_y = offset->second.y - button->second.y;
+    constexpr int kOptionModeMask = 0x07;
+
+    std::vector<int> visible_categories;
+    for (size_t index = 0; index < options->categories.size(); ++index) {
+        for (const NDb::SOptionSystem::SOptionsCategory::SOptionEntry& entry :
+             options->categories[index].options) {
+            if (entry.nModeFlags & kOptionModeMask) {
+                visible_categories.push_back(static_cast<int>(index));
+                break;
+            }
+        }
+    }
+    if (visible_categories.empty()) {
+        PlatformRuntime::instance().log_info(
+                std::string("original_menu_options=no_categories; total=") +
+                std::to_string(options->categories.size()));
+        return;
+    }
+    {
+        std::ostringstream report;
+        report << "original_menu_options=ready; categories="
+               << visible_categories.size()
+               << "/" << options->categories.size()
+               << "; selected=" << g_options_category;
+        PlatformRuntime::instance().log_info(report.str());
+    }
+    g_options_category = std::clamp(
+            g_options_category,
+            0,
+            static_cast<int>(visible_categories.size()) - 1);
+
+    for (size_t slot = 0; slot < visible_categories.size(); ++slot) {
+        const NDb::SOptionSystem::SOptionsCategory& category =
+                options->categories[
+                        static_cast<size_t>(visible_categories[slot])];
+        const float x =
+                button->second.x + step_x * static_cast<float>(slot);
+        const float y =
+                button->second.y + step_y * static_cast<float>(slot);
+        MenuWindowNode node;
+        node.name = "OptionCategory" + std::to_string(slot);
+        node.type = "WindowMSButton";
+        node.x = x;
+        node.y = y;
+        node.width = button->second.width;
+        node.height = button->second.height;
+        node.visible = true;
+        node.enabled = true;
+        node.button = true;
+        node.action = "option_category_" + std::to_string(slot);
+        SplitMarkupTags(
+                LoadUtf16Text(NormalizeResourcePath(
+                        ToStdString(category.szNameFileRef))),
+                &node.caption,
+                &node.text_format);
+
+        const NDb::SWindowMSButtonShared* button_shared =
+                dynamic_cast<const NDb::SWindowMSButtonShared*>(
+                        button->second.shared);
+        if (button_shared != nullptr &&
+            !button_shared->visualStates.empty()) {
+            const bool selected =
+                    static_cast<int>(slot) == g_options_category;
+            const NDb::SButtonVisualState& state =
+                    button_shared->visualStates[0];
+            AppendBackgroundQuads(
+                    selected && state.pushed.pBackground
+                            ? state.pushed.pBackground.GetPtr()
+                            : state.normal.pBackground.GetPtr(),
+                    x,
+                    y,
+                    node.width,
+                    node.height);
+            const size_t pressed_begin = g_quads.size();
+            AppendBackgroundQuads(
+                    state.pushed.pBackground.GetPtr(),
+                    x,
+                    y,
+                    node.width,
+                    node.height);
+            AppendTextQuads(
+                    node.caption,
+                    node.text_format,
+                    x,
+                    y,
+                    node.width,
+                    node.height);
+            node.pressed_quad_begin =
+                    static_cast<int>(g_pressed_quads.size());
+            g_pressed_quads.insert(
+                    g_pressed_quads.end(),
+                    g_quads.begin() + pressed_begin,
+                    g_quads.end());
+            node.pressed_quad_end =
+                    static_cast<int>(g_pressed_quads.size());
+            g_quads.resize(pressed_begin);
+        }
+        AppendTextQuads(
+                node.caption,
+                node.text_format,
+                x,
+                y,
+                node.width,
+                node.height);
+        ++g_button_count;
+        g_nodes.push_back(node);
+    }
+
+    // Rows of the selected category, laid out down the option list panel.
+    const NDb::SOptionSystem::SOptionsCategory& category =
+            options->categories[static_cast<size_t>(
+                    visible_categories[
+                            static_cast<size_t>(g_options_category)])];
+    const char* const kRowTemplates[] = {
+            "EditLineTemplate",
+            "CheckBoxTemplate",
+            "SliderTemplate",
+            "MultichoiceTemplate",
+            "EditNumberTemplate"};
+    float row_y = list->second.y + 12.0f;
+    for (const NDb::SOptionSystem::SOptionsCategory::SOptionEntry& entry :
+         category.options) {
+        if (!(entry.nModeFlags & kOptionModeMask)) {
+            continue;
+        }
+        const size_t editor = static_cast<size_t>(entry.eEditorType);
+        const std::map<std::string, MenuTemplate>::const_iterator row =
+                g_templates.find(
+                        editor < 5 ? kRowTemplates[editor]
+                                   : kRowTemplates[0]);
+        if (row == g_templates.end()) {
+            continue;
+        }
+        const float row_height = row->second.height;
+        if (row_y + row_height >
+            list->second.y + list->second.height) {
+            break;
+        }
+        // Keep the template's internal name/control split, shifted onto
+        // this row.
+        const float shift_y = row_y - row->second.y;
+        if (row->second.shared != nullptr) {
+            AppendBackgroundQuads(
+                    row->second.shared->pBackground.GetPtr(),
+                    row->second.x,
+                    row_y,
+                    row->second.width,
+                    row_height);
+        }
+
+        std::string name;
+        std::string name_format;
+        SplitMarkupTags(
+                LoadUtf16Text(NormalizeResourcePath(
+                        ToStdString(entry.szNameFileRef))),
+                &name,
+                &name_format);
+        const std::map<std::string, MenuTemplate>::const_iterator label =
+                g_templates.find("OptionName");
+        const std::map<std::string, MenuTemplate>::const_iterator control =
+                g_templates.find("OptionControl");
+        if (label != g_templates.end()) {
+            AppendTextQuads(
+                    name,
+                    name_format,
+                    label->second.x,
+                    label->second.y + shift_y,
+                    label->second.width,
+                    label->second.height,
+                    "body");
+        }
+
+        // The live value comes from the same global variable the desktop
+        // options screen reads.
+        const std::string value = std::string(
+                NStr::ToMBCS(NGlobal::GetVar(
+                        entry.szProgName,
+                        entry.szDefaultValue)).c_str());
+        std::string shown = value;
+        for (const NDb::SOptionSystem::SOptionsCategory::SOptionEntry::
+                     SOptionEntryState& state : entry.states) {
+            if (ToStdString(state.szValue) != value) {
+                continue;
+            }
+            std::string state_text;
+            std::string state_format;
+            SplitMarkupTags(
+                    LoadUtf16Text(NormalizeResourcePath(
+                            ToStdString(state.szNameFileRef))),
+                    &state_text,
+                    &state_format);
+            if (!state_text.empty()) {
+                shown = state_text;
+            }
+            break;
+        }
+        if (control != g_templates.end()) {
+            AppendTextQuads(
+                    shown,
+                    name_format,
+                    control->second.x,
+                    control->second.y + shift_y,
+                    control->second.width,
+                    control->second.height,
+                    "body");
+        }
+        row_y += row_height + 4.0f;
+    }
+}
 
 bool RebuildMenuScreenLocked(const std::string& screen_ref) {
     g_nodes.clear();
@@ -1363,6 +1654,7 @@ bool RebuildMenuScreenLocked(const std::string& screen_ref) {
     g_texture_paths.clear();
     g_pressed_quads.clear();
     g_pressed_button = -1;
+    g_templates.clear();
     g_texture_handles.clear();
     g_fonts.clear();
     g_render_logged = false;
@@ -1395,11 +1687,31 @@ bool RebuildMenuScreenLocked(const std::string& screen_ref) {
             kVirtualScreenHeight,
             0,
             true);
+    if (screen_ref.find("OptionsMenu") != std::string::npos) {
+        PopulateOptionsScreenLocked();
+    }
     g_ready = g_nodes.size() > 1;
     if (!g_ready) {
         g_error = "empty_screen_graph";
     }
     return g_ready;
+}
+
+// Names and rects of the windows a screen resolved, so a screen's template
+// windows can be located while its runtime content is being ported.
+std::string ScreenLayoutReportLocked() {
+    std::ostringstream report;
+    report << "original_menu_layout=" << g_screen_ref
+           << "; windows=" << g_nodes.size();
+    for (const MenuWindowNode& node : g_nodes) {
+        if (node.name.empty()) {
+            continue;
+        }
+        report << "; " << node.name << "=" << node.x << "," << node.y
+               << " " << node.width << "x" << node.height
+               << (node.visible ? "" : " hidden");
+    }
+    return report.str();
 }
 
 }  // namespace

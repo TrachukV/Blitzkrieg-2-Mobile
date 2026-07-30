@@ -319,6 +319,7 @@ git sparse-checkout add \
   Versions/Current/Data/Scene/TexAndMats/All/Units/Weapons \
   Versions/Current/Data/UI \
   Versions/Current/Data/Fonts \
+  Versions/Current/Data/Other/OptionSystem \
   Versions/Current/Data/Weapons
 
 # The menu click sound descriptor lives under the 18k-file acknowledgement
