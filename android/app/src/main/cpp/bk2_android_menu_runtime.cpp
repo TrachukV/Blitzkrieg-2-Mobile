@@ -82,6 +82,8 @@ bool g_render_logged = false;
 bool g_menu_options_restored = false;
 std::string g_menu_background_path;
 uint16_t g_menu_background_texture = UINT16_MAX;
+float g_menu_background_u = 1.0f;
+float g_menu_background_v = 1.0f;
 std::vector<MenuWindowNode> g_nodes;
 std::string g_screen_ref;
 std::string g_error;
@@ -1784,13 +1786,29 @@ void ResolveMenuBackgroundLocked() {
     if (root == nullptr || !root->mainMenuBackground.pPicture) {
         return;
     }
-    g_menu_background_path =
-            TexturePath(root->mainMenuBackground.pPicture.GetPtr());
-    if (!g_menu_background_path.empty()) {
-        std::ostringstream report;
-        report << "original_menu_background=" << g_menu_background_path;
-        PlatformRuntime::instance().log_info(report.str());
+    const NDb::STexture* picture = root->mainMenuBackground.pPicture.GetPtr();
+    g_menu_background_path = TexturePath(picture);
+    if (g_menu_background_path.empty()) {
+        return;
     }
+    // The picture is the shipped 1024x768 menu art stored in a texture padded
+    // out to a power of two, so drawing the whole texture would show the
+    // padding as a black band. The art covers the virtual screen exactly, at
+    // one texel per virtual pixel.
+    const float texture_width =
+            static_cast<float>(std::max(picture->nWidth, 1));
+    const float texture_height =
+            static_cast<float>(std::max(picture->nHeight, 1));
+    g_menu_background_u =
+            std::min(kVirtualScreenWidth / texture_width, 1.0f);
+    g_menu_background_v =
+            std::min(kVirtualScreenHeight / texture_height, 1.0f);
+    std::ostringstream report;
+    report << "original_menu_background=" << g_menu_background_path
+           << "; texture=" << texture_width << "x" << texture_height
+           << "; uv=" << g_menu_background_u << ","
+           << g_menu_background_v;
+    PlatformRuntime::instance().log_info(report.str());
 }
 
 void ApplyScreenInitTexturesLocked(const std::string& screen_ref) {
@@ -2372,8 +2390,8 @@ void RenderOriginalMenu(uint32_t screen_width, uint32_t screen_height) {
                     g_menu_background_texture,
                     0.0f,
                     0.0f,
-                    1.0f,
-                    1.0f,
+                    g_menu_background_u,
+                    g_menu_background_v,
                     0xffffffffu);
             ++submitted;
         }

@@ -1268,6 +1268,15 @@ std::string RenderBackendDiagnosticReport() {
            << backend.height() - backend.content_height()
            << "; frames=" << backend.frame_count()
            << "; primitives=" << backend.submitted_primitives();
+#if defined(BK2_BGFX_RENDERER_ENABLED)
+    // What bgfx actually got, as opposed to what the window reported: a
+    // mismatch here is the difference between the surface the game draws on
+    // and the display it is shown on.
+    const bgfx::Stats* stats = bgfx::getStats();
+    if (stats != nullptr) {
+        report << "; backbuffer=" << stats->width << "x" << stats->height;
+    }
+#endif
     if (!backend.last_error().empty()) {
         report << "; render_error=" << backend.last_error();
     }
