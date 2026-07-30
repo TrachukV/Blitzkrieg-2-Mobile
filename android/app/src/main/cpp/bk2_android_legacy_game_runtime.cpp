@@ -2508,9 +2508,16 @@ bool SelectLegacyUnit(int unit_id, int player) {
     g_selected_unit_ids.push_back(unit_id);
     g_attack_target_unit_id = -1;
     PublishPresentationEntities();
-    PlatformRuntime::instance().log_info(
-            std::string("player_unit_selected=") +
-            std::to_string(g_selected_unit_id));
+    {
+        CAIUnit* picked = CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+        const NDb::SUnitBaseRPGStats* picked_stats =
+                picked == nullptr ? nullptr : picked->GetStats();
+        std::ostringstream report;
+        report << "player_unit_selected=" << g_selected_unit_id
+               << "; geometry=" << GeometryRecordId(picked_stats)
+               << "; stats_hash=" << StatsPathHash(picked_stats);
+        PlatformRuntime::instance().log_info(report.str());
+    }
     return true;
 }
 

@@ -305,6 +305,11 @@ struct ConvertedGeometryPart {
     // belt moves by scrolling its texture rather than by turning.
     bool track_scroll = false;
     float track_uv_per_unit = 0.0f;
+    // Damage stage this part belongs to, from its bone name: models carry
+    // their battered variants as d1, d2, d3 branches beside the intact hull,
+    // and the engine shows one at a time. Drawing them all at once is what
+    // made those vehicles look like they had burst open.
+    int damage_stage = -1;
 };
 
 struct ConvertedGeometry {
@@ -1529,6 +1534,20 @@ bool ReadExact(std::ifstream* input, void* output, size_t size) {
 }
 
 // Vehicle models name the running gear; a cover panel is not a wheel.
+int DamageStageFromBoneName(const std::string& name) {
+    if (name.size() < 2 || (name[0] != 'd' && name[0] != 'D')) {
+        return -1;
+    }
+    int stage = 0;
+    for (size_t index = 1; index < name.size(); ++index) {
+        if (name[index] < '0' || name[index] > '9') {
+            return -1;
+        }
+        stage = stage * 10 + (name[index] - '0');
+    }
+    return stage > 0 && stage <= 9 ? stage : -1;
+}
+
 bool IsTrackBoneName(const std::string& name) {
     return name.compare(0, 6, "Tracks") == 0;
 }
@@ -1558,6 +1577,10 @@ void ClassifyWheelPart(ConvertedGeometryPart* part) {
         if (vertex_bone != bone) {
             return;
         }
+    }
+    part->damage_stage = DamageStageFromBoneName(part->bones[bone].name);
+    if (part->damage_stage > 0) {
+        return;
     }
     if (IsTrackBoneName(part->bones[bone].name)) {
         // The belt texture repeats along the hull, so one model unit of
@@ -4300,6 +4323,7 @@ bool AppendConvertedGeometry(
         float turret_yaw = 0.0f,
         bool turret_aim_valid = false,
         float travelled_distance = 0.0f,
+        float health_fraction = 1.0f,
         const std::string& gun_bone = std::string(),
         float gun_pitch = 0.0f) {
     if (mesh == nullptr) {
@@ -4392,6 +4416,16 @@ bool AppendConvertedGeometry(
          part_index < geometry->parts.size();
          ++part_index) {
         const ConvertedGeometryPart& part = geometry->parts[part_index];
+        // One damage stage at a time: stage k appears once the unit has lost
+        // enough of its health, and the intact hull carries no stage at all.
+        if (part.damage_stage > 0) {
+            const float upper = 1.0f -
+                    static_cast<float>(part.damage_stage - 1) * 0.25f;
+            const float lower = upper - 0.25f;
+            if (health_fraction > upper || health_fraction <= lower) {
+                continue;
+            }
+        }
         const std::vector<ConvertedGeometryVertex>* vertices =
                 SelectConvertedGeometryVertices(
                         part,
@@ -4966,6 +5000,12 @@ void AppendEntityModel(
                 entity.turret_yaw_radians,
                 entity.turret_aim_valid != 0u,
                 entity.travelled_distance,
+                entity.max_hit_points > 0.0f
+                        ? std::clamp(
+                                  entity.hit_points / entity.max_hit_points,
+                                  0.0f,
+                                  1.0f)
+                        : 1.0f,
                 LegacyMechGunBone(entity.rpg_stats_path_hash),
                 entity.turret_pitch_radians)) {
         return;
