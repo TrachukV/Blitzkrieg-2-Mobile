@@ -603,9 +603,33 @@ void AppendBackgroundQuads(
                     texture_width,
                     texture_height);
             break;
+        case NDb::SBackgroundSimpleScallingTexture::typeID: {
+            // CBackgroundSimpleScallingTexture stretches a texel-space source
+            // rect over the window. vSize is that rect: zero means the whole
+            // texture, and a value past the texture size repeats it, which is
+            // how the shipped grids are drawn from one small marker.
+            const NDb::SBackgroundSimpleScallingTexture* scaling =
+                    static_cast<
+                            const NDb::SBackgroundSimpleScallingTexture*>(
+                            background);
+            MenuQuad quad;
+            quad.x = x;
+            quad.y = y;
+            quad.width = width;
+            quad.height = height;
+            quad.argb = static_cast<uint32_t>(background->nColor);
+            quad.texture = texture;
+            quad.u1 = scaling->vSize.x == 0.0f
+                    ? 1.0f
+                    : scaling->vSize.x / texture_width;
+            quad.v1 = scaling->vSize.y == 0.0f
+                    ? 1.0f
+                    : scaling->vSize.y / texture_height;
+            g_quads.push_back(quad);
+            break;
+        }
         default: {
-            // BackgroundSimpleScallingTexture and any other variant stretch
-            // the whole texture over the window rect.
+            // Any other variant stretches the whole texture over the rect.
             MenuQuad quad;
             quad.x = x;
             quad.y = y;
@@ -1660,9 +1684,33 @@ bool ShowOriginalMenuPanel(const std::string& panel_name) {
     return RebuildMenuScreenLocked(screen_ref);
 }
 
+// Some screens ship windows marked visible that their controller hides the
+// moment it initialises. The chapter map is the clear case: the reinforcement
+// description is four stacked variants, all visible in the descriptor, and
+// CInterfaceChapterMapMenu::Init hides the panel outright until the player
+// picks a reinforcement. Without a controller the port drew all four at once.
+struct ScreenInitHiddenWindow {
+    const char* screen_ref;
+    const char* window_name;
+};
+
+constexpr ScreenInitHiddenWindow kScreenInitHiddenWindows[] = {
+        {"UI/Game/Menu/ChapterMap_WindowScreen.xdb",
+         "ReinfDescriptionBackground"},
+};
+
+void ApplyScreenInitVisibilityLocked(const std::string& screen_ref) {
+    for (const ScreenInitHiddenWindow& hidden : kScreenInitHiddenWindows) {
+        if (screen_ref == hidden.screen_ref) {
+            g_visibility_overrides[hidden.window_name] = false;
+        }
+    }
+}
+
 bool LoadOriginalMenuScreen(const std::string& screen_ref) {
     std::lock_guard<std::mutex> guard(g_menu_mutex);
     g_visibility_overrides.clear();
+    ApplyScreenInitVisibilityLocked(screen_ref);
     g_options_category = 0;
     return RebuildMenuScreenLocked(screen_ref);
 }
