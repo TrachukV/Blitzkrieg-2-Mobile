@@ -87,6 +87,10 @@ The approximation derives the missing visual size from the original smoke,
 fire, and flash texture families; using the DDS pixel dimensions alone made a
 64-pixel combustion frame only two world units wide and effectively invisible
 at the desktop camera distance.
+Lua `PlayEffect` calls now reach the same bridge through their native
+`SPlayEffectUpdate`. This restores mission-authored smoke screens, bridge
+demolitions, and other positioned `ScriptEffects` instead of consuming those
+updates without presenting them.
 The compiled animated-light intensity track is similarly represented by a
 short flash envelope rather than a full dynamic-light shader.
 The Android build packages the required 4.2 MiB original HUD subset and the TGA

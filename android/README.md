@@ -1207,6 +1207,10 @@ from the shipped smoke, fire, and flash texture families instead of treating a
 64-pixel frame as a two-world-unit sprite. Particle layers depth-test against
 the scene but do not write the
 depth buffer, so overlapping fire and smoke remain visible.
+Mission Lua `PlayEffect` calls are also forwarded from their original
+`SPlayEffectUpdate` into this descriptor path. Campaign-authored smoke screens,
+bridge demolitions, and positioned explosions therefore use the map's
+`ScriptEffects` list instead of remaining simulation-only events.
 
 The first model-shadow layer projects every converted Granny vertex along one
 sun direction, computes a convex ground hull, and submits that hull once through

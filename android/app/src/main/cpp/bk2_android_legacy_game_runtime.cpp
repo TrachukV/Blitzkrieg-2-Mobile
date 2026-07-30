@@ -155,6 +155,7 @@ uint64_t g_infantry_shot_effect_count = 0;
 uint64_t g_mechanized_shot_effect_count = 0;
 uint64_t g_mechanized_destruction_effect_count = 0;
 uint64_t g_descriptor_scene_effect_count = 0;
+uint64_t g_script_scene_effect_count = 0;
 uint64_t g_descriptor_particle_emitter_count = 0;
 uint64_t g_descriptor_particle_texture_count = 0;
 uint64_t g_descriptor_effect_light_count = 0;
@@ -1648,6 +1649,38 @@ void DrainLegacyClientUpdates() {
                     hit->info.explCoord);
             continue;
         }
+        SPlayEffectUpdate* scripted_effect =
+                dynamic_cast<SPlayEffectUpdate*>(update.GetPtr());
+        if (scripted_effect != nullptr) {
+            const NDb::SComplexEffect* effect =
+                    scripted_effect->pEffect.GetPtr();
+            CaptureDescriptorSceneEffect(
+                    effect,
+                    -1 - static_cast<int32_t>(
+                                 g_script_scene_effect_count &
+                                 0x3fffffffu),
+                    scripted_effect->vPos);
+            ++g_script_scene_effect_count;
+            if (g_script_scene_effect_count == 1) {
+                PlatformRuntime::instance().log_info(
+                        std::string("script_scene_effect=") +
+                        (effect == nullptr
+                                 ? "<none>"
+                                 : effect->GetDBID()
+                                           .ToString()
+                                           .c_str()) +
+                        "; position=" +
+                        std::to_string(
+                                AI2Vis(scripted_effect->vPos.x)) +
+                        "," +
+                        std::to_string(
+                                AI2Vis(scripted_effect->vPos.y)) +
+                        "," +
+                        std::to_string(
+                                AI2Vis(scripted_effect->vPos.z)));
+            }
+            continue;
+        }
         SAIInfantryShotUpdate* infantry_shot =
                 dynamic_cast<SAIInfantryShotUpdate*>(update.GetPtr());
         if (infantry_shot != nullptr) {
@@ -2127,6 +2160,7 @@ void ResetReportState() {
     g_mechanized_shot_effect_count = 0;
     g_mechanized_destruction_effect_count = 0;
     g_descriptor_scene_effect_count = 0;
+    g_script_scene_effect_count = 0;
     g_descriptor_particle_emitter_count = 0;
     g_descriptor_particle_texture_count = 0;
     g_descriptor_effect_light_count = 0;
@@ -3417,6 +3451,7 @@ void ShutdownLegacyGameRuntime() {
     g_mechanized_shot_effect_count = 0;
     g_mechanized_destruction_effect_count = 0;
     g_descriptor_scene_effect_count = 0;
+    g_script_scene_effect_count = 0;
     g_descriptor_particle_emitter_count = 0;
     g_descriptor_particle_texture_count = 0;
     g_descriptor_effect_light_count = 0;
@@ -3470,6 +3505,8 @@ std::string LegacyGameRuntimeReport() {
            << "; descriptor_scene_effects="
            << g_descriptor_scene_effect_count
            << "; active_scene_effects=" << g_scene_effects.size()
+           << "; script_scene_effects="
+           << g_script_scene_effect_count
            << "; descriptor_particle_emitters="
            << g_descriptor_particle_emitter_count
            << "; descriptor_particle_textures="
