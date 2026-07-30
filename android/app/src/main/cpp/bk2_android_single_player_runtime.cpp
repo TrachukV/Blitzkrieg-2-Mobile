@@ -4782,9 +4782,11 @@ void AppendUnitHealthBar(
             static_cast<float>(viewport_width);
     const bool mechanized =
             (entity.flags & BK2_PRESENTATION_ENTITY_MECHANIZED) != 0;
-    const float half_width =
-            (mechanized ? 26.0f : 18.0f) * world_per_pixel;
-    const float height = 5.0f * world_per_pixel;
+    // One width for everything, as the original draws them: a soldier's bar
+    // is as readable as a tank's, and sizing it to the model made infantry
+    // bars too small to see at all.
+    const float half_width = 30.0f * world_per_pixel;
+    const float height = 7.0f * world_per_pixel;
     const float scale = std::isfinite(entity.visual_scale)
             ? std::clamp(entity.visual_scale, 0.6f, 2.5f)
             : 1.0f;
@@ -4797,7 +4799,7 @@ void AppendUnitHealthBar(
     const float right_x = std::cos(g_camera.yaw_radians);
     const float right_y = std::sin(g_camera.yaw_radians);
 
-    const uint32_t frame_abgr = ArgbToAbgr(0xd0101010u);
+    const uint32_t frame_abgr = ArgbToAbgr(0xf0101010u);
     // Own units green shading to red as they are hurt, hostile units red,
     // anyone else amber: the same three-way read the original gives.
     const uint32_t fill_abgr = ArgbToAbgr(
@@ -4841,7 +4843,9 @@ void AppendUnitHealthBar(
         layer->triangle_indices.push_back(base + 3);
     };
 
-    const float margin = height * 0.3f;
+    // The frame has to read against a unit's own colour, so it keeps a
+    // border rather than sitting flush behind the fill.
+    const float margin = height * 0.5f;
     quad(-half_width - margin,
          half_width + margin,
          -margin,
