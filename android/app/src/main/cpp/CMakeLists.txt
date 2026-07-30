@@ -179,6 +179,7 @@ if(BK2_ENABLE_LEGACY_TEXTURE_RUNTIME)
     target_sources(blitzkrieg2 PRIVATE
         bk2_legacy_2d_quads_android.cpp
         bk2_legacy_texture_android.cpp
+        ../../../../../Versions/Temporary/Engine/Sources/3Dmotor/FontFormat.cpp
         ../../../../../Versions/Temporary/Engine/Sources/3Dmotor/GTexture.cpp
     )
 endif()

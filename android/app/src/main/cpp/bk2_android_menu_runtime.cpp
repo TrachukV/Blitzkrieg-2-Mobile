@@ -6,8 +6,16 @@
 
 #include "UI/stdafx.h"
 #include "UI/DBUserInterface.h"
+#include "UISpecificB2/DBUISpecificB2.h"
 #include "3Dmotor/DBScene.h"
+// The engine modules alias the saver through their own Specific.h.
+#ifndef CStructureSaver
+#define CStructureSaver IBinSaver
+#endif
+#include "3Dmotor/FontFormat.h"
 #include "3Dmotor/GTexture.h"
+#include "GameX/GetConsts.h"
+#include "System/GResource.h"
 #include "System/VFSOperations.h"
 #include "libdb/Database.h"
 #include "libdb/Db.h"
@@ -17,7 +25,9 @@
 #include <jni.h>
 #include <map>
 #include <mutex>
+#include <cstdlib>
 #include <sstream>
+#include <vector>
 
 namespace bk2::android {
 namespace {
@@ -267,6 +277,27 @@ uint16_t MenuTextureHandle(const std::string& texture_path) {
     EnsureLegacyTextureMipChainUploaded(cached->second);
     return LegacyTextureHandleIndex(cached->second);
 }
+
+// One shipped bitmap font: its glyph metrics cache from Data/bin/fonts and the
+// atlas texture its STexture descriptor points at.
+struct MenuFont {
+    CObj<CFontFormatInfo> metrics;
+    int texture = -1;
+    float texture_width = 1.0f;
+    float texture_height = 1.0f;
+    int height = 0;
+};
+
+std::map<std::string, MenuFont> g_fonts;
+
+// The shipped font resources live at fixed paths and name themselves through
+// SFont::szName, which is what the "<font face=...>" markup selects.
+const char* const kMenuFontPaths[] = {
+        "Fonts/Body/Font.xdb",
+        "Fonts/Header1/Font.xdb",
+        "Fonts/Header2/Font.xdb",
+        "Fonts/Numeric/Font.xdb",
+};
 
 int TextureIndex(const std::string& path) {
     if (path.empty()) {
@@ -547,6 +578,218 @@ void AppendBackgroundQuads(
     }
 }
 
+void LoadMenuFonts() {
+    g_fonts.clear();
+    for (const char* path : kMenuFontPaths) {
+        const NDb::SFont* font_desc = NDb::Get<NDb::SFont>(CDBID(path));
+        if (font_desc == nullptr || font_desc->szName.empty()) {
+            continue;
+        }
+        // CFileFont::Recalc opens the cache under the "Fonts" resource root by
+        // the descriptor uid; the metrics carry glyph rects and advances.
+        NGScene::CResourceOpener file(
+                "Fonts", NGScene::SResKey<int>(font_desc->uid, 0));
+        if (!file.IsOk()) {
+            continue;
+        }
+        MenuFont font;
+        file->Add(1, &font.metrics);
+        if (!IsValid(font.metrics) || font.metrics->GetHeight() <= 0) {
+            continue;
+        }
+        font.height = font.metrics->GetHeight();
+        const NDb::STexture* atlas = font_desc->pTexture
+                ? font_desc->pTexture.GetPtr()
+                : nullptr;
+        if (atlas == nullptr) {
+            continue;
+        }
+        std::string atlas_path =
+                NormalizeResourcePath(ToStdString(atlas->szDestName));
+        if (atlas_path.find('/') == std::string::npos) {
+            std::string folder = NormalizeResourcePath(
+                    ToStdString(NDb::GetFolderName(font_desc->GetDBID())));
+            while (!folder.empty() && folder.back() == '/') {
+                folder.pop_back();
+            }
+            if (!folder.empty()) {
+                atlas_path = folder + "/" + atlas_path;
+            }
+        }
+        font.texture = TextureIndex(atlas_path);
+        font.texture_width = static_cast<float>(std::max(atlas->nWidth, 1));
+        font.texture_height = static_cast<float>(std::max(atlas->nHeight, 1));
+        g_fonts[ToStdString(font_desc->szName)] = font;
+    }
+}
+
+// SUIConstsB2::tags maps a markup name to a file whose contents replace
+// "<val name>", so the button style expands to its font, color and alignment.
+std::string ExpandMarkupTags(const std::string& source, int depth) {
+    if (depth > 4 || source.find("<val ") == std::string::npos) {
+        return source;
+    }
+    const NDb::SUIConstsB2* consts = NGameX::GetUIConsts();
+    if (consts == nullptr) {
+        return source;
+    }
+    std::string expanded;
+    size_t cursor = 0;
+    while (cursor < source.size()) {
+        const size_t open = source.find("<val ", cursor);
+        if (open == std::string::npos) {
+            expanded.append(source, cursor, std::string::npos);
+            break;
+        }
+        const size_t close = source.find('>', open);
+        if (close == std::string::npos) {
+            expanded.append(source, cursor, std::string::npos);
+            break;
+        }
+        expanded.append(source, cursor, open - cursor);
+        const std::string name =
+                source.substr(open + 5, close - open - 5);
+        for (const NDb::SMLTag& tag : consts->tags) {
+            if (ToStdString(tag.szName) != name) {
+                continue;
+            }
+            expanded += ExpandMarkupTags(
+                    LoadUtf16Text(NormalizeResourcePath(
+                            ToStdString(tag.szTextFileRef))),
+                    depth + 1);
+            break;
+        }
+        cursor = close + 1;
+    }
+    return expanded;
+}
+
+struct MenuTextStyle {
+    std::string face;
+    uint32_t argb = 0xffffffffu;
+    bool centered = false;
+};
+
+MenuTextStyle ParseTextStyle(const std::string& tags) {
+    MenuTextStyle style;
+    const std::string markup = ExpandMarkupTags(tags, 0);
+    const size_t face = markup.find("face=");
+    if (face != std::string::npos) {
+        size_t end = face + 5;
+        while (end < markup.size() &&
+               markup[end] != ' ' &&
+               markup[end] != '>') {
+            ++end;
+        }
+        style.face = markup.substr(face + 5, end - face - 5);
+    }
+    const size_t color = markup.find("<color=");
+    if (color != std::string::npos) {
+        const size_t end = markup.find('>', color);
+        if (end != std::string::npos) {
+            const std::string value =
+                    markup.substr(color + 7, end - color - 7);
+            style.argb = static_cast<uint32_t>(
+                    std::strtoul(value.c_str(), nullptr, 16));
+            if (value.size() <= 6) {
+                style.argb |= 0xff000000u;
+            }
+        }
+    }
+    style.centered = markup.find("<center>") != std::string::npos;
+    return style;
+}
+
+// Lays a caption out with the shipped glyph metrics: nA is the pre-space,
+// nBC the advance to the next character, plus the kerning pair correction.
+void AppendTextQuads(
+        const std::string& text,
+        const std::string& tags,
+        float x,
+        float y,
+        float width,
+        float height) {
+    if (text.empty()) {
+        return;
+    }
+    const MenuTextStyle style = ParseTextStyle(tags);
+    const std::map<std::string, MenuFont>::const_iterator found =
+            g_fonts.find(style.face.empty() ? "body" : style.face);
+    if (found == g_fonts.end() || !found->second.metrics) {
+        return;
+    }
+    const MenuFont& font = found->second;
+    const CFontFormatInfo& metrics = *font.metrics;
+
+    // The captions are UTF-8 here; the shipped fonts are single-plane, so a
+    // direct decode to UTF-16 code units matches the original lookup.
+    std::vector<uint16_t> characters;
+    for (size_t index = 0; index < text.size();) {
+        const unsigned char lead = static_cast<unsigned char>(text[index]);
+        uint32_t code_point = lead;
+        size_t length = 1;
+        if ((lead & 0xe0) == 0xc0) {
+            code_point = lead & 0x1fu;
+            length = 2;
+        } else if ((lead & 0xf0) == 0xe0) {
+            code_point = lead & 0x0fu;
+            length = 3;
+        } else if ((lead & 0xf8) == 0xf0) {
+            code_point = lead & 0x07u;
+            length = 4;
+        }
+        for (size_t extra = 1; extra < length && index + extra < text.size();
+             ++extra) {
+            code_point = (code_point << 6) |
+                    (static_cast<unsigned char>(text[index + extra]) & 0x3fu);
+        }
+        index += length;
+        if (code_point <= 0xffff) {
+            characters.push_back(static_cast<uint16_t>(code_point));
+        }
+    }
+
+    float total = 0.0f;
+    uint16_t previous = 0;
+    for (uint16_t character : characters) {
+        const STFCharacter& glyph = metrics.GetChar(character);
+        total += static_cast<float>(glyph.nBC) +
+                static_cast<float>(metrics.GetKern(character, previous));
+        previous = character;
+    }
+
+    float pen_x = style.centered
+            ? x + (width - total) * 0.5f
+            : x;
+    const float pen_y =
+            y + (height - static_cast<float>(font.height)) * 0.5f;
+    previous = 0;
+    for (uint16_t character : characters) {
+        const STFCharacter& glyph = metrics.GetChar(character);
+        pen_x += static_cast<float>(metrics.GetKern(character, previous));
+        const float glyph_width =
+                static_cast<float>(glyph.x2 - glyph.x1);
+        const float glyph_height =
+                static_cast<float>(glyph.y2 - glyph.y1);
+        if (glyph_width > 0.0f && glyph_height > 0.0f) {
+            MenuQuad quad;
+            quad.x = pen_x + static_cast<float>(glyph.nA);
+            quad.y = pen_y;
+            quad.width = glyph_width;
+            quad.height = glyph_height;
+            quad.u0 = static_cast<float>(glyph.x1) / font.texture_width;
+            quad.u1 = static_cast<float>(glyph.x2) / font.texture_width;
+            quad.v0 = static_cast<float>(glyph.y1) / font.texture_height;
+            quad.v1 = static_cast<float>(glyph.y2) / font.texture_height;
+            quad.argb = style.argb;
+            quad.texture = font.texture;
+            g_quads.push_back(quad);
+        }
+        pen_x += static_cast<float>(glyph.nBC);
+        previous = character;
+    }
+}
+
 const NDb::SWindowShared* SharedOf(const NDb::SWindow* window) {
     if (window == nullptr || !window->pShared) {
         return nullptr;
@@ -667,7 +910,8 @@ void CollectWindow(
         float parent_y,
         float parent_width,
         float parent_height,
-        int depth) {
+        int depth,
+        bool parent_visible) {
     if (window == nullptr ||
         depth > kMaxMenuWindowDepth ||
         g_nodes.size() >= kMaxMenuWindowNodes) {
@@ -707,7 +951,10 @@ void CollectWindow(
     node.y = y;
     node.width = width;
     node.height = height;
-    node.visible = window->bVisible;
+    // CWindow::Reposition defers an invisible window and nothing under it is
+    // drawn, so a hidden branch contributes no geometry.
+    const bool visible = parent_visible && window->bVisible;
+    node.visible = visible;
     node.enabled = window->bEnabled;
     node.depth = depth;
     ResolveWindowText(window, &node.caption, &node.text_format);
@@ -747,7 +994,7 @@ void CollectWindow(
     }
 
     // CWindow draws its own background, then its foreground, then children.
-    if (node.visible && shared != nullptr) {
+    if (visible && shared != nullptr) {
         const NDb::SBackground* background = shared->pBackground.GetPtr();
         if (window->GetTypeID() == NDb::SWindowMSButton::typeID) {
             const NDb::SWindowMSButtonShared* button_shared =
@@ -760,8 +1007,8 @@ void CollectWindow(
             }
         }
         AppendBackgroundQuads(background, x, y, width, height);
-        AppendBackgroundQuads(
-                shared->pForeground.GetPtr(), x, y, width, height);
+        AppendTextQuads(
+                node.caption, node.text_format, x, y, width, height);
     }
 
     if (node.button) {
@@ -778,16 +1025,33 @@ void CollectWindow(
     if (shared == nullptr) {
         return;
     }
+    // CWindow keeps its children in a priority-sorted draw order and draws
+    // background, then text, then children, and its foreground last.
+    std::vector<const NDb::SWindow*> children;
+    children.reserve(shared->children.size());
     for (const CDBPtr<NDb::SUIDesc>& child : shared->children) {
         if (!child) {
             continue;
         }
         const NDb::SWindow* child_window =
                 dynamic_cast<const NDb::SWindow*>(child.GetPtr());
-        if (child_window == nullptr) {
-            continue;
+        if (child_window != nullptr) {
+            children.push_back(child_window);
         }
-        CollectWindow(child_window, x, y, width, height, depth + 1);
+    }
+    std::stable_sort(
+            children.begin(),
+            children.end(),
+            [](const NDb::SWindow* first, const NDb::SWindow* second) {
+                return first->nPriority < second->nPriority;
+            });
+    for (const NDb::SWindow* child_window : children) {
+        CollectWindow(
+                child_window, x, y, width, height, depth + 1, visible);
+    }
+    if (visible) {
+        AppendBackgroundQuads(
+                shared->pForeground.GetPtr(), x, y, width, height);
     }
 }
 
@@ -799,6 +1063,7 @@ bool LoadOriginalMenuScreen(const std::string& screen_ref) {
     g_quads.clear();
     g_texture_paths.clear();
     g_texture_handles.clear();
+    g_fonts.clear();
     g_render_logged = false;
     g_text_cache.clear();
     g_button_count = 0;
@@ -819,13 +1084,15 @@ bool LoadOriginalMenuScreen(const std::string& screen_ref) {
         return false;
     }
 
+    LoadMenuFonts();
     CollectWindow(
             screen,
             0.0f,
             0.0f,
             kVirtualScreenWidth,
             kVirtualScreenHeight,
-            0);
+            0,
+            true);
     g_ready = g_nodes.size() > 1;
     if (!g_ready) {
         g_error = "empty_screen_graph";
@@ -909,6 +1176,7 @@ void ShutdownOriginalMenuRuntime() {
     g_texture_paths.clear();
     g_texture_handles.clear();
     g_menu_textures.clear();
+    g_fonts.clear();
     g_render_logged = false;
     g_text_cache.clear();
     g_screen_ref.clear();
@@ -947,9 +1215,10 @@ std::string OriginalMenuReport() {
            << "; textures=" << g_texture_count
            << "; captions=" << g_caption_count
            << "; quads=" << g_quads.size()
-           << "; texture_paths=" << g_texture_paths.size();
+           << "; texture_paths=" << g_texture_paths.size()
+           << "; fonts=" << g_fonts.size();
     for (const MenuWindowNode& node : g_nodes) {
-        if (!node.button) {
+        if (!node.button || !node.visible) {
             continue;
         }
         report << "; button[" << node.name << "]="

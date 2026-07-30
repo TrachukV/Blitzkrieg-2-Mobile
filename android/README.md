@@ -318,6 +318,7 @@ git sparse-checkout add \
   Versions/Current/Data/Scene/TexAndMats/All/Effects \
   Versions/Current/Data/Scene/TexAndMats/All/Units/Weapons \
   Versions/Current/Data/UI \
+  Versions/Current/Data/Fonts \
   Versions/Current/Data/Weapons
 
 python3 tools/android/prepare_data_android.py \
@@ -617,9 +618,27 @@ Launching `Blitzkrieg2Activity` with the `SHOW_MENU` extra writes `menu=1` into
 `menu_requested` instead of falling back to the first campaign mission, and the
 shell renders the menu with no mission HUD over it.
 
+Captions use the shipped bitmap fonts rather than Android text. `Data/Fonts`
+supplies the `SFont` descriptors and glyph atlases, and each font's metrics
+cache is opened from `Data/bin/fonts` by descriptor uid the way
+`CFileFont::Recalc` does. Glyphs are placed with the original `STFCharacter`
+fields — `nA` pre-space, `nBC` advance — plus the kerning pair table. The
+markup tags are expanded through `SUIConstsB2::tags`, so `<val button>` resolves
+to its `<font face=h2 ...>`, `<color=FFD1C6A4>` and `<center>` directives and
+the caption is drawn in the original face, colour and alignment.
+
+Window traversal follows `CWindow::Visit`: background, then text, then children
+in their priority-sorted draw order, then the foreground. Priority matters here
+because the menu's black backing panel is authored at `-1` and has to land
+under the buttons. Invisible windows contribute no geometry and neither do
+their children, which is what keeps the hidden Single Player sub-panel from
+drawing over the main list.
+
 On the ARM64 emulator the main menu screen resolves 28 windows, 16 buttons, 20
-textures, and 17 captions, and submits 174 quads with all 3 referenced menu
-textures on valid GPU handles over a 2856x1280 surface. The right-hand column reproduces the original
+textures, and 17 captions, loads 4 shipped fonts, and submits 158 quads with
+all 7 referenced textures on valid GPU handles over a 2856x1280 surface. The
+rendered panel shows the original Main Menu header over Single Player,
+Multiplayer, Options, Load MOD, Credits, Encyclopedia and Exit. The right-hand column reproduces the original
 layout exactly: the panel lands at `x=779` with 170x42 buttons at `y=143`
 (Single Player), `193` (Multiplayer), `243` (Options), `293` (Load MOD), `343`
 (Credits), `393` (Encyclopedia), and `443` (Exit), matching the shipped
