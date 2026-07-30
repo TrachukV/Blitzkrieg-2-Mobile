@@ -169,9 +169,6 @@ enum LegacyMissionOutcomeValue {
 };
 std::atomic<int> g_mission_outcome{kLegacyMissionRunning};
 std::atomic<int> g_pending_mission_outcome{kLegacyMissionRunning};
-bool g_android_move_active = false;
-CVec2 g_android_move_target = VNULL2;
-uint32_t g_android_move_log_millis = 0;
 std::set<std::string> g_missing_unit_payload_refs;
 std::set<std::string> g_missing_squad_payload_refs;
 std::string g_stage = "not_started";
@@ -332,6 +329,20 @@ bool RegisterSelectedLegacyCommandGroup(
         command_units.push_back(unit_id);
     }
     if (command_units.empty()) {
+        if (active_unit != nullptr) {
+            std::ostringstream report;
+            report << "player_command_group=empty"
+                   << "; action=" << user_action
+                   << "; alive=" << (active_unit->IsAlive() ? 1 : 0)
+                   << "; selectable="
+                   << (active_unit->IsSelectable() ? 1 : 0)
+                   << "; player=" << static_cast<int>(active_unit->GetPlayer())
+                   << "; can_move=" << (active_unit->CanMove() ? 1 : 0)
+                   << "; has_action="
+                   << (IsLegacyUnitAction(active_unit, user_action) ? 1 : 0)
+                   << "; all_units=" << (all_units_action ? 1 : 0);
+            PlatformRuntime::instance().log_info(report.str());
+        }
         return false;
     }
     if (g_android_command_group_registered) {
@@ -1510,9 +1521,7 @@ void PublishPresentationEntities() {
             state_name == EUSN_MOVE_TO_GRID ||
             state_name == EUSN_MOVE_TO_RESUPPLY_CELL ||
             state_name == EUSN_PATROL ||
-            state_name == EUSN_PLANE_PATROL ||
-            (unit->GetUniqueIdQU() == g_selected_unit_id &&
-             g_android_move_active)) {
+            state_name == EUSN_PLANE_PATROL) {
             flags |= BK2_PRESENTATION_ENTITY_MOVING;
         }
         const CVec3& center = unit->GetCenter();
@@ -1546,59 +1555,6 @@ void PublishPresentationEntities() {
         ++corpse;
     }
     bk2::presentation::PublishEntities(std::move(entities));
-}
-
-bool AdvanceAndroidSelectedUnit(uint32_t elapsed_millis) {
-    if (!g_android_move_active ||
-        g_selected_unit_id < 0 ||
-        elapsed_millis == 0) {
-        return false;
-    }
-    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
-    if (unit == nullptr || !unit->IsAlive() || !unit->CanMove()) {
-        g_android_move_active = false;
-        return false;
-    }
-
-    const CVec3 current = unit->GetCenter();
-    const CVec2 delta =
-            g_android_move_target - CVec2(current.x, current.y);
-    const float distance = std::sqrt(delta.x * delta.x + delta.y * delta.y);
-    constexpr float kAndroidMoveSpeedWorldUnitsPerSecond = 24.0f;
-    const float max_step =
-            Vis2AIFast(kAndroidMoveSpeedWorldUnitsPerSecond) *
-            static_cast<float>(elapsed_millis) / 1000.0f;
-    const bool arrived = distance <= max_step || distance < 1.0f;
-    const CVec2 next = arrived
-            ? g_android_move_target
-            : CVec2(
-                    current.x + delta.x * max_step / distance,
-                    current.y + delta.y * max_step / distance);
-    CStaticMapHeights* heights = GetHeights();
-    const float next_z =
-            heights != nullptr ? heights->GetZ(next) : current.z;
-    unit->CBasePathUnit::SetDirection(
-            GetDirectionByVector(delta),
-            false);
-    unit->SetCenter(CVec3(next, next_z), false);
-    g_android_move_log_millis += elapsed_millis;
-
-    if (arrived) {
-        g_android_move_active = false;
-        PlatformRuntime::instance().log_info(
-                std::string("player_unit_arrived=") +
-                std::to_string(g_selected_unit_id) +
-                "; world=" + std::to_string(AI2Vis(next.x)) +
-                "," + std::to_string(AI2Vis(next.y)));
-    } else if (g_android_move_log_millis >= 1000) {
-        g_android_move_log_millis = 0;
-        PlatformRuntime::instance().log_info(
-                std::string("player_unit_moving=") +
-                std::to_string(g_selected_unit_id) +
-                "; world=" + std::to_string(AI2Vis(next.x)) +
-                "," + std::to_string(AI2Vis(next.y)));
-    }
-    return true;
 }
 
 bool InitializeScenarioTracker(
@@ -1999,9 +1955,7 @@ void TickLegacyGameRuntime(uint32_t elapsed_millis) {
         PublishPresentationEntities();
         return;
     }
-    const bool android_unit_moved =
-            AdvanceAndroidSelectedUnit(elapsed_millis);
-    if (advanced || android_unit_moved) {
+    if (advanced) {
         CountAIUnits();
         PublishPresentationEntities();
     }
@@ -2058,8 +2012,6 @@ bool SelectLegacyUnit(int unit_id, int player) {
     g_selected_unit_ids.clear();
     g_selected_unit_ids.push_back(unit_id);
     g_attack_target_unit_id = -1;
-    g_android_move_active = false;
-    g_android_move_log_millis = 0;
     PublishPresentationEntities();
     PlatformRuntime::instance().log_info(
             std::string("player_unit_selected=") +
@@ -2103,8 +2055,6 @@ int SelectLegacyUnits(
     g_selected_unit_ids = std::move(selected_ids);
     g_selected_unit_id = g_selected_unit_ids.front();
     g_attack_target_unit_id = -1;
-    g_android_move_active = false;
-    g_android_move_log_millis = 0;
     PublishPresentationEntities();
     PlatformRuntime::instance().log_info(
             std::string("player_units_selected=") +
@@ -2184,8 +2134,6 @@ int SelectLegacyUnitsByTypeNear(
         g_selected_unit_ids.push_back(candidate.unit_id);
     }
     g_attack_target_unit_id = -1;
-    g_android_move_active = false;
-    g_android_move_log_millis = 0;
     PublishPresentationEntities();
     PlatformRuntime::instance().log_info(
             std::string("player_units_selected_by_type=") +
@@ -2243,10 +2191,7 @@ bool MoveSelectedLegacyUnit(float world_x, float world_y) {
     command.bFromAI = false;
     theGroupLogic.GroupCommand(command, group, false);
     ReleaseSelectedLegacyCommandGroup();
-    g_android_move_target = target;
-    g_android_move_active = unit_count == 1;
     g_attack_target_unit_id = -1;
-    g_android_move_log_millis = 0;
     ++g_player_move_command_count;
     PlatformRuntime::instance().log_info(
             std::string("player_move_command=") +
@@ -2302,8 +2247,6 @@ bool PerformSelectedLegacyUnitPointAction(
     }
     theGroupLogic.GroupCommand(command, group, place_in_queue);
     ReleaseSelectedLegacyCommandGroup();
-    g_android_move_active = false;
-    g_android_move_log_millis = 0;
     g_attack_target_unit_id = -1;
     PublishPresentationEntities();
     PlatformRuntime::instance().log_info(
@@ -2357,8 +2300,6 @@ bool PerformSelectedLegacyUnitSegmentAction(
     theGroupLogic.GroupCommand(end_command, group, true);
     ReleaseSelectedLegacyCommandGroup();
 
-    g_android_move_active = false;
-    g_android_move_log_millis = 0;
     g_attack_target_unit_id = -1;
     PublishPresentationEntities();
     PlatformRuntime::instance().log_info(
@@ -2415,8 +2356,6 @@ bool AttackSelectedLegacyUnit(int target_unit_id) {
     }
     theGroupLogic.GroupCommand(command, group, false);
     ReleaseSelectedLegacyCommandGroup();
-    g_android_move_active = false;
-    g_android_move_log_millis = 0;
     g_attack_target_unit_id = target->GetUniqueIdQU();
     ++g_player_attack_command_count;
     PublishPresentationEntities();
@@ -2442,8 +2381,6 @@ bool StopSelectedLegacyUnit() {
     command.bFromAI = false;
     theGroupLogic.GroupCommand(command, group, false);
     ReleaseSelectedLegacyCommandGroup();
-    g_android_move_active = false;
-    g_android_move_log_millis = 0;
     g_attack_target_unit_id = -1;
     ++g_player_stop_command_count;
     PublishPresentationEntities();
@@ -2486,8 +2423,6 @@ bool PerformSelectedLegacyUnitAction(int user_action) {
     }
     theGroupLogic.GroupCommand(command, group, false);
     ReleaseSelectedLegacyCommandGroup();
-    g_android_move_active = false;
-    g_android_move_log_millis = 0;
     g_attack_target_unit_id = -1;
     PublishPresentationEntities();
     PlatformRuntime::instance().log_info(
@@ -2947,9 +2882,6 @@ void ShutdownLegacyGameRuntime() {
     g_forwarded_unit_kill_error_count = 0;
     g_mission_outcome.store(kLegacyMissionRunning);
     g_pending_mission_outcome.store(kLegacyMissionRunning);
-    g_android_move_active = false;
-    g_android_move_target = VNULL2;
-    g_android_move_log_millis = 0;
 }
 
 bool IsLegacyGameRuntimeReady() {

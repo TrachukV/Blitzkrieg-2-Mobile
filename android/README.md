@@ -662,6 +662,16 @@ layout exactly: the panel lands at `x=779` with 170x42 buttons at `y=143`
 button also reports its original reaction id (`single_player`, `multiplayer`,
 `options`, `LoadMod`, `Credits`, `Encyclopedia`, `exit`, `single_player_back`).
 
+Unit movement is the legacy simulation's, not the shell's. The port used to
+advance a single selected unit itself: after issuing the order it drove the
+unit straight at the target with `SetCenter` at a fixed 24 world units per
+second, every frame, overriding whatever `CAILogic::Segment` had computed.
+That bypassed the unit's own speed from its RPG stats, pathfinding, terrain
+passability, turning and collision, and forced the moving animation flag on
+regardless of the unit's real state. It only ran for single-unit orders, which
+is why groups already looked closer to the original. The override is gone, so
+orders now go through `CGroupLogic` and the AI moves the unit.
+
 Player command dispatch now matches `CSelector::DoGroupCommand`: the command
 group is registered, the order is issued, and the group is unregistered
 immediately. The port previously left the group registered until the next
