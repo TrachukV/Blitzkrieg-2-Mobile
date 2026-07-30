@@ -80,6 +80,8 @@ std::vector<uint16_t> g_texture_handles;
 std::map<std::string, CObj<NGfx::CTexture>> g_menu_textures;
 bool g_render_logged = false;
 bool g_menu_options_restored = false;
+std::string g_menu_background_path;
+uint16_t g_menu_background_texture = UINT16_MAX;
 std::vector<MenuWindowNode> g_nodes;
 std::string g_screen_ref;
 std::string g_error;
@@ -1772,6 +1774,25 @@ const NDb::SChapter* SelectedChapter() {
 
 // CInterfaceChapterMapMenu sets the map artwork on the window it looks up as
 // "ChapterMap"; the descriptor ships that window with no texture of its own.
+// CInterfaceMissionBackground sits behind every menu screen. It shows a live
+// map when the root names one, and the shipped picture otherwise; a phone has
+// no business running a mission behind a menu, so the picture is what this
+// draws.
+void ResolveMenuBackgroundLocked() {
+    g_menu_background_path.clear();
+    const NDb::SGameRoot* root = NGameX::GetGameRoot();
+    if (root == nullptr || !root->mainMenuBackground.pPicture) {
+        return;
+    }
+    g_menu_background_path =
+            TexturePath(root->mainMenuBackground.pPicture.GetPtr());
+    if (!g_menu_background_path.empty()) {
+        std::ostringstream report;
+        report << "original_menu_background=" << g_menu_background_path;
+        PlatformRuntime::instance().log_info(report.str());
+    }
+}
+
 void ApplyScreenInitTexturesLocked(const std::string& screen_ref) {
     if (screen_ref != "UI/Game/Menu/ChapterMap_WindowScreen.xdb") {
         return;
@@ -1798,6 +1819,7 @@ bool LoadOriginalMenuScreen(const std::string& screen_ref) {
     g_texture_overrides.clear();
     ApplyScreenInitVisibilityLocked(screen_ref);
     ApplyScreenInitTexturesLocked(screen_ref);
+    ResolveMenuBackgroundLocked();
     g_options_category = 0;
     return RebuildMenuScreenLocked(screen_ref);
 }
@@ -2327,6 +2349,35 @@ void RenderOriginalMenu(uint32_t screen_width, uint32_t screen_height) {
                 quad.argb);
         ++submitted;
     };
+    if (!g_menu_background_path.empty()) {
+        if (g_menu_background_texture == UINT16_MAX) {
+            g_menu_background_texture =
+                    MenuTextureHandle(g_menu_background_path);
+        }
+        if (g_menu_background_texture != UINT16_MAX) {
+            // The menu lays out inside the content area, but the background
+            // belongs to the whole surface: anything it does not cover shows
+            // as a black band.
+            const float surface_width = std::max(
+                    static_cast<float>(RenderBackend().width()),
+                    static_cast<float>(screen_width));
+            const float surface_height = std::max(
+                    static_cast<float>(RenderBackend().height()),
+                    static_cast<float>(screen_height));
+            RenderBackend().queue_textured_rect(
+                    0.0f,
+                    0.0f,
+                    surface_width,
+                    surface_height,
+                    g_menu_background_texture,
+                    0.0f,
+                    0.0f,
+                    1.0f,
+                    1.0f,
+                    0xffffffffu);
+            ++submitted;
+        }
+    }
     for (const MenuQuad& quad : g_quads) {
         submit(quad);
     }
