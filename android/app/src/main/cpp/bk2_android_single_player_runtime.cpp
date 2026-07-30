@@ -5013,6 +5013,12 @@ void AppendEntityModel(
         const Bk2PresentationEntity& entity,
         uint32_t abgr,
         float animation_time_seconds) {
+    // These two Oodle1 vehicles use explicit stand-ins from a related chassis.
+    // Their original turret mutator names and angles do not describe the
+    // substitute skeleton, so posing them would pull the replacement apart.
+    const bool rigid_model_stand_in =
+            entity.rpg_stats_path_hash == 0x2a60a6f3d243667dull ||
+            entity.rpg_stats_path_hash == 0xe1f6a0043e473508ull;
     ConvertedAnimationVariant animation_variant =
             ConvertedAnimationVariant::Base;
     if ((entity.flags & BK2_PRESENTATION_ENTITY_INFANTRY) != 0) {
@@ -5049,9 +5055,12 @@ void AppendEntityModel(
                 true,
                 false,
                 -1,
-                LegacyMechTurretBone(entity.rpg_stats_path_hash),
+                rigid_model_stand_in
+                        ? std::string()
+                        : LegacyMechTurretBone(entity.rpg_stats_path_hash),
                 entity.turret_yaw_radians,
-                entity.turret_aim_valid != 0u,
+                !rigid_model_stand_in &&
+                        entity.turret_aim_valid != 0u,
                 entity.travelled_distance,
                 entity.max_hit_points > 0.0f
                         ? std::clamp(
@@ -5059,7 +5068,9 @@ void AppendEntityModel(
                                   0.0f,
                                   1.0f)
                         : 1.0f,
-                LegacyMechGunBone(entity.rpg_stats_path_hash),
+                rigid_model_stand_in
+                        ? std::string()
+                        : LegacyMechGunBone(entity.rpg_stats_path_hash),
                 entity.turret_pitch_radians)) {
         return;
     }

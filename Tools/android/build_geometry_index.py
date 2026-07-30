@@ -74,6 +74,18 @@ UNSUPPORTED_MODEL_FALLBACKS = {
         "units/technics/gb/ships/elko/summer_whole_model.xdb",
         1.6,
     ),
+    (
+        "units/technics/ussr/spg/zsu_37/1_1_model.xdb"
+    ): (
+        "units/technics/ussr/spg/su_76/summer_whole_model.xdb",
+        1.0,
+    ),
+    (
+        "units/technics/ussr/tanks/t_60/1_1_model.xdb"
+    ): (
+        "units/technics/ussr/tanks/t_70/summer_whole_model.xdb",
+        1.1,
+    ),
 }
 
 # The converter reconstructs this Oodle1-compressed German assault boat under

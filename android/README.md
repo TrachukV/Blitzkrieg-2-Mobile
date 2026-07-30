@@ -865,6 +865,14 @@ seven-part layout, and height within one millimetre. The index reuses only that
 geometry and retains the A/B/C material and texture. On `GER2.3`, this removes
 both live A/B/C proxies without changing the remaining unrelated fallback.
 
+RUS2.0 contains two more Oodle1 vehicles. The ZSU-37 uses the shipped SU-76
+model because it was built on that chassis and both descriptors have the exact
+same footprint. The T-60 uses its closest decodable Soviet successor, the T-70,
+at `1.1x` scale. These are explicit same-family stand-ins, not recovered
+meshes. Their original articulation is disabled because its mutator names do
+not describe the substitute skeleton. This removes eleven live vehicle
+proxies; the mission's three armored sea hunters remain blocked separately.
+
 Granny resources can use either numeric filenames or UUID filenames. The
 converter and index now assign the latter the same stable positive runtime ID
 and reject collisions before conversion. When a descriptor contains both
