@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstring>
 #include <sstream>
+#include <unordered_map>
 #include <vector>
 
 #include "fs_debugdraw_fill.bin.h"
@@ -23,6 +24,8 @@
 #include "shaders/generated/fs_bk2_alpha_masked_shadow_spv.bin.h"
 #include "shaders/generated/fs_bk2_alpha_test_essl.bin.h"
 #include "shaders/generated/fs_bk2_alpha_test_spv.bin.h"
+#include "shaders/generated/vs_bk2_skinning_essl.bin.h"
+#include "shaders/generated/vs_bk2_skinning_spv.bin.h"
 
 namespace bk2::android {
 namespace {
@@ -44,6 +47,10 @@ const bgfx::EmbeddedShader kAlphaTestShaders[] = {
 
 const bgfx::EmbeddedShader kAlphaMaskedShadowShaders[] = {
         BGFX_EMBEDDED_SHADER(fs_bk2_alpha_masked_shadow),
+        BGFX_EMBEDDED_SHADER_END()};
+
+const bgfx::EmbeddedShader kSkinningShaders[] = {
+        BGFX_EMBEDDED_SHADER(vs_bk2_skinning),
         BGFX_EMBEDDED_SHADER_END()};
 
 const float kIdentityMatrix[16] = {
@@ -105,6 +112,31 @@ bgfx::VertexLayout BuildTexturedRectVertexLayout() {
             .end();
     return layout;
 }
+
+bgfx::VertexLayout BuildSkinnedVertexLayout() {
+    bgfx::VertexLayout layout;
+    layout.begin()
+            .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
+            .add(bgfx::Attrib::Indices, 4, bgfx::AttribType::Uint8)
+            .add(bgfx::Attrib::Weight, 4, bgfx::AttribType::Float)
+            .end();
+    return layout;
+}
+
+struct SkinnedGeometryBuffers {
+    bgfx::VertexBufferHandle vertex_buffer = BGFX_INVALID_HANDLE;
+    bgfx::IndexBufferHandle index_buffer = BGFX_INVALID_HANDLE;
+    uint32_t vertex_count = 0;
+    uint32_t index_count = 0;
+};
+
+static_assert(sizeof(SkinnedVertex) == 44);
+static_assert(offsetof(SkinnedVertex, u) == 12);
+static_assert(offsetof(SkinnedVertex, abgr) == 20);
+static_assert(offsetof(SkinnedVertex, bone_indices) == 24);
+static_assert(offsetof(SkinnedVertex, bone_weights) == 28);
 
 uint32_t ArgbToAbgr(uint32_t argb) {
     return (argb & 0xff00ff00u) |
@@ -185,10 +217,15 @@ public:
         rect_layout_ = BuildRectVertexLayout();
         textured_rect_layout_ = BuildTexturedRectVertexLayout();
         terrain_layout_ = BuildTexturedRectVertexLayout();
+        skinned_layout_ = BuildSkinnedVertexLayout();
         rect_uniform_ =
                 bgfx::createUniform("u_params", bgfx::UniformType::Vec4, 4);
         texture_sampler_ =
                 bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
+        skinning_bones_uniform_ = bgfx::createUniform(
+                "u_bones",
+                bgfx::UniformType::Mat4,
+                static_cast<uint16_t>(kMaxGpuSkinBones));
         rect_program_ = bgfx::createProgram(
                 bgfx::createEmbeddedShader(
                         kRectShaders,
@@ -229,12 +266,35 @@ public:
                         bgfx::getRendererType(),
                         "fs_bk2_alpha_masked_shadow"),
                 true);
+        skinned_textured_program_ = bgfx::createProgram(
+                bgfx::createEmbeddedShader(
+                        kSkinningShaders,
+                        bgfx::getRendererType(),
+                        "vs_bk2_skinning"),
+                bgfx::createEmbeddedShader(
+                        kRectShaders,
+                        bgfx::getRendererType(),
+                        "fs_debugdraw_fill_texture"),
+                true);
+        skinned_alpha_test_program_ = bgfx::createProgram(
+                bgfx::createEmbeddedShader(
+                        kSkinningShaders,
+                        bgfx::getRendererType(),
+                        "vs_bk2_skinning"),
+                bgfx::createEmbeddedShader(
+                        kAlphaTestShaders,
+                        bgfx::getRendererType(),
+                        "fs_bk2_alpha_test"),
+                true);
         if (!bgfx::isValid(rect_program_) ||
             !bgfx::isValid(textured_rect_program_) ||
             !bgfx::isValid(alpha_test_program_) ||
             !bgfx::isValid(alpha_masked_shadow_program_) ||
+            !bgfx::isValid(skinned_textured_program_) ||
+            !bgfx::isValid(skinned_alpha_test_program_) ||
             !bgfx::isValid(rect_uniform_) ||
-            !bgfx::isValid(texture_sampler_)) {
+            !bgfx::isValid(texture_sampler_) ||
+            !bgfx::isValid(skinning_bones_uniform_)) {
             last_error_ = "bgfx primitive shader initialization failed";
             detach_window();
             return false;
@@ -257,6 +317,7 @@ public:
         upload_water_mesh();
         upload_world_object_mesh();
         upload_static_world_object_mesh();
+        upload_skinned_world_object_mesh();
         applied_bottom_inset_ = clamped_requested_bottom_inset();
         configure_view();
         PlatformRuntime::instance().log_info(
@@ -286,6 +347,14 @@ public:
             bgfx::destroy(alpha_masked_shadow_program_);
             alpha_masked_shadow_program_ = BGFX_INVALID_HANDLE;
         }
+        if (bgfx::isValid(skinned_textured_program_)) {
+            bgfx::destroy(skinned_textured_program_);
+            skinned_textured_program_ = BGFX_INVALID_HANDLE;
+        }
+        if (bgfx::isValid(skinned_alpha_test_program_)) {
+            bgfx::destroy(skinned_alpha_test_program_);
+            skinned_alpha_test_program_ = BGFX_INVALID_HANDLE;
+        }
         if (bgfx::isValid(rect_program_)) {
             bgfx::destroy(rect_program_);
             rect_program_ = BGFX_INVALID_HANDLE;
@@ -297,6 +366,10 @@ public:
         if (bgfx::isValid(rect_uniform_)) {
             bgfx::destroy(rect_uniform_);
             rect_uniform_ = BGFX_INVALID_HANDLE;
+        }
+        if (bgfx::isValid(skinning_bones_uniform_)) {
+            bgfx::destroy(skinning_bones_uniform_);
+            skinning_bones_uniform_ = BGFX_INVALID_HANDLE;
         }
         if (ready_) {
             bgfx::shutdown();
@@ -440,9 +513,19 @@ public:
         return upload_static_world_object_mesh();
     }
 
+    bool set_skinned_world_object_mesh(
+            const SkinnedWorldObjectMesh& mesh) override {
+        skinned_world_object_mesh_ = mesh;
+        if (!ready_) {
+            return true;
+        }
+        return upload_skinned_world_object_mesh();
+    }
+
     void clear_world_object_mesh() override {
         world_object_mesh_ = WorldObjectMesh();
         static_world_object_mesh_ = WorldObjectMesh();
+        skinned_world_object_mesh_ = SkinnedWorldObjectMesh();
         destroy_world_object_buffers();
     }
 
@@ -600,6 +683,16 @@ private:
                 &static_world_object_vertex_buffer_,
                 &static_world_object_index_buffer_,
                 &static_world_object_layer_index_buffers_);
+        for (auto& entry : skinned_geometry_buffers_) {
+            SkinnedGeometryBuffers& buffers = entry.second;
+            if (bgfx::isValid(buffers.index_buffer)) {
+                bgfx::destroy(buffers.index_buffer);
+            }
+            if (bgfx::isValid(buffers.vertex_buffer)) {
+                bgfx::destroy(buffers.vertex_buffer);
+            }
+        }
+        skinned_geometry_buffers_.clear();
     }
 
     void destroy_water_buffers() {
@@ -759,6 +852,78 @@ private:
                 &static_world_object_vertex_buffer_,
                 &static_world_object_index_buffer_,
                 &static_world_object_layer_index_buffers_);
+    }
+
+    bool upload_skinned_world_object_mesh() {
+        if (!ready_) {
+            return true;
+        }
+        for (const SkinnedWorldObject& object :
+             skinned_world_object_mesh_.objects) {
+            if (object.geometry_key == 0 ||
+                object.vertices.empty() ||
+                object.triangle_indices.empty() ||
+                object.bone_matrices.empty() ||
+                object.bone_matrices.size() % 16 != 0 ||
+                object.bone_matrices.size() / 16 > kMaxGpuSkinBones) {
+                last_error_ = "invalid skinned world object";
+                return false;
+            }
+            const uint32_t vertex_count =
+                    static_cast<uint32_t>(object.vertices.size());
+            const uint32_t index_count =
+                    static_cast<uint32_t>(
+                            object.triangle_indices.size());
+            auto found =
+                    skinned_geometry_buffers_.find(object.geometry_key);
+            if (found != skinned_geometry_buffers_.end() &&
+                (found->second.vertex_count != vertex_count ||
+                 found->second.index_count != index_count)) {
+                if (bgfx::isValid(found->second.index_buffer)) {
+                    bgfx::destroy(found->second.index_buffer);
+                }
+                if (bgfx::isValid(found->second.vertex_buffer)) {
+                    bgfx::destroy(found->second.vertex_buffer);
+                }
+                skinned_geometry_buffers_.erase(found);
+                found = skinned_geometry_buffers_.end();
+            }
+            if (found != skinned_geometry_buffers_.end()) {
+                continue;
+            }
+            SkinnedGeometryBuffers buffers;
+            buffers.vertex_count = vertex_count;
+            buffers.index_count = index_count;
+            buffers.vertex_buffer = bgfx::createVertexBuffer(
+                    bgfx::copy(
+                            object.vertices.data(),
+                            static_cast<uint32_t>(
+                                    object.vertices.size() *
+                                    sizeof(SkinnedVertex))),
+                    skinned_layout_);
+            buffers.index_buffer = bgfx::createIndexBuffer(
+                    bgfx::copy(
+                            object.triangle_indices.data(),
+                            static_cast<uint32_t>(
+                                    object.triangle_indices.size() *
+                                    sizeof(uint32_t))),
+                    BGFX_BUFFER_INDEX32);
+            if (!bgfx::isValid(buffers.vertex_buffer) ||
+                !bgfx::isValid(buffers.index_buffer)) {
+                if (bgfx::isValid(buffers.index_buffer)) {
+                    bgfx::destroy(buffers.index_buffer);
+                }
+                if (bgfx::isValid(buffers.vertex_buffer)) {
+                    bgfx::destroy(buffers.vertex_buffer);
+                }
+                last_error_ = "skinned world object GPU buffer creation failed";
+                return false;
+            }
+            skinned_geometry_buffers_.emplace(
+                    object.geometry_key,
+                    buffers);
+        }
+        return true;
     }
 
     bool upload_water_mesh() {
@@ -953,11 +1118,109 @@ private:
                 static_world_object_vertex_buffer_,
                 static_world_object_index_buffer_,
                 static_world_object_layer_index_buffers_);
+        submit_skinned_world_objects();
         submit_world_object_buffers(
                 world_object_mesh_,
                 world_object_vertex_buffer_,
                 world_object_index_buffer_,
                 world_object_layer_index_buffers_);
+    }
+
+    void submit_skinned_world_objects() {
+        if (!bgfx::isValid(skinned_textured_program_) ||
+            !bgfx::isValid(skinned_alpha_test_program_) ||
+            !bgfx::isValid(skinning_bones_uniform_) ||
+            !bgfx::isValid(texture_sampler_) ||
+            !bgfx::isValid(white_texture_)) {
+            return;
+        }
+        const uint64_t opaque_state =
+                BGFX_STATE_WRITE_RGB |
+                BGFX_STATE_WRITE_A |
+                BGFX_STATE_WRITE_Z |
+                BGFX_STATE_DEPTH_TEST_LESS |
+                BGFX_STATE_MSAA;
+        for (const SkinnedWorldObject& object :
+             skinned_world_object_mesh_.objects) {
+            const auto found =
+                    skinned_geometry_buffers_.find(object.geometry_key);
+            if (found == skinned_geometry_buffers_.end() ||
+                !bgfx::isValid(found->second.vertex_buffer) ||
+                !bgfx::isValid(found->second.index_buffer) ||
+                object.bone_matrices.empty()) {
+                continue;
+            }
+            const uint16_t bone_count = static_cast<uint16_t>(
+                    object.bone_matrices.size() / 16);
+            if (bone_count == 0 || bone_count > kMaxGpuSkinBones) {
+                continue;
+            }
+            const auto submit_layer =
+                    [&](uint32_t first_index,
+                        uint32_t index_count,
+                        uint16_t texture_handle,
+                        bool alpha_blended,
+                        bool alpha_tested) {
+                if (index_count == 0 ||
+                    first_index >= found->second.index_count ||
+                    index_count >
+                            found->second.index_count - first_index) {
+                    return;
+                }
+                bgfx::TextureHandle texture = white_texture_;
+                const bgfx::TextureHandle candidate = {texture_handle};
+                if (texture_handle != UINT16_MAX &&
+                    bgfx::isValid(candidate)) {
+                    texture = candidate;
+                }
+                bgfx::setTransform(object.world_transform.data());
+                bgfx::setUniform(
+                        skinning_bones_uniform_,
+                        object.bone_matrices.data(),
+                        bone_count);
+                bgfx::setTexture(0, texture_sampler_, texture);
+                bgfx::setVertexBuffer(
+                        0,
+                        found->second.vertex_buffer);
+                bgfx::setIndexBuffer(
+                        found->second.index_buffer,
+                        first_index,
+                        index_count);
+                uint64_t state = opaque_state;
+                if (alpha_blended) {
+                    state &= ~BGFX_STATE_WRITE_Z;
+                    state |= BGFX_STATE_BLEND_ALPHA;
+                }
+                if (alpha_tested) {
+                    state |= BGFX_STATE_ALPHA_REF(120);
+                }
+                bgfx::setState(state);
+                bgfx::submit(
+                        kTerrainView,
+                        alpha_tested
+                                ? skinned_alpha_test_program_
+                                : skinned_textured_program_);
+                ++submitted_primitives_;
+            };
+            if (object.layers.empty()) {
+                submit_layer(
+                        0,
+                        found->second.index_count,
+                        UINT16_MAX,
+                        false,
+                        false);
+                continue;
+            }
+            for (const SkinnedWorldObject::Layer& layer :
+                 object.layers) {
+                submit_layer(
+                        layer.first_index,
+                        layer.index_count,
+                        layer.texture_handle,
+                        layer.alpha_blended,
+                        layer.alpha_tested);
+            }
+        }
     }
 
     void submit_world_object_buffers(
@@ -1206,13 +1469,20 @@ private:
     bgfx::VertexLayout rect_layout_;
     bgfx::VertexLayout textured_rect_layout_;
     bgfx::VertexLayout terrain_layout_;
+    bgfx::VertexLayout skinned_layout_;
     bgfx::ProgramHandle rect_program_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle textured_rect_program_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle alpha_test_program_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle alpha_masked_shadow_program_ =
             BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle skinned_textured_program_ =
+            BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle skinned_alpha_test_program_ =
+            BGFX_INVALID_HANDLE;
     bgfx::UniformHandle rect_uniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle texture_sampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle skinning_bones_uniform_ =
+            BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle terrain_vertex_buffer_ = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle terrain_index_buffer_ = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle terrain_line_index_buffer_ = BGFX_INVALID_HANDLE;
@@ -1236,11 +1506,14 @@ private:
             BGFX_INVALID_HANDLE;
     std::vector<bgfx::IndexBufferHandle>
             static_world_object_layer_index_buffers_;
+    std::unordered_map<uint64_t, SkinnedGeometryBuffers>
+            skinned_geometry_buffers_;
     WorldObjectMesh static_world_object_mesh_;
     bgfx::TextureHandle white_texture_ = BGFX_INVALID_HANDLE;
     TerrainMesh terrain_mesh_;
     WaterMesh water_mesh_;
     WorldObjectMesh world_object_mesh_;
+    SkinnedWorldObjectMesh skinned_world_object_mesh_;
     TerrainCamera terrain_camera_;
     std::vector<SolidRect> rect_queue_;
     std::vector<TexturedRect> textured_rect_queue_;

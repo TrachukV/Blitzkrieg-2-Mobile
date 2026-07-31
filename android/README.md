@@ -56,9 +56,9 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   five-second scenario notifications. Objective feedback combines the shipped
   notification prefix with the objective header, while
   `EFB_REINFORCEMENT_CENTER_LOCAL_PLAYER` resolves and displays the shipped
-  reinforcement text. GPU skinning, remaining action-specific
-  clips, a multi-line notification console, command subpanels, briefings, and
-  the rest of the legacy UI are still pending.
+  reinforcement text. Additional weapon-specific clip selection, a multi-line
+  notification console, command subpanels, briefings, and the rest of the
+  legacy UI are still pending.
 - `BK2_ENABLE_LEGACY_TEXTURE_RUNTIME=ON` links the Android
   `NGfx::CTexture`/`I2DBuffer` contract. Legacy callers can allocate textures,
   lock mip levels with `CTextureLock`, write the original pixel formats into CPU
@@ -732,10 +732,19 @@ The cache format is now version 5. Version 4 added, per mesh, the skeleton's
 bones with their parent index, bind-pose pivot and name, plus the dominant bone
 of every vertex. Version 5 keeps that table and replaces repeated pre-skinned
 vertex frames with one bind-pose stream, up to four exact Granny influences per
-vertex, and 16 sampled skinning matrices per bone. The runtime transforms
-positions and normals from those matrices before applying vehicle procedural
-posing and world placement. Versions 1-4 still load through the old baked-frame
-path.
+vertex, and 16 sampled skinning matrices per bone. Version-5 animated meshes
+with at most 48 bones now keep their immutable bind-pose vertices and indices
+in bgfx buffers and upload only the selected matrix palette and world transform
+for each instance. The dedicated ESSL and SPIR-V vertex shaders blend up to
+four exact Granny influences. Versions 1-4, larger skeletons, procedural
+vehicle subparts, and projected shadow silhouettes retain the CPU path before
+vehicle posing and world placement.
+
+The installed ARM64 debug APK verified the idle path in US1.0. It reported
+geometry 1791 with 217 vertices, 21 bones, 16 frames, and
+`gpu_skinning=active`. The same run reached the original attack, lying-attack,
+and death variants, kept the original battlefield HUD and unit models visible,
+and reported no shader, GL, or native-process error.
 
 Converting the first 120 numeric geometries produces exactly the bones the
 posing needs: geometry 1030 carries `Basis`, `Basis_a`, `Turret01`,
@@ -842,7 +851,10 @@ animation type and its simulation start time. `NDb::ANIMATION_LIE` and
 resources `3965` and `3988`; the verified complete pass converted all 259
 compatible infantry geometries into both variants. The transition frame clamps
 at the clip end until the next legacy state update, so neither direction wraps
-back to its first pose. Android's headless runtime also forwards
+back to its first pose. Idle, move, attack, prone, transition, and death
+variants all use the same GPU contract when their version-5 cache is
+compatible; immutable geometry is reused across instances rather than uploaded
+again each frame. Android's headless runtime also forwards
 `CStatistics::UnitDead`
 directly because the old desktop world client that consumed
 `SAIDeadUnitUpdate` is not linked. The renderer plays each death clip once,
@@ -1416,10 +1428,10 @@ global `InitialPlacement` is intentionally not reapplied because shipped
 infantry geometry already contains the correct root placement. Standing-to-prone
 and prone-to-standing transition clips now follow the exact legacy AI animation
 events. The ARM64 US1.0 runtime received the animation-update stream with no
-geometry fallback after both transition cache sets were installed. CPU runtime
-skinning is now active on ARM64; moving the same bind-pose/weight/matrix
-contract into a dedicated GPU vertex path remains. Original effect-attached
-Granny geometry, complete briefing HUD
+geometry fallback after both transition cache sets were installed. The
+bind-pose/weight/matrix contract now has a dedicated bgfx GPU path with a
+validated CPU fallback. Original effect-attached Granny geometry, complete
+briefing HUD
 behavior, the full chapter-map availability/highlight rules, and result
 rank/medal popups remain unfinished. The core Action Report, its reward rows,
 and per-marker chapter-map mission launch route are linked. Empty initial

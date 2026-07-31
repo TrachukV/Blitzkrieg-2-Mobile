@@ -2,6 +2,8 @@
 
 #include <android/native_window.h>
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -53,6 +55,49 @@ struct WorldObjectMesh {
     std::vector<TerrainVertex> vertices;
     std::vector<uint32_t> triangle_indices;
     std::vector<Layer> layers;
+};
+
+constexpr size_t kMaxGpuSkinBones = 48;
+
+struct SkinnedVertex {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float u = 0.0f;
+    float v = 0.0f;
+    uint32_t abgr = 0xffffffffu;
+    std::array<uint8_t, 4> bone_indices{};
+    std::array<float, 4> bone_weights{};
+};
+
+// One draw owns one bone palette. The immutable bind-pose buffers are cached
+// by geometry_key in the backend while transforms, material handles, and the
+// selected animation frame can change on every presentation snapshot.
+struct SkinnedWorldObject {
+    struct Layer {
+        uint32_t first_index = 0;
+        uint32_t index_count = 0;
+        std::string texture_path;
+        uint16_t texture_handle = UINT16_MAX;
+        bool alpha_blended = false;
+        bool alpha_tested = false;
+    };
+
+    uint64_t geometry_key = 0;
+    std::vector<SkinnedVertex> vertices;
+    std::vector<uint32_t> triangle_indices;
+    std::vector<Layer> layers;
+    std::array<float, 16> world_transform{
+            1.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 1.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f};
+    // Column-major matrices, 16 floats per bone.
+    std::vector<float> bone_matrices;
+};
+
+struct SkinnedWorldObjectMesh {
+    std::vector<SkinnedWorldObject> objects;
 };
 
 struct WaterMesh {
@@ -107,6 +152,8 @@ public:
     // buffers so the per-frame path only rebuilds what actually moves.
     virtual bool set_static_world_object_mesh(
             const WorldObjectMesh& mesh) = 0;
+    virtual bool set_skinned_world_object_mesh(
+            const SkinnedWorldObjectMesh& mesh) = 0;
     virtual void clear_world_object_mesh() = 0;
     virtual void set_terrain_camera(const TerrainCamera& camera) = 0;
     virtual void set_bottom_inset(uint32_t pixels) = 0;

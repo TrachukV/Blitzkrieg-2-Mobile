@@ -177,6 +177,7 @@ WorldObjectMesh g_static_world_object_mesh;
 // frame, so they live apart from the geometry that is uploaded once.
 WorldObjectMesh g_animated_static_world_object_mesh;
 WorldObjectMesh g_world_object_mesh;
+SkinnedWorldObjectMesh g_skinned_world_object_mesh;
 CObj<NGfx::CTexture> g_terrain_texture;
 std::string g_terrain_texture_path;
 CObj<NGfx::CTexture> g_minimap_texture;
@@ -206,6 +207,9 @@ size_t g_lie_transition_animation_instance_count = 0;
 size_t g_stand_transition_animation_instance_count = 0;
 size_t g_runtime_skinned_vertex_count = 0;
 bool g_runtime_skinning_logged = false;
+size_t g_gpu_skinned_part_count = 0;
+size_t g_gpu_skinned_vertex_count = 0;
+bool g_gpu_skinning_logged = false;
 size_t g_combat_effect_render_count = 0;
 size_t g_effect_light_render_count = 0;
 size_t g_active_combat_effect_count = 0;
@@ -403,6 +407,7 @@ std::unordered_map<std::string, size_t> g_static_fallback_stats_paths;
 std::unordered_map<uint64_t, size_t> g_dynamic_fallback_stats_hashes;
 
 void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh);
+uint16_t ModelTextureHandle(const std::string& texture_path);
 float TerrainMeshHeightAtLocked(float world_x, float world_y);
 
 struct MissionLaunchOverride {
@@ -4204,6 +4209,54 @@ void ApplyWorldRootTilt(
             (axis_x * old_y - axis_y * old_x) * sine;
 }
 
+std::array<float, 16> BuildSkinnedWorldTransform(
+        float x,
+        float y,
+        float z,
+        float scale,
+        float heading,
+        float root_tilt_axis_x,
+        float root_tilt_axis_y,
+        float root_tilt_radians) {
+    const float cosine = std::cos(heading);
+    const float sine = std::sin(heading);
+    float basis_x_x = scale * cosine;
+    float basis_x_y = scale * sine;
+    float basis_x_z = 0.0f;
+    float basis_y_x = -scale * sine;
+    float basis_y_y = scale * cosine;
+    float basis_y_z = 0.0f;
+    float basis_z_x = 0.0f;
+    float basis_z_y = 0.0f;
+    float basis_z_z = scale;
+    ApplyWorldRootTilt(
+            root_tilt_axis_x,
+            root_tilt_axis_y,
+            root_tilt_radians,
+            &basis_x_x,
+            &basis_x_y,
+            &basis_x_z);
+    ApplyWorldRootTilt(
+            root_tilt_axis_x,
+            root_tilt_axis_y,
+            root_tilt_radians,
+            &basis_y_x,
+            &basis_y_y,
+            &basis_y_z);
+    ApplyWorldRootTilt(
+            root_tilt_axis_x,
+            root_tilt_axis_y,
+            root_tilt_radians,
+            &basis_z_x,
+            &basis_z_y,
+            &basis_z_z);
+    return {
+            basis_x_x, basis_x_y, basis_x_z, 0.0f,
+            basis_y_x, basis_y_y, basis_y_z, 0.0f,
+            basis_z_x, basis_z_y, basis_z_z, 0.0f,
+            x, y, z + 0.05f, 1.0f};
+}
+
 struct ProjectedShadowPoint {
     float x;
     float y;
@@ -4653,7 +4706,8 @@ bool AppendConvertedGeometry(
         float gun_pitch = 0.0f,
         float root_tilt_axis_x = 0.0f,
         float root_tilt_axis_y = 0.0f,
-        float root_tilt_radians = 0.0f) {
+        float root_tilt_radians = 0.0f,
+        SkinnedWorldObjectMesh* skinned_mesh = nullptr) {
     if (mesh == nullptr) {
         return false;
     }
@@ -4772,6 +4826,158 @@ bool AppendConvertedGeometry(
             if (health_fraction >= 1.0f ||
                 health_fraction > upper ||
                 health_fraction <= lower) {
+                continue;
+            }
+        }
+        const bool gpu_skinning =
+                skinned_mesh != nullptr &&
+                !part.skinning_frames.empty() &&
+                part.skin_weights.size() == part.vertices.size() &&
+                !part.bones.empty() &&
+                part.bones.size() <= kMaxGpuSkinBones &&
+                turret_bone.empty() &&
+                gun_bone.empty() &&
+                !part.wheel_roll &&
+                !part.track_scroll;
+        if (gpu_skinning) {
+            const size_t frame = ConvertedGeometryFrameIndex(
+                    part,
+                    animation_variant,
+                    animation_time_seconds);
+            const std::vector<float>& matrices =
+                    part.skinning_frames[frame];
+            if (matrices.size() ==
+                    part.bones.size() *
+                            kSkinningMatrixFloatCount) {
+                SkinnedWorldObject object;
+                object.geometry_key =
+                        static_cast<uint64_t>(
+                                static_cast<uint32_t>(
+                                        binding.geometry_record_id)) |
+                        (static_cast<uint64_t>(animation_variant) << 32u) |
+                        (static_cast<uint64_t>(part_index) << 40u);
+                object.world_transform = BuildSkinnedWorldTransform(
+                        x,
+                        y,
+                        z,
+                        binding.geometry_scale,
+                        heading,
+                        root_tilt_axis_x,
+                        root_tilt_axis_y,
+                        root_tilt_radians);
+                object.bone_matrices = matrices;
+                object.vertices.reserve(part.vertices.size());
+                for (size_t vertex_index = 0;
+                     vertex_index < part.vertices.size();
+                     ++vertex_index) {
+                    const ConvertedGeometryVertex& vertex =
+                            part.vertices[vertex_index];
+                    const ConvertedGeometrySkinWeights& skin =
+                            part.skin_weights[vertex_index];
+                    SkinnedVertex output;
+                    output.x = vertex.x;
+                    output.y = vertex.y;
+                    output.z = vertex.z;
+                    output.u = vertex.u;
+                    output.v = vertex.v;
+                    output.abgr =
+                            has_textures ? 0xffffffffu : abgr;
+                    for (size_t influence = 0;
+                         influence < kMaxSkinInfluences;
+                         ++influence) {
+                        const bool active =
+                                skin.weights[influence] > 0.0f &&
+                                skin.bones[influence] <
+                                        part.bones.size();
+                        output.bone_indices[influence] =
+                                active
+                                ? static_cast<uint8_t>(
+                                          skin.bones[influence])
+                                : 0;
+                        output.bone_weights[influence] =
+                                active
+                                ? skin.weights[influence]
+                                : 0.0f;
+                    }
+                    object.vertices.push_back(output);
+                }
+                object.triangle_indices = part.triangle_indices;
+                const auto append_layer =
+                        [&](int material_index,
+                            uint32_t first_index,
+                            uint32_t index_count) {
+                    SkinnedWorldObject::Layer layer;
+                    layer.first_index = first_index;
+                    layer.index_count = index_count;
+                    if (material_index >= 0 &&
+                        material_index <
+                                static_cast<int>(
+                                        binding.texture_paths.size())) {
+                        layer.texture_path =
+                                binding.texture_paths[material_index];
+                    }
+                    ResolveGeometryMaterialAlpha(
+                            binding,
+                            material_index,
+                            alpha_blended,
+                            alpha_tested,
+                            &layer.alpha_blended,
+                            &layer.alpha_tested);
+                    object.layers.push_back(std::move(layer));
+                };
+                if (binding.material_quantities.empty()) {
+                    const int material_index =
+                            binding.texture_paths.empty()
+                            ? -1
+                            : std::min(
+                                      static_cast<int>(part_index),
+                                      static_cast<int>(
+                                              binding.texture_paths.size()) -
+                                              1);
+                    append_layer(
+                            material_index,
+                            0,
+                            static_cast<uint32_t>(
+                                    part.triangle_indices.size()));
+                } else {
+                    const int material_count =
+                            part_index <
+                                    binding.material_quantities.size()
+                            ? binding.material_quantities[part_index]
+                            : 0;
+                    for (const ConvertedGeometryGroup& group :
+                         part.groups) {
+                        const int material_index =
+                                material_count > 0
+                                ? material_base +
+                                          std::min(
+                                                  static_cast<int>(
+                                                          group.material_index),
+                                                  material_count - 1)
+                                : -1;
+                        append_layer(
+                                material_index,
+                                group.first_index,
+                                group.index_count);
+                    }
+                    material_base += material_count;
+                }
+                g_gpu_skinned_vertex_count += object.vertices.size();
+                ++g_gpu_skinned_part_count;
+                if (!g_gpu_skinning_logged) {
+                    std::ostringstream report;
+                    report << "gpu_skinning=active"
+                           << "; geometry="
+                           << binding.geometry_record_id
+                           << "; vertices=" << object.vertices.size()
+                           << "; bones=" << part.bones.size()
+                           << "; frame=" << frame
+                           << "; frames="
+                           << part.skinning_frames.size();
+                    PlatformRuntime::instance().log_info(report.str());
+                    g_gpu_skinning_logged = true;
+                }
+                skinned_mesh->objects.push_back(std::move(object));
                 continue;
             }
         }
@@ -5343,6 +5549,7 @@ void AppendUnitIndicator(
 
 void AppendEntityModel(
         WorldObjectMesh* mesh,
+        SkinnedWorldObjectMesh* skinned_mesh,
         const Bk2PresentationEntity& entity,
         uint32_t abgr,
         float animation_time_seconds) {
@@ -5423,7 +5630,8 @@ void AppendEntityModel(
                 entity.turret_pitch_radians,
                 entity.root_tilt_axis_x,
                 entity.root_tilt_axis_y,
-                entity.root_tilt_radians)) {
+                entity.root_tilt_radians,
+                skinned_mesh)) {
         return;
     }
     ++g_converted_geometry_fallback_count;
@@ -6742,6 +6950,7 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
     }
 
     WorldObjectMesh combined = g_animated_static_world_object_mesh;
+    SkinnedWorldObjectMesh skinned;
     ApplyStaticLayerTextureAnimation(&combined);
     combined.vertices.reserve(
             combined.vertices.size() + entities.size() * 24);
@@ -6856,6 +7065,7 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         }
         AppendEntityModel(
                 &combined,
+                &skinned,
                 entity,
                 projectile || static_object
                         ? ArgbToAbgr(0xffffffffu)
@@ -7028,9 +7238,21 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         }
     }
     g_world_object_mesh = std::move(combined);
+    g_skinned_world_object_mesh = std::move(skinned);
     RefreshWorldObjectTextureHandles(&g_world_object_mesh);
+    for (SkinnedWorldObject& object :
+         g_skinned_world_object_mesh.objects) {
+        for (SkinnedWorldObject::Layer& layer : object.layers) {
+            layer.texture_handle =
+                    ModelTextureHandle(layer.texture_path);
+        }
+    }
     g_rendered_presentation_generation = info.generation;
     g_rendered_war_fog_generation = war_fog.generation;
+    if (!RenderBackend().set_skinned_world_object_mesh(
+                g_skinned_world_object_mesh)) {
+        return false;
+    }
     if (g_world_object_mesh.vertices.empty() ||
         (g_world_object_mesh.triangle_indices.empty() &&
          g_world_object_mesh.layers.empty())) {
@@ -7952,6 +8174,17 @@ bool RefreshRenderResourcesLocked() {
         return false;
     }
     RefreshWorldObjectTextureHandles(&g_world_object_mesh);
+    for (SkinnedWorldObject& object :
+         g_skinned_world_object_mesh.objects) {
+        for (SkinnedWorldObject::Layer& layer : object.layers) {
+            layer.texture_handle =
+                    ModelTextureHandle(layer.texture_path);
+        }
+    }
+    if (!RenderBackend().set_skinned_world_object_mesh(
+                g_skinned_world_object_mesh)) {
+        return false;
+    }
     if (!g_world_object_mesh.vertices.empty() &&
         !RenderBackend().set_world_object_mesh(g_world_object_mesh)) {
         return false;
@@ -8203,6 +8436,7 @@ bool InitializeSinglePlayerRuntime() {
     g_water_mesh = std::move(water_mesh);
     g_static_world_object_mesh = std::move(presentation_world_mesh);
     g_world_object_mesh = WorldObjectMesh();
+    g_skinned_world_object_mesh = SkinnedWorldObjectMesh();
     PublishPresentationMeshes(
             mission.state.mission_id,
             g_terrain_mesh,
@@ -8313,6 +8547,7 @@ void ShutdownSinglePlayerRuntime() {
     g_static_world_object_mesh = WorldObjectMesh();
     g_animated_static_world_object_mesh = WorldObjectMesh();
     g_world_object_mesh = WorldObjectMesh();
+    g_skinned_world_object_mesh = SkinnedWorldObjectMesh();
     bk2::presentation::Reset();
     g_ready = false;
     g_user_paused = false;
@@ -8380,6 +8615,9 @@ void ShutdownSinglePlayerRuntime() {
     g_stand_transition_animation_instance_count = 0;
     g_runtime_skinned_vertex_count = 0;
     g_runtime_skinning_logged = false;
+    g_gpu_skinned_part_count = 0;
+    g_gpu_skinned_vertex_count = 0;
+    g_gpu_skinning_logged = false;
     g_combat_effect_render_count = 0;
     g_effect_light_render_count = 0;
     g_active_combat_effect_count = 0;
@@ -9390,6 +9628,10 @@ std::string SinglePlayerRuntimeReport() {
            << g_stand_transition_animation_instance_count
            << "; runtime_skinned_vertices="
            << g_runtime_skinned_vertex_count
+           << "; gpu_skinned_parts="
+           << g_gpu_skinned_part_count
+           << "; gpu_skinned_vertices="
+           << g_gpu_skinned_vertex_count
            << "; combat_effect_renders="
            << g_combat_effect_render_count
            << "; effect_light_renders="

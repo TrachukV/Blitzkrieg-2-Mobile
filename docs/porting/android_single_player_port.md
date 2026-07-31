@@ -647,11 +647,19 @@ type and simulation time, and selects non-looping standing-to-prone and
 prone-to-standing caches sampled from the shipped RIFLE resources `3965` and
 `3988`. A complete conversion covered all 259 compatible infantry
 geometries for each direction, and an ARM64 US1.0 run received the live
-animation stream without a geometry fallback. Remaining renderer work includes
-moving the now-live CPU runtime skinning contract to a dedicated GPU vertex
-path, effect-attached Granny geometry,
-terrain-conforming shadow maps, more complete legacy shader translation, and
-post effects. The original
+animation stream without a geometry fallback. Version-5 animated meshes with
+at most 48 bones now use a dedicated bgfx vertex-skinning path: immutable
+bind-pose geometry is cached once, while each visible instance submits its
+world transform and selected matrix palette. Checked-in ESSL and SPIR-V shaders
+cover the Android OpenGL ES and Vulkan backends. Older cache versions, larger
+skeletons, procedural vehicle subparts, and projected silhouettes keep the
+validated CPU fallback. An installed ARM64 US1.0 run reported
+`gpu_skinning=active` for idle geometry 1791 (217 vertices, 21 bones, 16
+frames), then entered attack, lying-attack, and death variants with the models
+and original HUD still visible and no shader/GL/native-process error. Remaining
+renderer work includes effect-attached Granny geometry, terrain-conforming
+shadow maps, more complete legacy shader translation, and post effects. The
+original
 `SingleStatistics2` Action Report is now live: it renders the shipped layout,
 participating-player rows and flags, mission/campaign time, rank progress, and
 outcome-specific navigation from the real mission statistics snapshot. It also
