@@ -43,7 +43,8 @@ public final class Blitzkrieg2Activity extends GameActivity {
             "UI/chaptermap/arrows/arrow_own.dds",
             "UI/chaptermap/arrows/arrow_enemy.dds",
             "UI/chaptermap/arrows/defence_own.dds",
-            "UI/chaptermap/arrows/defence_enemy.dds"
+            "UI/chaptermap/arrows/defence_enemy.dds",
+            "UI/chaptermap/number18x33_atlas.dds"
     };
     private final Handler outcomeHandler = new Handler(Looper.getMainLooper());
     private LinearLayout outcomePanel;

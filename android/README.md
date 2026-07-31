@@ -854,6 +854,27 @@ The ARM64 visual probe covered USA mission index 2 at the initial, midpoint,
 and completed frames and logged one start and one completion without a process
 failure.
 
+The chapter and selected-mission reinforcement counters now use the shipped
+`Movies/counter/Number18x33.bik` art instead of static bitmap-font digits.
+`tools/android/build_chapter_roller_atlas.py` decodes its 1,440 18x33 frames
+into the checked-in 40x36 DDS atlas. The generator is reproducible with
+`ffmpeg` and Pillow; its current output is 720x1188 ARGB8888 with SHA-256
+`69fbb2912bd50b15278a008f0da4ab4adfa99ce8f5dabd715189b673c271cdbb`.
+The Activity stages that exact fallback under
+`DataAndroid/Data/UI/chaptermap` without replacing a player-supplied file.
+
+The native menu renderer follows the original `InitRoller` and
+`PlayRollerAnim` contract: 36 animation frames per digit, four directional
+digit bands, decimal-place extraction, rollover, 30 fps playback, and the
+same frame-skip calculation that caps long rolls at about two seconds. Chapter
+entry rolls from zero to the recommended mission allocation, target selection
+rolls the chapter remainder and mission allocation in opposite directions,
+and a successful Action Report restarts the chapter total from the saved
+pre-mission count when the frontline transition starts. The ARM64 GLES3 check
+covered entry `0->24 / 0->4`, selection `24->23 / 4->5`, and the reverse
+`23->24 / 5->4`; the atlas received a valid GPU handle, every transition
+logged completion, and the native process remained alive.
+
 On the ARM64 emulator the main menu screen resolves 28 windows, 16 buttons, 20
 textures, and 17 captions, loads 4 shipped fonts, and submits 158 quads with
 all 7 referenced textures on valid GPU handles over a 2856x1280 surface. The
@@ -1653,8 +1674,8 @@ post-win frontline interpolation, and locked-mission Play guard are linked.
 Campaign
 intro playback is still bypassed while most referenced Bink sources are
 unavailable. Touch scrolling for text longer than the authored viewport,
-the chapter-map reinforcement digit rollers and detail dialogs, and result
-rank/medal popups remain unfinished. The core Action
+the chapter-map reinforcement detail dialogs, and result rank/medal popups
+remain unfinished. The core Action
 Report and its reward rows are linked. Empty initial
 dynamic-world snapshots are now accepted as valid, and entity removals between
 the snapshot count/copy calls no longer abort mission startup; this fixed

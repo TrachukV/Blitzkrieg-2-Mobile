@@ -711,9 +711,17 @@ Germany chapter-one maps, locked-final selection, and an exact USA mission
 index 2 briefing route. Selected-mission road arrows now follow the shipped
 chapter `roads`, full-route UVs, arrow types, and dependency alpha; ARM64 checks
 covered USA mission indices 1 and 2 plus Germany mission index 1. UI work still
-includes the chapter-map reinforcement digit rollers and detail dialogs,
-rank/medal result popups, and replacement of temporary immediate-mode stubs
-with proper batching and render-target behavior. The static
+includes chapter-map reinforcement detail dialogs, rank/medal result popups,
+and replacement of temporary immediate-mode stubs with proper batching and
+render-target behavior. The reinforcement digit rollers are linked to the
+original five `WindowPlayer` positions. A checked-in 720x1188 ARGB8888 DDS
+atlas is generated losslessly from all 1,440 frames of
+`Movies/counter/Number18x33.bik`; the native controller reproduces the
+desktop decimal-place ranges, forward/reverse rollover, 36 frames per digit,
+30 fps timing, and two-second frame-skip cap for chapter entry, target
+selection, and the post-win chapter-count restart. ARM64 validation covered
+the `0->24 / 0->4`, `24->23 / 4->5`, and reverse `23->24 / 5->4`
+transitions without a texture or process failure. The static
 `CWindowPotentialLines` result is now generated from the chapter TGA layers,
 main-strike gradient, mission nodes, current completion state, potential
 values, and the original marching-squares contour. ARM64 validation covered

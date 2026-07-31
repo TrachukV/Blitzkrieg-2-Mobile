@@ -103,6 +103,12 @@ After a successful mission the last node now starts at its incomplete value
 and follows the desktop controller's five-second interpolation to its completed
 value. The generated texture updates in place and the transition is requested
 only by the successful statistics-to-chapter route.
+The chapter and selected-mission reinforcement counters also use the original
+animated number strip rather than replacement font glyphs. Android packages a
+lossless DDS atlas built from all 1,440 frames of `Number18x33.bik` and follows
+the desktop `PlayRollerAnim` decimal-place, direction, wrap, 30 fps, and
+two-second duration-cap rules when entering the chapter, selecting another
+mission, or returning after a win.
 The map renderer now includes general `SObjectRPGStats` records in addition to
 buildings, fences, entrenchments, squads, and mechanized units. This restores
 the original mission's vegetation and small props through their converted

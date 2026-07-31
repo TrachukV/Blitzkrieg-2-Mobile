@@ -1685,6 +1685,77 @@ bool g_chapter_frontline_animation_requested = false;
 int g_chapter_frontline_animation_mission = -1;
 int g_chapter_calls_available = 0;
 int g_chapter_calls_for_selected_mission = 0;
+bool g_chapter_roller_selection_requested = false;
+int g_chapter_roller_chapter_from = 0;
+int g_chapter_roller_mission_from = 0;
+
+// The original WindowPlayer widgets play this Bink strip at 30 fps. Android
+// stages an atlas derived losslessly from all 1,440 source frames so the
+// original per-digit frame ranges can be reproduced without a Bink decoder.
+constexpr const char* kChapterRollerAtlasPath =
+        "UI/chaptermap/number18x33_atlas.dds";
+constexpr int kChapterRollerFrameWidth = 18;
+constexpr int kChapterRollerFrameHeight = 33;
+constexpr int kChapterRollerAtlasColumns = 40;
+constexpr int kChapterRollerAtlasRows = 36;
+constexpr int kChapterRollerFramesPerDigit = 36;
+constexpr int kChapterRollerFps = 30;
+constexpr uint64_t kChapterRollerDelayMillis = 50;
+
+enum class ChapterRollerReason {
+    kStatic,
+    kEntry,
+    kSelection,
+    kPostWin,
+};
+
+const char* ChapterRollerReasonName(ChapterRollerReason reason) {
+    switch (reason) {
+        case ChapterRollerReason::kEntry:
+            return "entry";
+        case ChapterRollerReason::kSelection:
+            return "selection";
+        case ChapterRollerReason::kPostWin:
+            return "post_win";
+        case ChapterRollerReason::kStatic:
+        default:
+            return "static";
+    }
+}
+
+struct ChapterRollerTransition {
+    bool prepared = false;
+    ChapterRollerReason reason = ChapterRollerReason::kStatic;
+    int chapter_from = 0;
+    int chapter_to = 0;
+    int mission_from = 0;
+    int mission_to = 0;
+    uint64_t delay_millis = 0;
+};
+
+struct ChapterRollerDigitPlayback {
+    size_t quad_index = static_cast<size_t>(-1);
+    int frame_start = 0;
+    int frame_end = 0;
+    int frame_skip = 0;
+};
+
+struct ChapterRollerAnimationState {
+    std::vector<ChapterRollerDigitPlayback> digits;
+    uint64_t elapsed_millis = 0;
+    uint64_t delay_millis = 0;
+    uint64_t last_tick_millis = 0;
+    int chapter_from = 0;
+    int chapter_to = 0;
+    int mission_from = 0;
+    int mission_to = 0;
+    bool post_win = false;
+    bool started = false;
+};
+
+ChapterRollerTransition g_chapter_roller_transition;
+std::unique_ptr<ChapterRollerAnimationState>
+        g_chapter_roller_animation;
 
 constexpr const char* kCampaignSelectionScreenRef =
         "UI/Game/Menu/CampaignSelection2/"
@@ -2037,6 +2108,13 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
                     kChapterTargetCompleted) {
             return false;
         }
+        g_chapter_roller_selection_requested = true;
+        g_chapter_roller_chapter_from = std::max(
+                0,
+                g_chapter_calls_available -
+                        g_chapter_calls_for_selected_mission);
+        g_chapter_roller_mission_from =
+                std::max(0, g_chapter_calls_for_selected_mission);
         g_selected_mission = mission_index;
         return LoadOriginalMenuScreen(current_screen);
     }
@@ -2459,8 +2537,16 @@ void ApplyChapterMapBindingsLocked(const std::string& screen_ref) {
     }
     const bool frontline_animation_requested =
             g_chapter_frontline_animation_requested;
+    const bool roller_selection_requested =
+            g_chapter_roller_selection_requested;
+    const int roller_chapter_from =
+            g_chapter_roller_chapter_from;
+    const int roller_mission_from =
+            g_chapter_roller_mission_from;
     g_chapter_frontline_animation_requested = false;
     g_chapter_frontline_animation_mission = -1;
+    g_chapter_roller_selection_requested = false;
+    g_chapter_roller_transition = ChapterRollerTransition();
     const NDb::SGameRoot* root = NGameX::GetGameRoot();
     const NDb::SChapter* chapter = SelectedChapter();
     if (root == nullptr ||
@@ -2678,6 +2764,53 @@ void ApplyChapterMapBindingsLocked(const std::string& screen_ref) {
     g_chapter_calls_for_selected_mission = std::min(
             std::max(0, selected.nRecommendedCalls),
             g_chapter_calls_available);
+
+    const int chapter_calls_for_selection = std::max(
+            0,
+            g_chapter_calls_available -
+                    g_chapter_calls_for_selected_mission);
+    if (animate_last_win) {
+        // StepLocal restarts the chapter counter when the frontline begins,
+        // rolling the saved pre-mission value to the new chapter total.
+        g_chapter_roller_transition.prepared = true;
+        g_chapter_roller_transition.reason =
+                ChapterRollerReason::kPostWin;
+        g_chapter_roller_transition.chapter_from = std::max(
+                0,
+                runtime_state.chapter_reinforcement_calls_old);
+        g_chapter_roller_transition.chapter_to =
+                g_chapter_calls_available;
+        g_chapter_roller_transition.mission_from =
+                g_chapter_calls_for_selected_mission;
+        g_chapter_roller_transition.mission_to =
+                g_chapter_calls_for_selected_mission;
+        g_chapter_roller_transition.delay_millis =
+                kChapterRollerDelayMillis;
+    } else if (roller_selection_requested) {
+        // SelectTarget rolls both counters in opposite directions while
+        // preserving their sum at the chapter's available call count.
+        g_chapter_roller_transition.prepared = true;
+        g_chapter_roller_transition.reason =
+                ChapterRollerReason::kSelection;
+        g_chapter_roller_transition.chapter_from =
+                roller_chapter_from;
+        g_chapter_roller_transition.chapter_to =
+                chapter_calls_for_selection;
+        g_chapter_roller_transition.mission_from =
+                roller_mission_from;
+        g_chapter_roller_transition.mission_to =
+                g_chapter_calls_for_selected_mission;
+    } else if (chapter_changed) {
+        // InitRoller starts every digit at zero before InitMissions selects
+        // the recommended target.
+        g_chapter_roller_transition.prepared = true;
+        g_chapter_roller_transition.reason =
+                ChapterRollerReason::kEntry;
+        g_chapter_roller_transition.chapter_to =
+                chapter_calls_for_selection;
+        g_chapter_roller_transition.mission_to =
+                g_chapter_calls_for_selected_mission;
+    }
 
     for (size_t slot = 0; slot < 4; ++slot) {
         const std::string button_path =
@@ -4756,6 +4889,278 @@ void AppendChapterMapArrows(
     PlatformRuntime::instance().log_info(report.str());
 }
 
+void SetChapterRollerFrame(MenuQuad* quad, int frame) {
+    if (quad == nullptr) {
+        return;
+    }
+    const int frame_count =
+            kChapterRollerAtlasColumns *
+            kChapterRollerAtlasRows;
+    frame = std::clamp(frame, 0, frame_count - 1);
+    const int column = frame % kChapterRollerAtlasColumns;
+    const int row = frame / kChapterRollerAtlasColumns;
+    const float atlas_width = static_cast<float>(
+            kChapterRollerAtlasColumns *
+            kChapterRollerFrameWidth);
+    const float atlas_height = static_cast<float>(
+            kChapterRollerAtlasRows *
+            kChapterRollerFrameHeight);
+    quad->u0 = static_cast<float>(
+                       column * kChapterRollerFrameWidth) /
+            atlas_width;
+    quad->v0 = static_cast<float>(
+                       row * kChapterRollerFrameHeight) /
+            atlas_height;
+    quad->u1 = static_cast<float>(
+                       (column + 1) *
+                       kChapterRollerFrameWidth) /
+            atlas_width;
+    quad->v1 = static_cast<float>(
+                       (row + 1) *
+                       kChapterRollerFrameHeight) /
+            atlas_height;
+}
+
+ChapterRollerDigitPlayback ChapterRollerDigitFrames(
+        int start,
+        int end,
+        int decimal_place) {
+    ChapterRollerDigitPlayback playback;
+    int divisor = 1;
+    for (int place = 0; place < decimal_place; ++place) {
+        divisor *= 10;
+    }
+    int digit_start = (std::max(start, 0) / divisor) % 10;
+    int digit_end = (std::max(end, 0) / divisor) % 10;
+    const bool forward = start <= end;
+    if (!forward) {
+        std::swap(digit_start, digit_end);
+    }
+
+    int frame_start = digit_start + 1;
+    int frame_end = digit_end + 1;
+    if (digit_start > digit_end) {
+        frame_end = digit_end + 11;
+    }
+    if (!forward) {
+        frame_start = 40 - frame_start;
+        frame_end = 40 - frame_end;
+        std::swap(frame_start, frame_end);
+    }
+    playback.frame_start =
+            frame_start * kChapterRollerFramesPerDigit;
+    playback.frame_end =
+            frame_end * kChapterRollerFramesPerDigit;
+    const int duration_seconds =
+            (playback.frame_end - playback.frame_start) /
+                    kChapterRollerFps +
+            1;
+    playback.frame_skip = duration_seconds <= 2
+            ? 0
+            : duration_seconds / 2;
+    return playback;
+}
+
+void AppendChapterRollerDigit(
+        const char* window_name,
+        int decimal_place,
+        int start,
+        int end,
+        int texture,
+        ChapterRollerAnimationState* animation) {
+    const std::map<std::string, MenuTemplate>::const_iterator digit =
+            g_templates.find(window_name);
+    if (digit == g_templates.end()) {
+        return;
+    }
+    ChapterRollerDigitPlayback playback =
+            ChapterRollerDigitFrames(
+                    start,
+                    end,
+                    decimal_place);
+    MenuQuad quad;
+    quad.x = digit->second.x;
+    quad.y = digit->second.y;
+    quad.width = digit->second.width;
+    quad.height = digit->second.height;
+    quad.texture = texture;
+    SetChapterRollerFrame(&quad, playback.frame_start);
+    playback.quad_index = g_quads.size();
+    g_quads.push_back(quad);
+    if (animation != nullptr &&
+        playback.frame_start != playback.frame_end) {
+        animation->digits.push_back(playback);
+    }
+}
+
+// CWindowPlayer's number strip contains four directional passes through the
+// digits. PlayRollerAnim selects a frame range independently for every decimal
+// place and caps long transitions with frame skipping. Use those exact ranges
+// for the three chapter digits and two selected-mission digits.
+void AppendChapterRollers() {
+    const int chapter_target = g_chapter_roller_transition.prepared
+            ? g_chapter_roller_transition.chapter_to
+            : std::max(
+                      0,
+                      g_chapter_calls_available -
+                              g_chapter_calls_for_selected_mission);
+    const int mission_target = g_chapter_roller_transition.prepared
+            ? g_chapter_roller_transition.mission_to
+            : std::max(0, g_chapter_calls_for_selected_mission);
+    const int chapter_start = g_chapter_roller_transition.prepared
+            ? g_chapter_roller_transition.chapter_from
+            : chapter_target;
+    const int mission_start = g_chapter_roller_transition.prepared
+            ? g_chapter_roller_transition.mission_from
+            : mission_target;
+    const int texture = TextureIndex(kChapterRollerAtlasPath);
+
+    std::unique_ptr<ChapterRollerAnimationState> animation;
+    if (g_chapter_roller_transition.prepared) {
+        animation = std::make_unique<
+                ChapterRollerAnimationState>();
+        animation->delay_millis =
+                g_chapter_roller_transition.delay_millis;
+        animation->last_tick_millis =
+                PlatformRuntime::instance().monotonic_millis();
+        animation->chapter_from = chapter_start;
+        animation->chapter_to = chapter_target;
+        animation->mission_from = mission_start;
+        animation->mission_to = mission_target;
+        animation->post_win =
+                g_chapter_roller_transition.reason ==
+                ChapterRollerReason::kPostWin;
+    }
+
+    AppendChapterRollerDigit(
+            "ReinfQty3",
+            2,
+            chapter_start,
+            chapter_target,
+            texture,
+            animation.get());
+    AppendChapterRollerDigit(
+            "ReinfQty2",
+            1,
+            chapter_start,
+            chapter_target,
+            texture,
+            animation.get());
+    AppendChapterRollerDigit(
+            "ReinfQty1",
+            0,
+            chapter_start,
+            chapter_target,
+            texture,
+            animation.get());
+    AppendChapterRollerDigit(
+            "ReinfMission1",
+            1,
+            mission_start,
+            mission_target,
+            texture,
+            animation.get());
+    AppendChapterRollerDigit(
+            "ReinfMission2",
+            0,
+            mission_start,
+            mission_target,
+            texture,
+            animation.get());
+
+    if (animation && !animation->digits.empty()) {
+        g_chapter_roller_animation = std::move(animation);
+    } else {
+        g_chapter_roller_animation.reset();
+    }
+    std::ostringstream report;
+    report << "original_menu_chapter_rollers=ready"
+           << "; atlas=" << kChapterRollerAtlasPath
+           << "; chapter=" << chapter_start
+           << "->" << chapter_target
+           << "; mission=" << mission_start
+           << "->" << mission_target
+           << "; animated_digits="
+           << (g_chapter_roller_animation
+                       ? g_chapter_roller_animation->digits.size()
+                       : 0)
+           << "; reason="
+           << ChapterRollerReasonName(
+                      g_chapter_roller_transition.reason);
+    PlatformRuntime::instance().log_info(report.str());
+    g_chapter_roller_transition =
+            ChapterRollerTransition();
+}
+
+void UpdateChapterRollerAnimationLocked() {
+    if (!g_chapter_roller_animation) {
+        return;
+    }
+    ChapterRollerAnimationState& state =
+            *g_chapter_roller_animation;
+    const uint64_t now =
+            PlatformRuntime::instance().monotonic_millis();
+    if (PlatformRuntime::instance().lifecycle_state() !=
+        LifecycleState::Focused) {
+        state.last_tick_millis = now;
+        return;
+    }
+    if (now >= state.last_tick_millis) {
+        state.elapsed_millis += now - state.last_tick_millis;
+    }
+    state.last_tick_millis = now;
+    if (state.elapsed_millis < state.delay_millis) {
+        return;
+    }
+    const uint64_t playback_millis =
+            state.elapsed_millis - state.delay_millis;
+    if (!state.started) {
+        state.started = true;
+        std::ostringstream report;
+        report << "original_menu_chapter_roller_animation=started"
+               << "; chapter=" << state.chapter_from
+               << "->" << state.chapter_to
+               << "; mission=" << state.mission_from
+               << "->" << state.mission_to
+               << "; post_win="
+               << (state.post_win ? "true" : "false");
+        PlatformRuntime::instance().log_info(report.str());
+    }
+
+    const uint64_t displayed_frames =
+            playback_millis * kChapterRollerFps / 1000;
+    bool completed = true;
+    for (const ChapterRollerDigitPlayback& digit :
+         state.digits) {
+        if (digit.quad_index >= g_quads.size()) {
+            continue;
+        }
+        const int frame_step = std::max(
+                1,
+                digit.frame_skip + 1);
+        const uint64_t advanced =
+                displayed_frames *
+                static_cast<uint64_t>(frame_step);
+        const int frame = static_cast<int>(std::min<uint64_t>(
+                static_cast<uint64_t>(digit.frame_end),
+                static_cast<uint64_t>(digit.frame_start) +
+                        advanced));
+        SetChapterRollerFrame(
+                &g_quads[digit.quad_index],
+                frame);
+        completed = completed && frame >= digit.frame_end;
+    }
+    if (!completed) {
+        return;
+    }
+    std::ostringstream report;
+    report << "original_menu_chapter_roller_animation=completed"
+           << "; chapter=" << state.chapter_to
+           << "; mission=" << state.mission_to;
+    PlatformRuntime::instance().log_info(report.str());
+    g_chapter_roller_animation.reset();
+}
+
 // InitMissions clones a target button onto the chapter map for each mission
 // in the chapter's path. Position comes from the details map when the chapter
 // ships one, and from the mission's own PlaceOnChapterMap otherwise, which is
@@ -4926,55 +5331,7 @@ void PopulateChapterMapLocked() {
         ++placed;
     }
 
-    const int chapter_calls = std::max(
-            0,
-            g_chapter_calls_available -
-                    g_chapter_calls_for_selected_mission);
-    const int chapter_digits[3] = {
-            (chapter_calls / 100) % 10,
-            (chapter_calls / 10) % 10,
-            chapter_calls % 10,
-    };
-    const char* const chapter_digit_windows[3] = {
-            "ReinfQty3", "ReinfQty2", "ReinfQty1"};
-    for (size_t index = 0; index < 3; ++index) {
-        const std::map<std::string, MenuTemplate>::const_iterator digit =
-                g_templates.find(chapter_digit_windows[index]);
-        if (digit == g_templates.end()) {
-            continue;
-        }
-        AppendTextQuads(
-                std::to_string(chapter_digits[index]),
-                "<center>",
-                digit->second.x,
-                digit->second.y,
-                digit->second.width,
-                digit->second.height,
-                "numeric");
-    }
-    const int mission_calls =
-            std::max(0, g_chapter_calls_for_selected_mission);
-    const int mission_digits[2] = {
-            (mission_calls / 10) % 10,
-            mission_calls % 10,
-    };
-    const char* const mission_digit_windows[2] = {
-            "ReinfMission1", "ReinfMission2"};
-    for (size_t index = 0; index < 2; ++index) {
-        const std::map<std::string, MenuTemplate>::const_iterator digit =
-                g_templates.find(mission_digit_windows[index]);
-        if (digit == g_templates.end()) {
-            continue;
-        }
-        AppendTextQuads(
-                std::to_string(mission_digits[index]),
-                "<center>",
-                digit->second.x,
-                digit->second.y,
-                digit->second.width,
-                digit->second.height,
-                "numeric");
-    }
+    AppendChapterRollers();
 
     std::ostringstream report;
     report << "original_menu_chapter_targets=" << placed
@@ -5295,6 +5652,7 @@ bool RebuildMenuScreenLocked(const std::string& screen_ref) {
     g_textured_quad_insert_index = static_cast<size_t>(-1);
     g_chapter_potential_texture = nullptr;
     g_chapter_potential_animation.reset();
+    g_chapter_roller_animation.reset();
     g_texture_paths.clear();
     g_pressed_quads.clear();
     g_pressed_button = -1;
@@ -5385,6 +5743,7 @@ void RenderOriginalMenu(uint32_t screen_width, uint32_t screen_height) {
         return;
     }
     UpdateChapterMapPotentialAnimationLocked();
+    UpdateChapterRollerAnimationLocked();
     // UI.cpp VirtualToScreenX/Y scale each axis independently, so the shipped
     // 1024x768 layout stretches to whatever resolution is active.
     const float scale_x =
@@ -5633,6 +5992,9 @@ void ShutdownOriginalMenuRuntime() {
     g_textured_quad_insert_index = static_cast<size_t>(-1);
     g_chapter_potential_texture = nullptr;
     g_chapter_potential_animation.reset();
+    g_chapter_roller_animation.reset();
+    g_chapter_roller_transition = ChapterRollerTransition();
+    g_chapter_roller_selection_requested = false;
     g_texture_paths.clear();
     g_texture_handles.clear();
     g_pressed_quads.clear();
