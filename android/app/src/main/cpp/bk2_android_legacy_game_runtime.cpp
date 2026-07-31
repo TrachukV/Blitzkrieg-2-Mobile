@@ -94,6 +94,7 @@ extern int bk2_android_ai_debug_other_case;
 extern CGroupLogic theGroupLogic;
 extern CStatistics theStatistics;
 extern CUnitCreation theUnitCreation;
+extern CEventUpdater updater;
 
 namespace bk2::android {
 namespace {
@@ -216,6 +217,28 @@ uint64_t g_entrenchment_snapshot_count = 0;
 bool g_entrenchment_snapshot_logged = false;
 uint64_t g_mine_snapshot_count = 0;
 bool g_mine_snapshot_logged = false;
+NDb::ESeason g_map_season = NDb::SEASON_SUMMER;
+struct FallableObjectSnapshot {
+    Bk2PresentationEntity entity{};
+    CDBPtr<NDb::SObjectRPGStats> stats;
+    CVec3 ai_position = VNULL3;
+};
+struct FallenObjectPresentation {
+    FallableObjectSnapshot snapshot;
+    float direction_x = 0.0f;
+    float direction_y = 1.0f;
+    float end_angle = 0.0f;
+    float fall_cycles = 2.0f;
+    uint32_t duration_millis = 3000;
+    uint64_t start_millis = 0;
+};
+std::unordered_map<int32_t, FallableObjectSnapshot>
+        g_fallable_object_snapshots;
+std::unordered_map<int32_t, FallenObjectPresentation>
+        g_fallen_object_presentations;
+uint64_t g_fallable_object_snapshot_count = 0;
+uint64_t g_tree_broken_update_count = 0;
+bool g_fallable_object_snapshot_logged = false;
 AndroidWarFogSnapshot g_war_fog_snapshot;
 bool g_war_fog_first_update = true;
 enum LegacyMissionOutcomeValue {
@@ -1403,6 +1426,51 @@ void CaptureDescriptorSceneEffect(
     }
 }
 
+void CaptureSeasonedDescriptorSceneEffect(
+        const NDb::SComplexSeasonedEffect* seasoned_effect,
+        NDb::ESeason season,
+        int32_t victim_unit_id,
+        const CVec3& position) {
+    if (seasoned_effect == nullptr) {
+        return;
+    }
+    const NDb::SEffect* scene_effect = nullptr;
+    for (const NDb::SSeasonEffect& candidate :
+         seasoned_effect->seasons) {
+        if (candidate.eSeasonToUse == season) {
+            scene_effect = candidate.pSceneEffect.GetPtr();
+            break;
+        }
+    }
+    PlayComplexSound(
+            seasoned_effect->pSoundEffect.GetPtr(),
+            position);
+    if (scene_effect == nullptr) {
+        return;
+    }
+    TimedSceneEffect timed;
+    timed.effect.victim_unit_id = victim_unit_id;
+    timed.effect.x = AI2Vis(position.x);
+    timed.effect.y = AI2Vis(position.y);
+    timed.effect.z = AI2Vis(position.z);
+    timed.effect.descriptor_id =
+            seasoned_effect->GetDBID().ToString().c_str();
+    timed.effect.lifetime_millis = AppendSceneEffectRecipe(
+            scene_effect,
+            &timed.effect.emitters,
+            &timed.effect.lights);
+    if ((timed.effect.emitters.empty() &&
+         timed.effect.lights.empty()) ||
+        timed.effect.lifetime_millis == 0) {
+        return;
+    }
+    timed.created_millis = g_timer_millis;
+    timed.expires_millis =
+            g_timer_millis + timed.effect.lifetime_millis;
+    g_scene_effects.push_back(std::move(timed));
+    ++g_descriptor_scene_effect_count;
+}
+
 int CaptureStaticBuildingRpgUpdate(
         const SAINotifyRPGStats& update) {
     CLinkObject* link =
@@ -2217,6 +2285,76 @@ const std::string& LegacyMechGunBone(uint64_t stats_path_hash);
 int LegacyMechTurretPlatform(uint64_t stats_path_hash);
 int SelectMechTurretPlatform(const NDb::SMechUnitRPGStats* mech_stats);
 
+void CaptureTreeBrokenUpdate(const SAITreeBrokenUpdate& update) {
+    const auto found =
+            g_fallable_object_snapshots.find(update.nObjUniqueID);
+    if (found == g_fallable_object_snapshots.end() ||
+        !found->second.stats) {
+        PlatformRuntime::instance().log_warn(
+                std::string("tree_broken_presentation_missing=") +
+                std::to_string(update.nObjUniqueID));
+        return;
+    }
+    FallenObjectPresentation fallen;
+    fallen.snapshot = found->second;
+    const float direction_length =
+            std::hypot(update.vDir.x, update.vDir.y);
+    if (direction_length > 0.00001f) {
+        fallen.direction_x = update.vDir.x / direction_length;
+        fallen.direction_y = update.vDir.y / direction_length;
+    }
+    fallen.end_angle =
+            1.57079632679489661923f - std::atan(update.fTg);
+    fallen.fall_cycles =
+            std::max(found->second.stats->fFallCycles, 0.0f);
+    fallen.duration_millis = static_cast<uint32_t>(
+            std::max(found->second.stats->nFallDuration, 1));
+    fallen.start_millis = g_timer_millis;
+    fallen.snapshot.entity.flags &=
+            ~BK2_PRESENTATION_ENTITY_ALIVE;
+    fallen.snapshot.entity.flags |=
+            BK2_PRESENTATION_ENTITY_STATIC_OBJECT |
+            BK2_PRESENTATION_ENTITY_DEAD;
+    g_fallen_object_presentations[update.nObjUniqueID] =
+            fallen;
+    ++g_tree_broken_update_count;
+
+    CVec3 effect_position = fallen.snapshot.ai_position;
+    effect_position.z +=
+            static_cast<float>(
+                    found->second.stats->nObjectHeight) *
+            0.66f;
+    if (found->second.stats->pSeasonedFallEffect) {
+        CaptureSeasonedDescriptorSceneEffect(
+                found->second.stats
+                        ->pSeasonedFallEffect.GetPtr(),
+                g_map_season,
+                update.nObjUniqueID,
+                effect_position);
+    } else {
+        CaptureDescriptorSceneEffect(
+                found->second.stats->pFallEffect.GetPtr(),
+                update.nObjUniqueID,
+                effect_position);
+    }
+    PlatformRuntime::instance().log_info(
+            std::string("tree_broken_presentation=") +
+            std::to_string(update.nObjUniqueID) +
+            "; descriptor=" +
+            found->second.stats->GetDBID().ToString().c_str() +
+            "; direction=" +
+            std::to_string(fallen.direction_x) +
+            "," +
+            std::to_string(fallen.direction_y) +
+            "; slope=" + std::to_string(update.fTg) +
+            "; end_angle=" +
+            std::to_string(fallen.end_angle) +
+            "; duration_ms=" +
+            std::to_string(fallen.duration_millis) +
+            "; cycles=" +
+            std::to_string(fallen.fall_cycles));
+}
+
 void DrainLegacyClientUpdates() {
     if (g_ai_logic == nullptr) {
         return;
@@ -2224,6 +2362,13 @@ void DrainLegacyClientUpdates() {
     g_ai_logic->PrepareUpdates();
     while (CPtr<CObjectBase> update = g_ai_logic->GetUpdate()) {
         ++g_client_update_count;
+        SAITreeBrokenUpdate* tree_broken =
+                dynamic_cast<SAITreeBrokenUpdate*>(
+                        update.GetPtr());
+        if (tree_broken != nullptr) {
+            CaptureTreeBrokenUpdate(*tree_broken);
+            continue;
+        }
         SAIDeadUnitUpdate* dead =
                 dynamic_cast<SAIDeadUnitUpdate*>(update.GetPtr());
         if (dead != nullptr) {
@@ -2987,6 +3132,130 @@ void AppendMineEntities(std::vector<Bk2PresentationEntity>* entities) {
     }
 }
 
+void AppendFallableObjectEntities(
+        std::vector<Bk2PresentationEntity>* entities) {
+    g_fallable_object_snapshot_count = 0;
+    if (entities == nullptr ||
+        SLinkObjDataAutoMagic::pLinkObjData == nullptr) {
+        return;
+    }
+    const BYTE player_party = theDipl.GetMyParty();
+    uint64_t visible_count = 0;
+    for (const auto& entry :
+         SLinkObjDataAutoMagic::pLinkObjData->unitsID2object) {
+        CLinkObject* link = entry.second;
+        CCommonStaticObject* object =
+                dynamic_cast<CCommonStaticObject*>(link);
+        const NDb::SObjectRPGStats* stats =
+                object == nullptr
+                ? nullptr
+                : dynamic_cast<const NDb::SObjectRPGStats*>(
+                          object->GetStats());
+        if (object == nullptr ||
+            stats == nullptr ||
+            !stats->bCanFall ||
+            !object->IsAlive()) {
+            continue;
+        }
+        ++g_fallable_object_snapshot_count;
+        CVec3 position = object->GetCenter();
+        if (g_ai_logic != nullptr && g_ai_logic->GetHeights() != nullptr) {
+            position.z +=
+                    g_ai_logic->GetHeights()->GetVisZ(
+                            position.x,
+                            position.y);
+        }
+        const NDb::SVisObj* visual =
+                stats->pvisualObject.GetPtr();
+        if (visual == nullptr) {
+            continue;
+        }
+        FallableObjectSnapshot snapshot;
+        snapshot.stats = stats;
+        snapshot.ai_position = position;
+        snapshot.entity.id = object->GetUniqueId();
+        snapshot.entity.player = object->GetPlayer();
+        snapshot.entity.flags =
+                BK2_PRESENTATION_ENTITY_STATIC_OBJECT |
+                BK2_PRESENTATION_ENTITY_ALIVE;
+        snapshot.entity.x = AI2Vis(position.x);
+        snapshot.entity.y = AI2Vis(position.y);
+        snapshot.entity.z = AI2Vis(position.z);
+        snapshot.entity.heading_radians =
+                static_cast<float>(object->GetDir()) *
+                6.28318530717958647692f / 65536.0f;
+        snapshot.entity.hit_points = object->GetHitPoints();
+        snapshot.entity.max_hit_points = stats->fMaxHP;
+        snapshot.entity.rpg_stats_path_hash =
+                StatsPathHash(stats);
+        snapshot.entity.rpg_stats_record_id =
+                stats->GetRecordID();
+        snapshot.entity.geometry_record_id =
+                GeometryRecordId(visual);
+        snapshot.entity.visual_scale = stats->fSelectionScale;
+        snapshot.entity.relation =
+                BK2_PRESENTATION_RELATION_OWN;
+        g_fallable_object_snapshots[snapshot.entity.id] =
+                snapshot;
+        if (g_fallen_object_presentations.find(
+                    snapshot.entity.id) !=
+            g_fallen_object_presentations.end()) {
+            continue;
+        }
+        if (!object->IsVisible(player_party)) {
+            continue;
+        }
+        ++visible_count;
+        entities->push_back(snapshot.entity);
+    }
+
+    for (auto& entry : g_fallen_object_presentations) {
+        FallenObjectPresentation& fallen = entry.second;
+        Bk2PresentationEntity entity =
+                fallen.snapshot.entity;
+        const uint64_t elapsed_millis =
+                g_timer_millis > fallen.start_millis
+                ? g_timer_millis - fallen.start_millis
+                : 0;
+        const float animation_time = static_cast<float>(
+                std::min<uint64_t>(
+                        elapsed_millis,
+                        fallen.duration_millis));
+        const float duration =
+                static_cast<float>(fallen.duration_millis);
+        float remainder =
+                (duration - animation_time) / duration;
+        remainder = std::max(remainder, 0.0f);
+        const float time_coefficient =
+                3.14159265358979323846f *
+                fallen.fall_cycles * 0.5f / duration;
+        const float fall_coefficient =
+                1.0f -
+                std::abs(std::cos(
+                        animation_time *
+                        time_coefficient)) *
+                        remainder * remainder;
+        entity.root_tilt_axis_x = -fallen.direction_y;
+        entity.root_tilt_axis_y = fallen.direction_x;
+        entity.root_tilt_radians =
+                fallen.end_angle * fall_coefficient;
+        entities->push_back(entity);
+    }
+
+    if (!g_fallable_object_snapshot_logged &&
+        g_fallable_object_snapshot_count != 0) {
+        g_fallable_object_snapshot_logged = true;
+        PlatformRuntime::instance().log_info(
+                std::string("fallable_object_presentation=active") +
+                "; total=" +
+                std::to_string(g_fallable_object_snapshot_count) +
+                "; visible=" + std::to_string(visible_count) +
+                "; fallen=" +
+                std::to_string(
+                        g_fallen_object_presentations.size()));
+    }
+}
+
 void PublishPresentationEntities() {
     std::vector<Bk2PresentationEntity> entities;
     entities.reserve(
@@ -3153,6 +3422,7 @@ void PublishPresentationEntities() {
     AppendFenceEntities(&entities);
     AppendEntrenchmentEntities(&entities);
     AppendMineEntities(&entities);
+    AppendFallableObjectEntities(&entities);
     bk2::presentation::PublishEntities(std::move(entities));
 }
 
@@ -3420,6 +3690,12 @@ void ResetReportState() {
     g_entrenchment_snapshot_logged = false;
     g_mine_snapshot_count = 0;
     g_mine_snapshot_logged = false;
+    g_map_season = NDb::SEASON_SUMMER;
+    g_fallable_object_snapshots.clear();
+    g_fallen_object_presentations.clear();
+    g_fallable_object_snapshot_count = 0;
+    g_tree_broken_update_count = 0;
+    g_fallable_object_snapshot_logged = false;
     g_mission_outcome.store(kLegacyMissionRunning);
     g_pending_mission_outcome.store(kLegacyMissionRunning);
     g_stage = "not_started";
@@ -3496,6 +3772,7 @@ bool InitializeLegacyGameRuntime(
         *error = "legacy_game_map_missing";
         return false;
     }
+    g_map_season = map->eSeason;
     const NDb::SAIGameConsts* constants = NGameX::GetAIConsts();
     if (constants == nullptr) {
         *error = "legacy_game_ai_constants_missing";
@@ -5110,6 +5387,133 @@ void HandleLegacyInputEvent(const char* event_name) {
                     "," +
                     std::to_string(AI2Vis(position.y)));
         }
+    } else if (std::strcmp(event_name, "debug_fall_object") == 0) {
+        CAIUnit* observer =
+                CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+        if (observer == nullptr || !observer->IsAlive()) {
+            for (CGlobalIter iter(0, ANY_PARTY);
+                 !iter.IsFinished();
+                 iter.Iterate()) {
+                CAIUnit* candidate = *iter;
+                if (candidate != nullptr &&
+                    candidate->IsAlive() &&
+                    candidate->GetPlayer() ==
+                            theDipl.GetMyNumber()) {
+                    observer = candidate;
+                    break;
+                }
+            }
+        }
+        CCommonStaticObject* target = nullptr;
+        const NDb::SObjectRPGStats* target_stats = nullptr;
+        float best_distance_squared =
+                std::numeric_limits<float>::max();
+        uint64_t before_count = 0;
+        if (observer != nullptr &&
+            SLinkObjDataAutoMagic::pLinkObjData != nullptr) {
+            for (const auto& entry :
+                 SLinkObjDataAutoMagic::pLinkObjData->unitsID2object) {
+                CLinkObject* link = entry.second;
+                CCommonStaticObject* object =
+                        dynamic_cast<CCommonStaticObject*>(link);
+                const NDb::SObjectRPGStats* stats =
+                        object == nullptr
+                        ? nullptr
+                        : dynamic_cast<const NDb::SObjectRPGStats*>(
+                                  object->GetStats());
+                if (object == nullptr ||
+                    stats == nullptr ||
+                    !stats->bCanFall ||
+                    !object->IsAlive()) {
+                    continue;
+                }
+                ++before_count;
+                if (!object->IsVisible(theDipl.GetMyParty())) {
+                    continue;
+                }
+                const float delta_x =
+                        object->GetCenter().x -
+                        observer->GetCenter().x;
+                const float delta_y =
+                        object->GetCenter().y -
+                        observer->GetCenter().y;
+                const float distance_squared =
+                        delta_x * delta_x + delta_y * delta_y;
+                if (distance_squared < best_distance_squared) {
+                    best_distance_squared = distance_squared;
+                    target = object;
+                    target_stats = stats;
+                }
+            }
+        }
+        if (target != nullptr && target_stats != nullptr) {
+            const int target_id = target->GetUniqueId();
+            const CVec3 position = target->GetCenter();
+            const std::string descriptor =
+                    target_stats->GetDBID().ToString().c_str();
+            CVec2 fall_direction(
+                    position.x - observer->GetCenter().x,
+                    position.y - observer->GetCenter().y);
+            const float direction_length = fabs(fall_direction);
+            if (direction_length > 0.00001f) {
+                fall_direction /= direction_length;
+            } else {
+                fall_direction =
+                        GetVectorByDirection(observer->GetDir());
+            }
+            CenterSinglePlayerCamera(
+                    AI2Vis(position.x),
+                    AI2Vis(position.y));
+            target->AnimateFalling(fall_direction);
+            target->SetTrampled();
+            target->Delete();
+            updater.AddUpdate(
+                    0,
+                    ACTION_NOTIFY_SILENT_DEATH,
+                    target,
+                    -1);
+            target->SetHitPoints(0.0f);
+            uint64_t after_count = 0;
+            if (SLinkObjDataAutoMagic::pLinkObjData != nullptr) {
+                for (const auto& entry :
+                     SLinkObjDataAutoMagic::pLinkObjData
+                             ->unitsID2object) {
+                    CLinkObject* link = entry.second;
+                    CCommonStaticObject* object =
+                            dynamic_cast<CCommonStaticObject*>(link);
+                    const NDb::SObjectBaseRPGStats* stats =
+                            object == nullptr
+                            ? nullptr
+                            : dynamic_cast<
+                                      const NDb::SObjectBaseRPGStats*>(
+                                      object->GetStats());
+                    if (object != nullptr &&
+                        stats != nullptr &&
+                        stats->bCanFall &&
+                        object->IsAlive()) {
+                        ++after_count;
+                    }
+                }
+            }
+            PlatformRuntime::instance().log_info(
+                    std::string("debug_fall_object=") +
+                    std::to_string(target_id) +
+                    "; descriptor=" + descriptor +
+                    "; fallable_before=" +
+                    std::to_string(before_count) +
+                    "; fallable_after=" +
+                    std::to_string(after_count) +
+                    "; removed=" +
+                    (after_count < before_count ? "true" : "false") +
+                    "; direction=" +
+                    std::to_string(fall_direction.x) +
+                    "," +
+                    std::to_string(fall_direction.y) +
+                    "; position=" +
+                    std::to_string(AI2Vis(position.x)) +
+                    "," +
+                    std::to_string(AI2Vis(position.y)));
+        }
     } else if (std::strcmp(event_name, "debug_combat_effect") == 0 &&
                g_selected_unit_id >= 0 &&
                g_attack_target_unit_id >= 0) {
@@ -5368,6 +5772,12 @@ void ShutdownLegacyGameRuntime() {
     g_entrenchment_snapshot_logged = false;
     g_mine_snapshot_count = 0;
     g_mine_snapshot_logged = false;
+    g_map_season = NDb::SEASON_SUMMER;
+    g_fallable_object_snapshots.clear();
+    g_fallen_object_presentations.clear();
+    g_fallable_object_snapshot_count = 0;
+    g_tree_broken_update_count = 0;
+    g_fallable_object_snapshot_logged = false;
     g_war_fog_snapshot = AndroidWarFogSnapshot();
     g_war_fog_first_update = true;
     g_combat_effects.clear();
@@ -5469,6 +5879,12 @@ std::string LegacyGameRuntimeReport() {
            << "; bridge_rpg_updates=" << g_bridge_rpg_update_count
            << "; bridge_effects=" << g_bridge_effect_count
            << "; mines=" << g_mine_snapshot_count
+           << "; fallable_objects="
+           << g_fallable_object_snapshot_count
+           << "; fallen_objects="
+           << g_fallen_object_presentations.size()
+           << "; tree_broken_updates="
+           << g_tree_broken_update_count
            << "; war_fog=" << g_war_fog_snapshot.width
            << "x" << g_war_fog_snapshot.height
            << "; war_fog_generation="

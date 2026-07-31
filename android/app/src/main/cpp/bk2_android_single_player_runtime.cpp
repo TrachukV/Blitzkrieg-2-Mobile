@@ -3938,16 +3938,50 @@ SelectConvertedGeometryVertices(
             animation_time_seconds)];
 }
 
+void ApplyWorldRootTilt(
+        float axis_x,
+        float axis_y,
+        float angle,
+        float* x,
+        float* y,
+        float* z) {
+    if (x == nullptr || y == nullptr || z == nullptr ||
+        std::abs(angle) <= 0.00001f) {
+        return;
+    }
+    const float axis_length = std::hypot(axis_x, axis_y);
+    if (axis_length <= 0.00001f) {
+        return;
+    }
+    axis_x /= axis_length;
+    axis_y /= axis_length;
+    const float old_x = *x;
+    const float old_y = *y;
+    const float old_z = *z;
+    const float cosine = std::cos(angle);
+    const float sine = std::sin(angle);
+    const float dot = axis_x * old_x + axis_y * old_y;
+    *x = old_x * cosine +
+            axis_y * old_z * sine +
+            axis_x * dot * (1.0f - cosine);
+    *y = old_y * cosine -
+            axis_x * old_z * sine +
+            axis_y * dot * (1.0f - cosine);
+    *z = old_z * cosine +
+            (axis_x * old_y - axis_y * old_x) * sine;
+}
+
 struct ProjectedShadowPoint {
     float x;
     float y;
 };
 
-// The projected silhouette only depends on the model, its animation frame and
-// its heading: moving the unit just translates the hull. Rebuilding it (sort +
-// convex hull over every vertex) for every unit every frame was the single
-// most expensive thing in the frame, so the hull is cached in origin-relative
-// space and the heading is quantised to keep the cache bounded.
+// The projected silhouette only depends on the model, its animation frame,
+// heading, and optional root tilt: moving the unit just translates the hull.
+// Rebuilding it (sort + convex hull over every vertex) for every unit every
+// frame was the single most expensive thing in the frame, so the hull is
+// cached in origin-relative space and the transforms are quantised to keep the
+// cache bounded.
 constexpr size_t kProjectedShadowHeadingBuckets = 64;
 constexpr size_t kProjectedShadowCacheLimit = 8192;
 
@@ -4015,7 +4049,10 @@ void AppendProjectedGeometryShadow(
         float cosine,
         float sine,
         ConvertedAnimationVariant animation_variant,
-        float animation_time_seconds) {
+        float animation_time_seconds,
+        float root_tilt_axis_x,
+        float root_tilt_axis_y,
+        float root_tilt_radians) {
     if (mesh == nullptr) {
         return;
     }
@@ -4042,6 +4079,18 @@ void AppendProjectedGeometryShadow(
             &cache_key,
             static_cast<uint64_t>(
                     std::lround(binding.geometry_scale * 4096.0f)));
+    MixProjectedShadowKey(
+            &cache_key,
+            static_cast<uint64_t>(
+                    std::lround(root_tilt_axis_x * 64.0f)));
+    MixProjectedShadowKey(
+            &cache_key,
+            static_cast<uint64_t>(
+                    std::lround(root_tilt_axis_y * 64.0f)));
+    MixProjectedShadowKey(
+            &cache_key,
+            static_cast<uint64_t>(
+                    std::lround(root_tilt_radians * 64.0f)));
     for (const ConvertedGeometryPart& part : geometry.parts) {
         MixProjectedShadowKey(
                 &cache_key,
@@ -4070,15 +4119,21 @@ void AppendProjectedGeometryShadow(
                         animation_time_seconds);
         points.reserve(points.size() + vertices->size());
         for (const ConvertedGeometryVertex& vertex : *vertices) {
-            const float local_x =
+            float local_x =
                     binding.geometry_scale *
                     (bucket_cosine * vertex.x - bucket_sine * vertex.y);
-            const float local_y =
+            float local_y =
                     binding.geometry_scale *
                     (bucket_sine * vertex.x + bucket_cosine * vertex.y);
-            const float local_height = std::max(
-                    binding.geometry_scale * vertex.z,
-                    0.0f);
+            float local_height = binding.geometry_scale * vertex.z;
+            ApplyWorldRootTilt(
+                    root_tilt_axis_x,
+                    root_tilt_axis_y,
+                    root_tilt_radians,
+                    &local_x,
+                    &local_y,
+                    &local_height);
+            local_height = std::max(local_height, 0.0f);
             points.push_back({
                     local_x + local_height * kShadowProjectionX,
                     local_y + local_height * kShadowProjectionY});
@@ -4165,7 +4220,10 @@ void AppendAlphaMaskedGeometryShadow(
         float cosine,
         float sine,
         ConvertedAnimationVariant animation_variant,
-        float animation_time_seconds) {
+        float animation_time_seconds,
+        float root_tilt_axis_x,
+        float root_tilt_axis_y,
+        float root_tilt_radians) {
     if (mesh == nullptr || binding.texture_paths.empty()) {
         return;
     }
@@ -4186,15 +4244,21 @@ void AppendAlphaMaskedGeometryShadow(
         const uint32_t vertex_base =
                 static_cast<uint32_t>(mesh->vertices.size());
         for (const ConvertedGeometryVertex& vertex : *vertices) {
-            const float local_x =
+            float local_x =
                     binding.geometry_scale *
                     (cosine * vertex.x - sine * vertex.y);
-            const float local_y =
+            float local_y =
                     binding.geometry_scale *
                     (sine * vertex.x + cosine * vertex.y);
-            const float local_height = std::max(
-                    binding.geometry_scale * vertex.z,
-                    0.0f);
+            float local_height = binding.geometry_scale * vertex.z;
+            ApplyWorldRootTilt(
+                    root_tilt_axis_x,
+                    root_tilt_axis_y,
+                    root_tilt_radians,
+                    &local_x,
+                    &local_y,
+                    &local_height);
+            local_height = std::max(local_height, 0.0f);
             mesh->vertices.push_back(TerrainVertex{
                     x + local_x + local_height * kShadowProjectionX,
                     y + local_y + local_height * kShadowProjectionY,
@@ -4349,7 +4413,10 @@ bool AppendConvertedGeometry(
         float travelled_distance = 0.0f,
         float health_fraction = 1.0f,
         const std::string& gun_bone = std::string(),
-        float gun_pitch = 0.0f) {
+        float gun_pitch = 0.0f,
+        float root_tilt_axis_x = 0.0f,
+        float root_tilt_axis_y = 0.0f,
+        float root_tilt_radians = 0.0f) {
     if (mesh == nullptr) {
         return false;
     }
@@ -4414,7 +4481,10 @@ bool AppendConvertedGeometry(
                 cosine,
                 sine,
                 animation_variant,
-                animation_time_seconds);
+                animation_time_seconds,
+                root_tilt_axis_x,
+                root_tilt_axis_y,
+                root_tilt_radians);
     }
     if (cast_alpha_masked_shadow && !g_shadows_disabled) {
         AppendAlphaMaskedGeometryShadow(
@@ -4427,7 +4497,10 @@ bool AppendConvertedGeometry(
                 cosine,
                 sine,
                 animation_variant,
-                animation_time_seconds);
+                animation_time_seconds,
+                root_tilt_axis_x,
+                root_tilt_axis_y,
+                root_tilt_radians);
     }
     const bool has_textures = std::any_of(
             binding.texture_paths.begin(),
@@ -4625,12 +4698,24 @@ bool AppendConvertedGeometry(
                             turret_cosine * offset_y;
                 }
             }
+            float world_x =
+                    binding.geometry_scale *
+                    (cosine * local_x - sine * local_y);
+            float world_y =
+                    binding.geometry_scale *
+                    (sine * local_x + cosine * local_y);
+            float world_z = binding.geometry_scale * local_z;
+            ApplyWorldRootTilt(
+                    root_tilt_axis_x,
+                    root_tilt_axis_y,
+                    root_tilt_radians,
+                    &world_x,
+                    &world_y,
+                    &world_z);
             mesh->vertices.push_back(TerrainVertex{
-                    x + binding.geometry_scale *
-                            (cosine * local_x - sine * local_y),
-                    y + binding.geometry_scale *
-                            (sine * local_x + cosine * local_y),
-                    z + binding.geometry_scale * local_z + 0.05f,
+                    x + world_x,
+                    y + world_y,
+                    z + world_z + 0.05f,
                     vertex.u,
                     vertex.v - track_offset,
                     has_textures ? 0xffffffffu : abgr});
@@ -5074,7 +5159,10 @@ void AppendEntityModel(
                 rigid_model_stand_in
                         ? std::string()
                         : LegacyMechGunBone(entity.rpg_stats_path_hash),
-                entity.turret_pitch_radians)) {
+                entity.turret_pitch_radians,
+                entity.root_tilt_axis_x,
+                entity.root_tilt_axis_y,
+                entity.root_tilt_radians)) {
         return;
     }
     ++g_converted_geometry_fallback_count;
@@ -5871,6 +5959,10 @@ void AppendMapObjects(
                 type_id == NDb::SMechUnitRPGStats::typeID ||
                 type_id == NDb::SSquadRPGStats::typeID ||
                 type_id == NDb::SInfantryRPGStats::typeID;
+        const NDb::SObjectBaseRPGStats* object_stats =
+                dynamic_cast<const NDb::SObjectBaseRPGStats*>(stats);
+        const bool live_fallable_object =
+                object_stats != nullptr && object_stats->bCanFall;
         if (dynamic_unit && !include_dynamic_units) {
             continue;
         }
@@ -5883,7 +5975,8 @@ void AppendMapObjects(
             type_id == NDb::SBridgeRPGStats::typeID ||
             type_id == NDb::SFenceRPGStats::typeID ||
             type_id == NDb::SEntrenchmentRPGStats::typeID ||
-            type_id == NDb::SMineRPGStats::typeID) {
+            type_id == NDb::SMineRPGStats::typeID ||
+            live_fallable_object) {
             continue;
         }
         const bool visible_gameplay_object =

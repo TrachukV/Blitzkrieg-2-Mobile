@@ -994,12 +994,15 @@ the original `CEntrenchmentCreation`/`BuildAll` path after the static world
 mesh already exists. Keyboard `I` places a universal mine through the original
 `CUnitCreation::CreateMine` path, and keyboard `U` detonates the closest
 registered mine through `CMineStaticObject::Detonate`, exercising its weapon,
-shell effect, and removal from the live object map. Keyboard `N`
+shell effect, and removal from the live object map. Keyboard `O` focuses and
+knocks down the closest visible `CanFall` object through
+`CCommonStaticObject::AnimateFalling`, including the original tree-broken
+update, fall effect, and AI-world removal. Keyboard `N`
 injects the reinforcement notification type so descriptor lookup, UTF-16
 decoding, JNI polling, and five-second expiry can be checked independently of
 scenario timing. The original `CScripts::LandReinforcementFromMap` path remains
 active in the linked AI runtime; `GER3.3` has also produced the same notification
-from a real scenario call. All fourteen shortcuts are absent from release
+from a real scenario call. All fifteen shortcuts are absent from release
 builds.
 
 `Data/Weapons` is required runtime DB payload. Without it, mine descriptors keep
@@ -1331,6 +1334,23 @@ fallback counts remained zero. Detonation changed the live count from one back
 to zero and rendered the shipped `AntitankMineExplosion_ComplexEffect`
 descriptor emitters and light; the same validation run also presented a
 simulation-triggered `AntipersMineExplosion_ComplexEffect`.
+
+Objects marked `CanFall`, including trees, palms, poles, and signs, also leave
+the immutable scenery batch. Android snapshots their live
+`CCommonStaticObject` state and consumes the original `SAITreeBrokenUpdate`
+after gameplay calls `AnimateFalling`. The root model and its projected shadow
+use the desktop `CTreeFallingMutator` angle, terrain-slope compensation,
+duration, cycle count, and damped-cosine fall coefficient. The fallen object
+persists after its AI object is deleted, while the season-matched shipped fall
+effect is forwarded to the Android particle and light renderer.
+
+US1.0 started with 1081 live fallable objects, 157 visible to the local party.
+The device check knocked down `Palm01` object 7108 through the original
+simulation path, reduced the live count by one, rendered
+`PalmFall_ComplexEffect`, and retained the fallen palm with zero static or
+dynamic geometry fallbacks. The original renderer's random secondary motion
+for named leaf joints is not yet reproduced; the root fall, collision
+lifecycle, effect, and persistent final pose are active.
 
 The first model-shadow layer projects every converted Granny vertex along one
 sun direction, computes a convex ground hull, and submits that hull once through

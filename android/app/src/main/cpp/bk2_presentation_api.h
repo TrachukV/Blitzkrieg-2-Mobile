@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define BK2_PRESENTATION_API_VERSION 3u
+#define BK2_PRESENTATION_API_VERSION 4u
 #define BK2_PRESENTATION_MISSION_ID_CAPACITY 256u
 
 enum Bk2PresentationEntityFlags {
@@ -70,6 +70,12 @@ typedef struct Bk2PresentationEntity {
     /* Where this unit stands relative to the player, so the renderer can
        tell friend from enemy without knowing about diplomacy. */
     int32_t relation;
+    /* Root rotation used by fallable static objects. The horizontal axis is
+       expressed in world space and the angle follows the legacy tree
+       mutator's current fall coefficient. Zero leaves the model upright. */
+    float root_tilt_axis_x;
+    float root_tilt_axis_y;
+    float root_tilt_radians;
 } Bk2PresentationEntity;
 
 typedef struct Bk2PresentationSnapshotInfo {

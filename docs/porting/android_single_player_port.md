@@ -180,6 +180,23 @@ zero and forwarded the shipped antipersonnel and antitank mine explosion
 descriptors observed during the validation run to the Android particle/light
 renderer; the direct debug detonation selected the antitank descriptor.
 
+Static objects with `SObjectRPGStats::bCanFall` now use a live presentation
+path rather than the cached scenery mesh. Android snapshots each living
+`CCommonStaticObject`, receives the original `SAITreeBrokenUpdate`, and keeps
+the model after the simulation deletes the AI object. Root geometry and both
+shadow paths use the same fall axis, terrain-slope end angle, duration, cycle
+count, and damped-cosine coefficient as `CTreeFallingMutator`. The seasonal
+`SComplexSeasonedEffect`, or the non-seasonal fallback, is resolved from the
+object descriptor and forwarded to the existing effect renderer.
+
+US1.0 exposed 1081 live fallable objects and 157 visible objects at startup.
+Knocking down `Palm01` object 7108 through
+`CCommonStaticObject::AnimateFalling` reduced the live count by one, delivered
+the tree-broken client update, rendered `PalmFall_ComplexEffect`, and left the
+fallen model in the world with zero geometry fallbacks. Random per-leaf-joint
+motion from the desktop mutator remains a renderer follow-up; the root fall
+and simulation lifecycle are live.
+
 The compiled animated-light intensity track is similarly represented by a
 short flash envelope rather than a full dynamic-light shader.
 The Android build packages the required 4.2 MiB original HUD subset and the TGA

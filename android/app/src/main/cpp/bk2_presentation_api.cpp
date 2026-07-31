@@ -265,6 +265,10 @@ extern "C" int bk2_presentation_write_json(const char* path) {
                << ",\"rpg_stats_record_id\":" << entity.rpg_stats_record_id
                << ",\"geometry_record_id\":" << entity.geometry_record_id
                << ",\"visual_scale\":" << entity.visual_scale
+               << ",\"root_tilt_axis\":["
+               << entity.root_tilt_axis_x << ','
+               << entity.root_tilt_axis_y << ']'
+               << ",\"root_tilt\":" << entity.root_tilt_radians
                << '}';
     }
     output << "]}";
