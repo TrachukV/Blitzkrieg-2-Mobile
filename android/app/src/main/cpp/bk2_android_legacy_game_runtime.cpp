@@ -22,10 +22,12 @@
 #include "AILogic/AIMap.h"
 #include "AILogic/AIUnit.h"
 #include "AILogic/LinkObject.h"
+#include "AILogic/Mine.h"
 #include "AILogic/NewUpdater.h"
 #include "AILogic/Soldier.h"
 #include "AILogic/StaticObject.h"
 #include "AILogic/Statistics.h"
+#include "AILogic/UnitCreation.h"
 #include "AILogic/UnitStates.h"
 #include "AILogic/UnitGuns.h"
 #include "AILogic/UnitsIterators.h"
@@ -91,6 +93,7 @@ extern int bk2_android_ai_debug_other_case;
 
 extern CGroupLogic theGroupLogic;
 extern CStatistics theStatistics;
+extern CUnitCreation theUnitCreation;
 
 namespace bk2::android {
 namespace {
@@ -211,6 +214,8 @@ uint64_t g_fence_snapshot_count = 0;
 bool g_fence_snapshot_logged = false;
 uint64_t g_entrenchment_snapshot_count = 0;
 bool g_entrenchment_snapshot_logged = false;
+uint64_t g_mine_snapshot_count = 0;
+bool g_mine_snapshot_logged = false;
 AndroidWarFogSnapshot g_war_fog_snapshot;
 bool g_war_fog_first_update = true;
 enum LegacyMissionOutcomeValue {
@@ -2876,6 +2881,112 @@ void AppendEntrenchmentEntities(
     }
 }
 
+void AppendMineEntities(std::vector<Bk2PresentationEntity>* entities) {
+    g_mine_snapshot_count = 0;
+    if (entities == nullptr ||
+        SLinkObjDataAutoMagic::pLinkObjData == nullptr) {
+        return;
+    }
+    const BYTE player_party = theDipl.GetMyParty();
+    uint64_t registered_count = 0;
+    uint64_t currently_visible_count = 0;
+    uint64_t disarmed_count = 0;
+    uint64_t infantry_count = 0;
+    uint64_t vehicle_count = 0;
+    uint64_t universal_count = 0;
+    uint64_t charge_count = 0;
+    uint64_t land_mine_count = 0;
+    for (const auto& entry :
+         SLinkObjDataAutoMagic::pLinkObjData->unitsID2object) {
+        CLinkObject* link = entry.second;
+        CMineStaticObject* mine =
+                dynamic_cast<CMineStaticObject*>(link);
+        const NDb::SMineRPGStats* stats =
+                mine == nullptr
+                ? nullptr
+                : dynamic_cast<const NDb::SMineRPGStats*>(
+                          mine->GetStats());
+        if (mine == nullptr || stats == nullptr || !mine->IsAlive()) {
+            continue;
+        }
+        ++g_mine_snapshot_count;
+        switch (stats->etype) {
+            case NDb::MT_INFANTRY:
+                ++infantry_count;
+                break;
+            case NDb::MT_TECHNICS:
+                ++vehicle_count;
+                break;
+            case NDb::MT_INFANTRY_AND_TECHNICS:
+                ++universal_count;
+                break;
+            case NDb::MT_CHARGE:
+                ++charge_count;
+                break;
+            case NDb::MT_LANDMINE:
+                ++land_mine_count;
+                break;
+        }
+        if (!mine->IsRegisteredInWorld()) {
+            continue;
+        }
+        ++registered_count;
+        if (mine->IsVisible(player_party)) {
+            ++currently_visible_count;
+        }
+        if (mine->IsBeingDisarmed()) {
+            ++disarmed_count;
+        }
+        const NDb::SVisObj* visual =
+                stats->pvisualObject.GetPtr();
+        if (visual == nullptr) {
+            continue;
+        }
+        CVec3 position = mine->GetCenter();
+        if (g_ai_logic != nullptr && g_ai_logic->GetHeights() != nullptr) {
+            position.z +=
+                    g_ai_logic->GetHeights()->GetVisZ(
+                            position.x,
+                            position.y);
+        }
+        Bk2PresentationEntity entity{};
+        entity.id = mine->GetUniqueId();
+        entity.player = mine->GetPlayer();
+        entity.flags =
+                BK2_PRESENTATION_ENTITY_STATIC_OBJECT |
+                BK2_PRESENTATION_ENTITY_ALIVE;
+        entity.x = AI2Vis(position.x);
+        entity.y = AI2Vis(position.y);
+        entity.z = AI2Vis(position.z);
+        entity.heading_radians =
+                static_cast<float>(mine->GetDir()) *
+                6.28318530717958647692f / 65536.0f;
+        entity.hit_points = mine->GetHitPoints();
+        entity.max_hit_points = stats->fMaxHP;
+        entity.rpg_stats_path_hash = StatsPathHash(stats);
+        entity.rpg_stats_record_id = stats->GetRecordID();
+        entity.geometry_record_id = GeometryRecordId(visual);
+        entity.visual_scale = stats->fSelectionScale;
+        entity.relation = BK2_PRESENTATION_RELATION_OWN;
+        entities->push_back(entity);
+    }
+    if (!g_mine_snapshot_logged && g_mine_snapshot_count != 0) {
+        g_mine_snapshot_logged = true;
+        PlatformRuntime::instance().log_info(
+                std::string("mine_presentation=active") +
+                "; total=" + std::to_string(g_mine_snapshot_count) +
+                "; registered=" + std::to_string(registered_count) +
+                "; currently_visible=" +
+                std::to_string(currently_visible_count) +
+                "; disarming=" + std::to_string(disarmed_count) +
+                "; infantry=" + std::to_string(infantry_count) +
+                "; vehicle=" + std::to_string(vehicle_count) +
+                "; universal=" + std::to_string(universal_count) +
+                "; charge=" + std::to_string(charge_count) +
+                "; land_mine=" + std::to_string(land_mine_count));
+    }
+}
+
 void PublishPresentationEntities() {
     std::vector<Bk2PresentationEntity> entities;
     entities.reserve(
@@ -3041,6 +3152,7 @@ void PublishPresentationEntities() {
     AppendBridgeEntities(&entities);
     AppendFenceEntities(&entities);
     AppendEntrenchmentEntities(&entities);
+    AppendMineEntities(&entities);
     bk2::presentation::PublishEntities(std::move(entities));
 }
 
@@ -3306,6 +3418,8 @@ void ResetReportState() {
     g_fence_snapshot_logged = false;
     g_entrenchment_snapshot_count = 0;
     g_entrenchment_snapshot_logged = false;
+    g_mine_snapshot_count = 0;
+    g_mine_snapshot_logged = false;
     g_mission_outcome.store(kLegacyMissionRunning);
     g_pending_mission_outcome.store(kLegacyMissionRunning);
     g_stage = "not_started";
@@ -4821,6 +4935,181 @@ void HandleLegacyInputEvent(const char* event_name) {
                     "," +
                     std::to_string(AI2Vis(end.y)));
         }
+    } else if (std::strcmp(event_name, "debug_place_mine") == 0) {
+        CAIUnit* builder =
+                CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+        if (builder == nullptr ||
+            !builder->IsAlive() ||
+            builder->GetPlayer() != theDipl.GetMyNumber()) {
+            for (CGlobalIter iter(0, ANY_PARTY);
+                 !iter.IsFinished();
+                 iter.Iterate()) {
+                CAIUnit* candidate = *iter;
+                if (candidate != nullptr &&
+                    candidate->IsAlive() &&
+                    candidate->GetPlayer() == theDipl.GetMyNumber()) {
+                    builder = candidate;
+                    break;
+                }
+            }
+        }
+        if (builder != nullptr) {
+            uint64_t before_count = 0;
+            if (SLinkObjDataAutoMagic::pLinkObjData != nullptr) {
+                for (const auto& entry :
+                     SLinkObjDataAutoMagic::pLinkObjData
+                             ->unitsID2object) {
+                    CLinkObject* link = entry.second;
+                    if (dynamic_cast<CMineStaticObject*>(
+                                link) != nullptr) {
+                        ++before_count;
+                    }
+                }
+            }
+            const CVec2 forward =
+                    GetVectorByDirection(builder->GetDir());
+            const CVec2 side(-forward.y, forward.x);
+            const CVec2 position =
+                    builder->GetCenterPlain() +
+                    forward * SConsts::TILE_SIZE * 2.0f +
+                    side * SConsts::TILE_SIZE * 2.0f;
+            CMineStaticObject* mine =
+                    theUnitCreation.CreateMine(
+                            NDb::MT_INFANTRY_AND_TECHNICS,
+                            CVec3(position, 0.0f),
+                            builder->GetPlayer());
+            if (mine != nullptr) {
+                // AddNewMine registers a friendly mine immediately; the
+                // visibility pass normally sets this bit on the next update.
+                // Set it here so this diagnostic validates presentation in
+                // the same frame as runtime construction.
+                mine->SetVisible(theDipl.GetMyParty(), true);
+                uint64_t after_count = 0;
+                if (SLinkObjDataAutoMagic::pLinkObjData != nullptr) {
+                    for (const auto& entry :
+                         SLinkObjDataAutoMagic::pLinkObjData
+                                 ->unitsID2object) {
+                        CLinkObject* link = entry.second;
+                        if (dynamic_cast<CMineStaticObject*>(
+                                    link) != nullptr) {
+                            ++after_count;
+                        }
+                    }
+                }
+                CenterSinglePlayerCamera(
+                        AI2Vis(position.x),
+                        AI2Vis(position.y));
+                PublishPresentationEntities();
+                PlatformRuntime::instance().log_info(
+                        std::string("debug_place_mine=") +
+                        std::to_string(mine->GetUniqueId()) +
+                        "; descriptor=" +
+                        mine->GetStats()->GetDBID().ToString().c_str() +
+                        "; registered=" +
+                        (mine->IsRegisteredInWorld() ? "true" : "false") +
+                        "; visible=" +
+                        (mine->IsVisible(theDipl.GetMyParty())
+                                 ? "true"
+                                 : "false") +
+                        "; mines_before=" +
+                        std::to_string(before_count) +
+                        "; mines_after=" +
+                        std::to_string(after_count) +
+                        "; position=" +
+                        std::to_string(AI2Vis(position.x)) +
+                        "," +
+                        std::to_string(AI2Vis(position.y)));
+            }
+        }
+    } else if (std::strcmp(event_name, "debug_detonate_mine") == 0) {
+        CAIUnit* observer =
+                CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+        if (observer == nullptr || !observer->IsAlive()) {
+            for (CGlobalIter iter(0, ANY_PARTY);
+                 !iter.IsFinished();
+                 iter.Iterate()) {
+                CAIUnit* candidate = *iter;
+                if (candidate != nullptr &&
+                    candidate->IsAlive() &&
+                    candidate->GetPlayer() ==
+                            theDipl.GetMyNumber()) {
+                    observer = candidate;
+                    break;
+                }
+            }
+        }
+        CMineStaticObject* target = nullptr;
+        float best_distance_squared =
+                std::numeric_limits<float>::max();
+        uint64_t before_count = 0;
+        if (observer != nullptr &&
+            SLinkObjDataAutoMagic::pLinkObjData != nullptr) {
+            for (const auto& entry :
+                 SLinkObjDataAutoMagic::pLinkObjData->unitsID2object) {
+                CLinkObject* link = entry.second;
+                CMineStaticObject* mine =
+                        dynamic_cast<CMineStaticObject*>(
+                                link);
+                if (mine == nullptr || !mine->IsAlive()) {
+                    continue;
+                }
+                ++before_count;
+                if (!mine->IsRegisteredInWorld()) {
+                    continue;
+                }
+                const float delta_x =
+                        mine->GetCenter().x -
+                        observer->GetCenter().x;
+                const float delta_y =
+                        mine->GetCenter().y -
+                        observer->GetCenter().y;
+                const float distance_squared =
+                        delta_x * delta_x + delta_y * delta_y;
+                if (distance_squared < best_distance_squared) {
+                    best_distance_squared = distance_squared;
+                    target = mine;
+                }
+            }
+        }
+        if (target != nullptr) {
+            const int target_id = target->GetUniqueId();
+            const CVec3 position = target->GetCenter();
+            const std::string descriptor =
+                    target->GetStats()->GetDBID().ToString().c_str();
+            CenterSinglePlayerCamera(
+                    AI2Vis(position.x),
+                    AI2Vis(position.y));
+            target->Detonate();
+            uint64_t after_count = 0;
+            if (SLinkObjDataAutoMagic::pLinkObjData != nullptr) {
+                for (const auto& entry :
+                     SLinkObjDataAutoMagic::pLinkObjData
+                             ->unitsID2object) {
+                    CLinkObject* link = entry.second;
+                    CMineStaticObject* mine =
+                            dynamic_cast<CMineStaticObject*>(
+                                    link);
+                    if (mine != nullptr && mine->IsAlive()) {
+                        ++after_count;
+                    }
+                }
+            }
+            PublishPresentationEntities();
+            PlatformRuntime::instance().log_info(
+                    std::string("debug_detonate_mine=") +
+                    std::to_string(target_id) +
+                    "; descriptor=" + descriptor +
+                    "; mines_before=" +
+                    std::to_string(before_count) +
+                    "; mines_after=" +
+                    std::to_string(after_count) +
+                    "; removed=" +
+                    (after_count < before_count ? "true" : "false") +
+                    "; position=" +
+                    std::to_string(AI2Vis(position.x)) +
+                    "," +
+                    std::to_string(AI2Vis(position.y)));
+        }
     } else if (std::strcmp(event_name, "debug_combat_effect") == 0 &&
                g_selected_unit_id >= 0 &&
                g_attack_target_unit_id >= 0) {
@@ -5077,6 +5366,8 @@ void ShutdownLegacyGameRuntime() {
     g_fence_snapshot_logged = false;
     g_entrenchment_snapshot_count = 0;
     g_entrenchment_snapshot_logged = false;
+    g_mine_snapshot_count = 0;
+    g_mine_snapshot_logged = false;
     g_war_fog_snapshot = AndroidWarFogSnapshot();
     g_war_fog_first_update = true;
     g_combat_effects.clear();
@@ -5177,6 +5468,7 @@ std::string LegacyGameRuntimeReport() {
            << "; bridges=" << g_bridge_snapshot_count
            << "; bridge_rpg_updates=" << g_bridge_rpg_update_count
            << "; bridge_effects=" << g_bridge_effect_count
+           << "; mines=" << g_mine_snapshot_count
            << "; war_fog=" << g_war_fog_snapshot.width
            << "x" << g_war_fog_snapshot.height
            << "; war_fog_generation="

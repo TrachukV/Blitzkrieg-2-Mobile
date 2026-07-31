@@ -991,12 +991,16 @@ focuses and destroys the nearest visible intact fence section through the
 original `CFence::Die`/`Delete` path, including the resulting left/right damage
 on connected neighbors. Keyboard `J` builds a short complete trench through
 the original `CEntrenchmentCreation`/`BuildAll` path after the static world
-mesh already exists. Keyboard `N`
+mesh already exists. Keyboard `I` places a universal mine through the original
+`CUnitCreation::CreateMine` path, and keyboard `U` detonates the closest
+registered mine through `CMineStaticObject::Detonate`, exercising its weapon,
+shell effect, and removal from the live object map. Keyboard `N`
 injects the reinforcement notification type so descriptor lookup, UTF-16
 decoding, JNI polling, and five-second expiry can be checked independently of
 scenario timing. The original `CScripts::LandReinforcementFromMap` path remains
 active in the linked AI runtime; `GER3.3` has also produced the same notification
-from a real scenario call. All twelve shortcuts are absent from release builds.
+from a real scenario call. All fourteen shortcuts are absent from release
+builds.
 
 `Data/Weapons` is required runtime DB payload. Without it, mine descriptors keep
 an unresolved `pWeapon`; the original `CMineStaticObject::Detonate` path then
@@ -1311,6 +1315,22 @@ part count from 71 to 75: two new segments plus their two terminators rendered
 after the static world already existed. The original game intentionally makes
 `CEntrenchment::TakeDamage` a no-op, so this path preserves construction and
 fog lifecycle rather than inventing destructible trenches.
+
+Mines are no longer frozen into the immutable scenery batch. The presentation
+bridge enumerates live `CMineStaticObject` instances, publishes only mines that
+the legacy world has registered for the local client, and resolves the shipped
+`SMineRPGStats::pvisualObject`. Consequently a sapper-placed mine appears after
+world-mesh creation, a hidden enemy mine does not leak before detection, and
+`CMineStaticObject::Detonate` removes the rendered object through the same
+`CExistingObject::Delete` path as the desktop game.
+
+On US1.0 a device check created universal mine 8216 through
+`CUnitCreation::CreateMine`; the live mine count changed from zero to one with
+`registered=true` and `visible=true`, while static and dynamic geometry
+fallback counts remained zero. Detonation changed the live count from one back
+to zero and rendered the shipped `AntitankMineExplosion_ComplexEffect`
+descriptor emitters and light; the same validation run also presented a
+simulation-triggered `AntipersMineExplosion_ComplexEffect`.
 
 The first model-shadow layer projects every converted Granny vertex along one
 sun direction, computes a convex ground hull, and submits that hull once through

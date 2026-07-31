@@ -165,6 +165,21 @@ geometry fallback types. A device-only construction check invoked the original
 the part count from 71 to 75: two segment models and two terminators appeared
 without rebuilding scenery. `CEntrenchment::TakeDamage` remains the intentional
 2005 no-op from the desktop game; Android does not invent a destruction state.
+
+Mines also leave the immutable scenery mesh and are published from live
+`CMineStaticObject` state. Registration preserves the original discovery
+boundary, while removal from the legacy link-object map makes detonation remove
+the rendered mine without a presentation-only lifetime. Mine placement still
+uses `CUnitCreation::CreateMine`, and detonation still creates the original
+`CInvisShell`/`CBurstExpl` from the mine weapon descriptor.
+
+The US1.0 runtime check placed universal mine 8216 after mission startup,
+changing the live count from zero to one with the original visual and no
+geometry fallback. `CMineStaticObject::Detonate` then changed the count back to
+zero and forwarded the shipped antipersonnel and antitank mine explosion
+descriptors observed during the validation run to the Android particle/light
+renderer; the direct debug detonation selected the antitank descriptor.
+
 The compiled animated-light intensity track is similarly represented by a
 short flash envelope rather than a full dynamic-light shader.
 The Android build packages the required 4.2 MiB original HUD subset and the TGA

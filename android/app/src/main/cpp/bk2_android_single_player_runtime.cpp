@@ -5876,12 +5876,14 @@ void AppendMapObjects(
         }
         // These gameplay objects are published from their live AI state.
         // Buildings, bridges, and fences change damage models; entrenchment
-        // parts can be constructed and fog-revealed after this immutable mesh
-        // is built. Terrain, flora, roads, and minor scenery stay batched.
+        // parts and mines can be constructed, removed, and fog-revealed after
+        // this immutable mesh is built. Terrain, flora, roads, and minor
+        // scenery stay batched.
         if (type_id == NDb::SBuildingRPGStats::typeID ||
             type_id == NDb::SBridgeRPGStats::typeID ||
             type_id == NDb::SFenceRPGStats::typeID ||
-            type_id == NDb::SEntrenchmentRPGStats::typeID) {
+            type_id == NDb::SEntrenchmentRPGStats::typeID ||
+            type_id == NDb::SMineRPGStats::typeID) {
             continue;
         }
         const bool visible_gameplay_object =
