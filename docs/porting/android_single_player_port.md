@@ -150,6 +150,21 @@ sections at mission start. Destroying one field-fence section through the
 original `CFence::Die`/`Delete` path changed its frame from 0 to 4 and changed
 both connected neighbors to partial-damage frames. The rendered result retained
 zero static and dynamic geometry fallback types.
+Entrenchment parts are now live presentation entities too. Each
+`CEntrenchmentPart` retains its unique legacy id, current segment frame,
+terrain placement, heading, and `ACTION_NOTIFY_NEW_ST_OBJ` suspension state.
+The renderer hashes the exact segment `SVisObj`; both the frame-index binding
+used by map loading and the exact-path binding used by live construction remain
+in `geometry_index.tsv`. This lets trenches built after world-mesh creation
+appear without duplicating the static copy and keeps unrevealed enemy/neutral
+construction hidden.
+
+US1.0 exposes 71 unique live trench parts, 25 visible at startup, with zero
+geometry fallback types. A device-only construction check invoked the original
+`CEntrenchmentCreation::PreCreate` and `BuildAll` path after startup and raised
+the part count from 71 to 75: two segment models and two terminators appeared
+without rebuilding scenery. `CEntrenchment::TakeDamage` remains the intentional
+2005 no-op from the desktop game; Android does not invent a destruction state.
 The compiled animated-light intensity track is similarly represented by a
 short flash envelope rather than a full dynamic-light shader.
 The Android build packages the required 4.2 MiB original HUD subset and the TGA

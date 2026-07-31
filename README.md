@@ -85,7 +85,10 @@ for content without a usable descriptor. Destructible buildings, bridge spans,
 and connected fence sections are published from their live legacy AI objects
 instead of immutable scenery. Their shipped damaged/destroyed models follow
 the original HP or frame state; breaking a fence also switches both connected
-neighbors to the original left/right damaged visuals. Static objects and live
+neighbors to the original left/right damaged visuals. Trench segments use the
+same live path, so engineering construction created after mission startup now
+appears with the original line, fireplace, arc, and terminator models while
+respecting fog-delayed appearance. Static objects and live
 units now cast
 translucent projected silhouettes
 derived from their actual converted Granny vertices; animated infantry shadows

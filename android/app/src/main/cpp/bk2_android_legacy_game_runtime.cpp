@@ -13,6 +13,8 @@
 #include "AILogic/B2AI.h"
 #include "AILogic/Bridge.h"
 #include "AILogic/CreateAI.h"
+#include "AILogic/Entrenchment.h"
+#include "AILogic/EntrenchmentCreation.h"
 #include "AILogic/Fence.h"
 #include "AILogic/GlobeUpdater.h"
 #include "AILogic/GroupLogic.h"
@@ -207,6 +209,8 @@ std::unordered_map<int32_t, bool> g_bridge_alive_state;
 std::unordered_set<int32_t> g_bridge_instant_death;
 uint64_t g_fence_snapshot_count = 0;
 bool g_fence_snapshot_logged = false;
+uint64_t g_entrenchment_snapshot_count = 0;
+bool g_entrenchment_snapshot_logged = false;
 AndroidWarFogSnapshot g_war_fog_snapshot;
 bool g_war_fog_first_update = true;
 enum LegacyMissionOutcomeValue {
@@ -2761,6 +2765,117 @@ void AppendFenceEntities(std::vector<Bk2PresentationEntity>* entities) {
     }
 }
 
+void AppendEntrenchmentEntities(
+        std::vector<Bk2PresentationEntity>* entities) {
+    g_entrenchment_snapshot_count = 0;
+    if (entities == nullptr ||
+        SLinkObjDataAutoMagic::pLinkObjData == nullptr) {
+        return;
+    }
+    const BYTE player_party = theDipl.GetMyParty();
+    uint64_t created_count = 0;
+    uint64_t visible_count = 0;
+    uint64_t line_count = 0;
+    uint64_t fireplace_count = 0;
+    uint64_t terminator_count = 0;
+    uint64_t arc_count = 0;
+    for (const auto& entry :
+         SLinkObjDataAutoMagic::pLinkObjData->unitsID2object) {
+        CLinkObject* link = entry.second;
+        CEntrenchmentPart* part =
+                dynamic_cast<CEntrenchmentPart*>(link);
+        const NDb::SEntrenchmentRPGStats* stats =
+                part == nullptr
+                ? nullptr
+                : dynamic_cast<const NDb::SEntrenchmentRPGStats*>(
+                          part->GetStats());
+        if (part == nullptr || stats == nullptr) {
+            continue;
+        }
+        ++g_entrenchment_snapshot_count;
+        // Enemy and neutral construction keeps ACTION_NOTIFY_NEW_ST_OBJ
+        // suspended until CEntrenchmentPart::SetVisible publishes the part.
+        if (part->ShouldSuspendAction(ACTION_NOTIFY_NEW_ST_OBJ)) {
+            continue;
+        }
+        ++created_count;
+        if (!part->IsVisible(player_party)) {
+            continue;
+        }
+        const NDb::SVisObj* visual =
+                part->GetSegmStats().pVisObj.GetPtr();
+        if (visual == nullptr) {
+            continue;
+        }
+        ++visible_count;
+        switch (part->GetType()) {
+            case NDb::EST_LINE:
+                ++line_count;
+                break;
+            case NDb::EST_FIREPLACE:
+                ++fireplace_count;
+                break;
+            case NDb::EST_TERMINATOR:
+                ++terminator_count;
+                break;
+            case NDb::EST_ARC:
+                ++arc_count;
+                break;
+        }
+        CVec3 position = part->GetCenter();
+        if (g_ai_logic != nullptr && g_ai_logic->GetHeights() != nullptr) {
+            position.z +=
+                    g_ai_logic->GetHeights()->GetVisZ(
+                            position.x,
+                            position.y);
+        }
+        // CMOEntrenchmentPart raises the placement by five AI units before
+        // applying the terrain-derived transform.
+        position.z += 5.0f;
+        const int player = part->GetPlayer();
+        Bk2PresentationEntity entity{};
+        entity.id = part->GetUniqueId();
+        entity.player = player;
+        entity.flags =
+                BK2_PRESENTATION_ENTITY_STATIC_OBJECT |
+                BK2_PRESENTATION_ENTITY_ALIVE;
+        entity.x = AI2Vis(position.x);
+        entity.y = AI2Vis(position.y);
+        entity.z = AI2Vis(position.z);
+        entity.heading_radians =
+                static_cast<float>(part->GetDir()) *
+                6.28318530717958647692f / 65536.0f;
+        entity.hit_points = part->GetHitPoints();
+        entity.max_hit_points = stats->fMaxHP;
+        entity.rpg_stats_path_hash = VisualPathHash(visual);
+        entity.rpg_stats_record_id = visual->GetRecordID();
+        entity.geometry_record_id = GeometryRecordId(visual);
+        entity.visual_scale = stats->fSelectionScale;
+        entity.relation =
+                player == theDipl.GetMyNumber()
+                ? BK2_PRESENTATION_RELATION_OWN
+                : (theDipl.GetNParty(player) == player_party
+                           ? BK2_PRESENTATION_RELATION_ALLY
+                           : BK2_PRESENTATION_RELATION_ENEMY);
+        entities->push_back(entity);
+    }
+    if (!g_entrenchment_snapshot_logged &&
+        g_entrenchment_snapshot_count != 0 &&
+        created_count != 0) {
+        g_entrenchment_snapshot_logged = true;
+        PlatformRuntime::instance().log_info(
+                std::string("entrenchment_presentation=active") +
+                "; total=" +
+                std::to_string(g_entrenchment_snapshot_count) +
+                "; created=" + std::to_string(created_count) +
+                "; visible=" + std::to_string(visible_count) +
+                "; line=" + std::to_string(line_count) +
+                "; fireplace=" + std::to_string(fireplace_count) +
+                "; terminator=" + std::to_string(terminator_count) +
+                "; arc=" + std::to_string(arc_count));
+    }
+}
+
 void PublishPresentationEntities() {
     std::vector<Bk2PresentationEntity> entities;
     entities.reserve(
@@ -2925,6 +3040,7 @@ void PublishPresentationEntities() {
     AppendStaticBuildingEntities(&entities);
     AppendBridgeEntities(&entities);
     AppendFenceEntities(&entities);
+    AppendEntrenchmentEntities(&entities);
     bk2::presentation::PublishEntities(std::move(entities));
 }
 
@@ -3188,6 +3304,8 @@ void ResetReportState() {
     g_bridge_instant_death.clear();
     g_fence_snapshot_count = 0;
     g_fence_snapshot_logged = false;
+    g_entrenchment_snapshot_count = 0;
+    g_entrenchment_snapshot_logged = false;
     g_mission_outcome.store(kLegacyMissionRunning);
     g_pending_mission_outcome.store(kLegacyMissionRunning);
     g_stage = "not_started";
@@ -4610,6 +4728,99 @@ void HandleLegacyInputEvent(const char* event_name) {
                     "," +
                     std::to_string(AI2Vis(target->GetCenter().y)));
         }
+    } else if (std::strcmp(
+                       event_name,
+                       "debug_build_entrenchment") == 0) {
+        CAIUnit* builder =
+                CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+        if (builder == nullptr ||
+            !builder->IsAlive() ||
+            builder->GetPlayer() != theDipl.GetMyNumber()) {
+            for (CGlobalIter iter(0, ANY_PARTY);
+                 !iter.IsFinished();
+                 iter.Iterate()) {
+                CAIUnit* candidate = *iter;
+                if (candidate != nullptr &&
+                    candidate->IsAlive() &&
+                    candidate->GetPlayer() == theDipl.GetMyNumber()) {
+                    builder = candidate;
+                    break;
+                }
+            }
+        }
+        if (builder != nullptr) {
+            uint64_t before_count = 0;
+            if (SLinkObjDataAutoMagic::pLinkObjData != nullptr) {
+                for (const auto& entry :
+                     SLinkObjDataAutoMagic::pLinkObjData
+                             ->unitsID2object) {
+                    CLinkObject* link = entry.second;
+                    if (dynamic_cast<CEntrenchmentPart*>(link) !=
+                        nullptr) {
+                        ++before_count;
+                    }
+                }
+            }
+            const CVec2 forward =
+                    GetVectorByDirection(builder->GetDir());
+            const CVec2 side(-forward.y, forward.x);
+            const CVec2 origin = builder->GetCenterPlain();
+            const CVec2 start =
+                    origin + side * SConsts::TILE_SIZE * 3.0f;
+            const CVec2 end =
+                    start + forward * SConsts::TILE_SIZE * 8.0f;
+            CObj<CEntrenchmentCreation> creation =
+                    new CEntrenchmentCreation(
+                            builder->GetPlayer(),
+                            false);
+            const bool prepared =
+                    creation->PreCreate(start, end, false);
+            int entrenchment_id = -1;
+            int requested_part_count = 0;
+            if (prepared) {
+                requested_part_count = creation->GetMaxIndex();
+                if (requested_part_count > 0) {
+                    creation->BuildAll(0, requested_part_count);
+                    entrenchment_id = creation->GetEntrenchmentID();
+                }
+            }
+            uint64_t after_count = 0;
+            if (SLinkObjDataAutoMagic::pLinkObjData != nullptr) {
+                for (const auto& entry :
+                     SLinkObjDataAutoMagic::pLinkObjData
+                             ->unitsID2object) {
+                    CLinkObject* link = entry.second;
+                    if (dynamic_cast<CEntrenchmentPart*>(link) !=
+                        nullptr) {
+                        ++after_count;
+                    }
+                }
+            }
+            if (entrenchment_id >= 0) {
+                CenterSinglePlayerCamera(
+                        AI2Vis((start.x + end.x) * 0.5f),
+                        AI2Vis((start.y + end.y) * 0.5f));
+            }
+            PlatformRuntime::instance().log_info(
+                    std::string("debug_build_entrenchment=") +
+                    std::to_string(entrenchment_id) +
+                    "; prepared=" +
+                    (prepared ? "true" : "false") +
+                    "; requested_parts=" +
+                    std::to_string(requested_part_count) +
+                    "; parts_before=" +
+                    std::to_string(before_count) +
+                    "; parts_after=" +
+                    std::to_string(after_count) +
+                    "; start=" +
+                    std::to_string(AI2Vis(start.x)) +
+                    "," +
+                    std::to_string(AI2Vis(start.y)) +
+                    "; end=" +
+                    std::to_string(AI2Vis(end.x)) +
+                    "," +
+                    std::to_string(AI2Vis(end.y)));
+        }
     } else if (std::strcmp(event_name, "debug_combat_effect") == 0 &&
                g_selected_unit_id >= 0 &&
                g_attack_target_unit_id >= 0) {
@@ -4864,6 +5075,8 @@ void ShutdownLegacyGameRuntime() {
     g_bridge_instant_death.clear();
     g_fence_snapshot_count = 0;
     g_fence_snapshot_logged = false;
+    g_entrenchment_snapshot_count = 0;
+    g_entrenchment_snapshot_logged = false;
     g_war_fog_snapshot = AndroidWarFogSnapshot();
     g_war_fog_first_update = true;
     g_combat_effects.clear();

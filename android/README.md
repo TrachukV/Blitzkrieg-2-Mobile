@@ -989,12 +989,14 @@ smoke-point effect, fatality sound, and final ruin to be checked. Keyboard `G`
 focuses and destroys the nearest visible live bridge span. Keyboard `H`
 focuses and destroys the nearest visible intact fence section through the
 original `CFence::Die`/`Delete` path, including the resulting left/right damage
-on connected neighbors. Keyboard `N`
+on connected neighbors. Keyboard `J` builds a short complete trench through
+the original `CEntrenchmentCreation`/`BuildAll` path after the static world
+mesh already exists. Keyboard `N`
 injects the reinforcement notification type so descriptor lookup, UTF-16
 decoding, JNI polling, and five-second expiry can be checked independently of
 scenario timing. The original `CScripts::LandReinforcementFromMap` path remains
 active in the linked AI runtime; `GER3.3` has also produced the same notification
-from a real scenario call. All eleven shortcuts are absent from release builds.
+from a real scenario call. All twelve shortcuts are absent from release builds.
 
 `Data/Weapons` is required runtime DB payload. Without it, mine descriptors keep
 an unresolved `pWeapon`; the original `CMineStaticObject::Detonate` path then
@@ -1158,8 +1160,9 @@ original segment meshes and materials. Fence frames follow the original
 `GetSegmentsByFrameIndex` order across center, both damaged, and destroyed
 segment lists. Fence sections now use the live presentation path described
 below instead of remaining in the immutable presentation mesh.
-On GB3.1 this reduces converted-geometry fallbacks from 1,263 to 377, and on
-GER1.0 from 905 to 95. Bridge spans follow `CMOBridge::GetElement`: frame zero
+Before the live entrenchment migration, frame-specific segment bindings
+replaced all 142 static US1.0 trench proxies with original geometry. Bridge
+spans follow `CMOBridge::GetElement`: frame zero
 uses the end model and all other frames use the center model. The open content
 tree omits each bridge's `center_visobj.xdb`, so the offline index recovers its
 shipped seasonal `summer_center_model.xdb` directly. This restores all four
@@ -1289,6 +1292,25 @@ starting camera. The debug destruction path changed one field-fence frame from
 0 to 4 through `CFence::Die` and changed both connected neighbors to their
 partial-damage frames. The resulting broken center and damaged ends rendered
 with zero static or dynamic geometry fallback types.
+
+Entrenchment parts now leave the immutable scenery batch as well. The AI
+runtime publishes each created `CEntrenchmentPart` under its unique id and
+current segment frame, using the exact `SEntrenchmentRPGStats::segments`
+`SVisObj`. `ACTION_NOTIFY_NEW_ST_OBJ` suspension and party visibility prevent
+enemy or neutral construction from appearing before the original simulation
+reveals it. New player construction enters the link-object map one built part
+at a time, so it becomes visible without rebuilding the cached scenery mesh.
+The renderer retains the desktop five-AI-unit placement lift and terrain
+height.
+
+US1.0 contains 71 unique live trench parts; 25 are visible from the starting
+party view (18 lines, four terminators, and three arcs), all with zero geometry
+fallback types. A post-start debug construction used the original
+`CEntrenchmentCreation::PreCreate` and `BuildAll` path and increased the live
+part count from 71 to 75: two new segments plus their two terminators rendered
+after the static world already existed. The original game intentionally makes
+`CEntrenchment::TakeDamage` a no-op, so this path preserves construction and
+fog lifecycle rather than inventing destructible trenches.
 
 The first model-shadow layer projects every converted Granny vertex along one
 sun direction, computes a convex ground hull, and submits that hull once through

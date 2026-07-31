@@ -5874,14 +5874,14 @@ void AppendMapObjects(
         if (dynamic_unit && !include_dynamic_units) {
             continue;
         }
-        // Buildings, bridge spans, and fences are destructible AI objects.
-        // Baking them into this immutable mesh made every damage-stage and
-        // destroyed-model update invisible. The legacy bridge publishes them
-        // after AI startup; terrain, flora, roads, and minor scenery stay
-        // batched here.
+        // These gameplay objects are published from their live AI state.
+        // Buildings, bridges, and fences change damage models; entrenchment
+        // parts can be constructed and fog-revealed after this immutable mesh
+        // is built. Terrain, flora, roads, and minor scenery stay batched.
         if (type_id == NDb::SBuildingRPGStats::typeID ||
             type_id == NDb::SBridgeRPGStats::typeID ||
-            type_id == NDb::SFenceRPGStats::typeID) {
+            type_id == NDb::SFenceRPGStats::typeID ||
+            type_id == NDb::SEntrenchmentRPGStats::typeID) {
             continue;
         }
         const bool visible_gameplay_object =
