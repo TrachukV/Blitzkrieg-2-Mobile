@@ -539,8 +539,10 @@ collection remain follow-up work.
   kill/price-kill matrices, local mission kill/loss statistics, pending player
   XP, leader XP, leader loss debt, score, and campaign win statistics. The real
   simulation/`MapObj` kill feed is not wired into the bridge yet; non-leader
-  reinforcement XP-level mutations, the munchkin medal check, and UI statistics
-  screen are still not linked.
+  reinforcement XP-level mutations, the munchkin medal check, and the
+  result-screen reward/rank popup graph are still not linked. The shipped
+  `SingleStatistics2` Action Report screen is linked and populated from a real
+  tracker snapshot.
   `NativeBridge.runMissionProgressionProbe()` now performs a temporary real
   campaign mission progression smoke test with objective/reward preference,
   applies objective XP, statistics, a reinforcement call, leader assignment,
@@ -640,10 +642,15 @@ converted static/skinned meshes, action animations, descriptor particles and
 lights, fog of war, original HUD textures, and dynamic water are all proven on
 ARM64. The remaining renderer work is full GPU/runtime skinning, transition
 clips, effect-attached Granny geometry, terrain-conforming shadow maps, more
-complete legacy shader translation, and post effects. UI work still includes
-the full briefing, chapter-map, statistics, and progression layouts, plus
-replacement of temporary immediate-mode stubs with proper batching and
-render-target behavior.
+complete legacy shader translation, and post effects. The original
+`SingleStatistics2` Action Report is now live: it renders the shipped layout,
+participating-player rows and flags, mission/campaign time, rank progress, and
+outcome-specific navigation from the real mission statistics snapshot. ARM64
+validation covered victory, Surrender defeat, same-mission Restart, and Next to
+the shipped chapter map. UI work still includes the complete briefing flow,
+the full interactive chapter-map mission graph, reward/rank/medal result
+popups, and replacement of temporary immediate-mode stubs with proper batching
+and render-target behavior.
 
 ## Current Content Evidence
 

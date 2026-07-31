@@ -172,8 +172,9 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   killer/victim players, reinforcement types, infantry classification, and
   experience price for campaign matrices, player XP, and leader progress.
   Reinforcement XP-level mutations for non-leader units, the munchkin medal
-  check, UI statistics screen, and the final legacy save object graph are still
-  not linked.
+  check, the result-screen reward/rank popup graph, and the final legacy save
+  object graph are still not linked. The shipped `SingleStatistics2` Action
+  Report screen itself is now live and populated from the tracker snapshot.
   The bridge can now continue the current campaign/chapter state into another
   enabled mission with `StartCurrentCampaignMissionState()` or
   `StartFirstEnabledCampaignMissionState()` without resetting player XP, won
@@ -1133,11 +1134,18 @@ longer expose the old teal diagnostic background.
 
 Original Lua `Win()`/`Loose()` calls now cross the Android input bridge.
 They freeze the finished simulation, commit the corresponding campaign
-win/cancel state, and show a centered victory/defeat panel with a return to the
-mission selector. Previously those `local_win`/`local_loose` events were
-discarded because the old desktop `WorldClient` was not linked. The in-game
-`Surrender` action uses the same defeat path; it has been exercised on the
-ARM64 emulator through the result panel and back to the campaign selector.
+win/cancel state, and open the shipped
+`UI/Game/Menu/SingleStatictics2/SingleStatistics2_WindowScreen.xdb` Action
+Report instead of the temporary Android victory/defeat overlay. The screen
+shows the original success/failure header, real participating-player
+statistics and party flags, mission/campaign time, rank progress, and the
+original Restart, Exit to Chapter, or Next navigation for the outcome.
+Previously those `local_win`/`local_loose` events were discarded because the
+old desktop `WorldClient` was not linked. The in-game `Surrender` action uses
+the same defeat path. On the ARM64 emulator, victory was verified with three
+player rows and 9-second mission/campaign time; defeat was verified at 25
+seconds, Restart relaunched the same mission and restored the HUD, and Next
+opened the shipped USA Chapter 1 map.
 Successful missions now also persist `android_autosave.bk2checkpoint`. The
 selector exposes **Continue campaign** only when that checkpoint exists; it
 restores the campaign state, advances a completed chapter when necessary, and
@@ -1379,8 +1387,10 @@ Multi-mesh Granny models preserve all of their model mesh bindings;
 global `InitialPlacement` is intentionally not reapplied because shipped
 infantry geometry already contains the correct root placement. Standing-to-prone
 and prone-to-standing transition clips, GPU/runtime skinning, original
-effect-attached Granny geometry, complete briefing HUD behavior, and the original
-chapter-map/statistics/progression UI remain unfinished.
+effect-attached Granny geometry, complete briefing HUD behavior, the full
+interactive chapter-map mission graph, and result reward/rank/medal popups
+remain unfinished. The core Action Report and its chapter-map navigation route
+are linked.
 
 The video transcode manifest now writes Android-canonical runtime paths. A Bink
 ref such as `Movies\Nival.bik` maps to `DataAndroid/Movies/Nival.mp4`, not to a

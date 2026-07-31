@@ -45,6 +45,9 @@ public final class Blitzkrieg2Activity extends GameActivity {
     private TextView missionStatus;
     private TextView pauseIndicator;
     private OriginalMissionHudView originalHud;
+    private FrameLayout missionHudRoot;
+    private int missionHudHeightPixels;
+    private boolean missionStatisticsVisible;
     private boolean menuMode;
     private final Handler menuHandler = new Handler(Looper.getMainLooper());
     private final Runnable menuMissionWatch = new Runnable() {
@@ -59,8 +62,9 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 return;
             }
             menuMode = false;
+            missionHudRoot = createHud();
             addContentView(
-                    createHud(),
+                    missionHudRoot,
                     new ViewGroup.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT));
@@ -122,11 +126,13 @@ public final class Blitzkrieg2Activity extends GameActivity {
             syncPauseUi();
             String outcome = NativeBridge.getMissionOutcome();
             if ("won".equals(outcome)) {
-                showOutcome("VICTORY", 0xffd9c46b);
+                showMissionStatistics();
             } else if ("lost".equals(outcome)) {
-                showOutcome("DEFEAT", 0xffd87862);
+                showMissionStatistics();
             } else if ("progression_error".equals(outcome)) {
-                showOutcome("MISSION ENDED", 0xffd87862);
+                showMissionStatistics();
+            } else if ("running".equals(outcome)) {
+                hideMissionStatistics();
             }
             outcomeHandler.postDelayed(this, 500L);
         }
@@ -157,8 +163,9 @@ public final class Blitzkrieg2Activity extends GameActivity {
             menuHandler.postDelayed(menuMissionWatch, 500);
             return;
         }
+        missionHudRoot = createHud();
         addContentView(
-                createHud(),
+                missionHudRoot,
                 new ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT));
@@ -189,7 +196,8 @@ public final class Blitzkrieg2Activity extends GameActivity {
 
         File dataRoot = new File(getFilesDir(), "DataAndroid");
         hudDataRoot = dataRoot;
-        int hudHeight = dp(112);
+        missionHudHeightPixels = dp(112);
+        int hudHeight = missionHudHeightPixels;
         NativeBridge.setMissionHudHeightPixels(hudHeight);
         FrameLayout hud = new FrameLayout(this);
         originalHud = new OriginalMissionHudView(this, dataRoot);
@@ -324,7 +332,11 @@ public final class Blitzkrieg2Activity extends GameActivity {
         forfeit.setAllCaps(false);
         forfeit.setText("Surrender");
         forfeit.setTextColor(Color.WHITE);
-        forfeit.setOnClickListener(view -> NativeBridge.forfeitMission());
+        forfeit.setOnClickListener(view -> {
+            NativeBridge.setMissionPaused(false);
+            missionMenu.setVisibility(View.GONE);
+            NativeBridge.forfeitMission();
+        });
         missionMenu.addView(
                 forfeit,
                 new LinearLayout.LayoutParams(dp(150), dp(44)));
@@ -723,13 +735,38 @@ public final class Blitzkrieg2Activity extends GameActivity {
         return button;
     }
 
-    private void showOutcome(String title, int color) {
-        if (outcomePanel == null || outcomeTitle == null) {
+    private void showMissionStatistics() {
+        if (missionStatisticsVisible) {
             return;
         }
-        outcomeTitle.setText(title);
-        outcomeTitle.setTextColor(color);
-        outcomePanel.setVisibility(View.VISIBLE);
+        missionStatisticsVisible = true;
+        if (outcomePanel != null) {
+            outcomePanel.setVisibility(View.GONE);
+        }
+        if (missionHudRoot != null) {
+            missionHudRoot.setVisibility(View.GONE);
+        }
+        NativeBridge.setMissionHudHeightPixels(0);
+    }
+
+    private void hideMissionStatistics() {
+        if (!missionStatisticsVisible) {
+            return;
+        }
+        missionStatisticsVisible = false;
+        if (outcomePanel != null) {
+            outcomePanel.setVisibility(View.GONE);
+        }
+        if (missionMenu != null) {
+            missionMenu.setVisibility(View.GONE);
+        }
+        if (pauseIndicator != null) {
+            pauseIndicator.setVisibility(View.GONE);
+        }
+        if (missionHudRoot != null) {
+            missionHudRoot.setVisibility(View.VISIBLE);
+        }
+        NativeBridge.setMissionHudHeightPixels(missionHudHeightPixels);
     }
 
     private String missionLabel() {

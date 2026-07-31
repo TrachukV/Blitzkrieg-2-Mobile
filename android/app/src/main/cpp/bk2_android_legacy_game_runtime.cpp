@@ -3997,6 +3997,15 @@ void TickLegacyGameRuntime(uint32_t elapsed_millis) {
     }
     g_timer_millis += elapsed_millis;
     g_game_timer->Update(g_timer_millis);
+    // InterfaceMissionInternal owns this update in the desktop client. That
+    // UI controller is not part of the headless Android simulation, so keep
+    // the original scenario statistic current here instead.
+    if (g_scenario_tracker != nullptr) {
+        g_scenario_tracker->SetStatistics(
+                g_scenario_tracker->GetLocalPlayer(),
+                IScenarioTracker::ESK_TIME,
+                static_cast<int>(g_timer_millis / 1000));
+    }
     bool advanced = false;
     while (g_game_timer->NextSegment()) {
         g_ai_logic->Segment();
@@ -5636,6 +5645,131 @@ void HandleLegacyInputEvent(const char* event_name) {
 
 const char* LegacyMissionOutcome() {
     return MissionOutcomeName(g_mission_outcome.load());
+}
+
+LegacyMissionStatisticsSnapshot CopyLegacyMissionStatisticsSnapshot() {
+    LegacyMissionStatisticsSnapshot snapshot;
+    if (g_scenario_tracker == nullptr) {
+        return snapshot;
+    }
+    const NDb::SMapInfo* mission =
+            g_scenario_tracker->GetLastMission();
+    if (mission == nullptr) {
+        mission = g_scenario_tracker->GetCurrentMission();
+    }
+    if (mission == nullptr) {
+        return snapshot;
+    }
+
+    snapshot.available = true;
+    snapshot.won =
+            g_mission_outcome.load() == kLegacyMissionWon;
+    snapshot.custom = g_scenario_tracker->IsCustomMission();
+    const MissionRuntimeState mission_state = GetMissionRuntimeState();
+    snapshot.campaign_index = mission_state.campaign_index;
+    snapshot.chapter_index = mission_state.chapter_index;
+    const int local_player = g_scenario_tracker->GetLocalPlayer();
+    snapshot.mission_time_seconds =
+            g_scenario_tracker->GetStatistics(
+                    local_player,
+                    IScenarioTracker::ESK_TIME);
+    snapshot.campaign_time_seconds =
+            g_scenario_tracker->GetStatistics(
+                    local_player,
+                    IScenarioTracker::ESK_CAMPAIGN_TIME);
+    snapshot.experience_earned =
+            g_scenario_tracker->GetStatistics(
+                    local_player,
+                    IScenarioTracker::ESK_EXP_EARNED);
+    snapshot.campaign_experience_current =
+            g_scenario_tracker->GetStatistics(
+                    local_player,
+                    IScenarioTracker::ESK_CAMPAIGN_EXP_CURRENT);
+    snapshot.campaign_experience_next_level =
+            g_scenario_tracker->GetStatistics(
+                    local_player,
+                    IScenarioTracker::ESK_CAMPAIGN_EXP_NEXT_LEVEL);
+    const NDb::SCampaign* campaign =
+            g_scenario_tracker->GetCurrentCampaign();
+    const int rank_index =
+            g_scenario_tracker->GetPlayerRankIndex();
+    if (campaign != nullptr && !campaign->rankExperiences.empty()) {
+        const int clamped_rank =
+                std::max(0, std::min(
+                        rank_index,
+                        static_cast<int>(
+                                campaign->rankExperiences.size()) - 1));
+        const int rank_start =
+                static_cast<int>(
+                        campaign->rankExperiences[clamped_rank].fExperience);
+        if (snapshot.campaign_experience_next_level <= 0 &&
+            clamped_rank + 1 <
+                    static_cast<int>(
+                            campaign->rankExperiences.size())) {
+            snapshot.campaign_experience_next_level =
+                    static_cast<int>(
+                            campaign->rankExperiences[clamped_rank + 1]
+                                    .fExperience) -
+                    rank_start;
+        }
+        snapshot.campaign_experience_absolute =
+                rank_start +
+                snapshot.campaign_experience_current;
+        snapshot.campaign_experience_max =
+                static_cast<int>(
+                        campaign->rankExperiences.back().fExperience);
+    }
+
+    const std::string profile_name =
+            NStr::ToMBCS(
+                    NGlobal::GetVar(
+                            string("profile_name"),
+                            string("Player")))
+                    .c_str();
+    constexpr size_t kStatisticsPlayerRows = 3;
+    for (size_t index = 0;
+         index < mission->players.size() &&
+         snapshot.players.size() < kStatisticsPlayerRows;
+         ++index) {
+        const NDb::SMapPlayerInfo& player =
+                mission->players[index];
+        // The original statistics screen stops at the first neutral side.
+        if (player.nDiplomacySide == 2) {
+            break;
+        }
+        LegacyMissionStatisticsPlayer row;
+        if (static_cast<int>(index) == local_player) {
+            row.name =
+                    profile_name.empty() ? "Player" : profile_name;
+        } else {
+            row.name =
+                    std::string("Player ") +
+                    std::to_string(index + 1);
+            row.name_ref =
+                    player.szLocalizedPlayerNameFileRef.c_str();
+        }
+        const NDb::SPartyDependentInfo* party =
+                g_scenario_tracker->GetPlayerParty(
+                        static_cast<int>(index));
+        if (party != nullptr && party->pStatisticsIcon) {
+            row.statistics_icon_ref =
+                    party->pStatisticsIcon->GetDBID().ToString().c_str();
+        }
+        row.units_lost =
+                g_scenario_tracker->GetStatistics(
+                        static_cast<int>(index),
+                        IScenarioTracker::ESK_UNITS_LOST);
+        row.units_killed =
+                g_scenario_tracker->GetStatistics(
+                        static_cast<int>(index),
+                        IScenarioTracker::ESK_UNITS_KILLED);
+        row.reinforcements_called =
+                g_scenario_tracker->GetStatistics(
+                        static_cast<int>(index),
+                        IScenarioTracker::ESK_REINFORCEMENTS_CALLED);
+        snapshot.players.push_back(std::move(row));
+    }
+    return snapshot;
 }
 
 std::vector<AndroidCombatEffect> CopyActiveAndroidCombatEffects() {

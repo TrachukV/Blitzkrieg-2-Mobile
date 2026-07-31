@@ -93,6 +93,31 @@ struct AndroidDestructionEffect {
     uint32_t lifetime_millis = 0;
 };
 
+struct LegacyMissionStatisticsPlayer {
+    std::string name;
+    std::string name_ref;
+    std::string statistics_icon_ref;
+    int units_lost = 0;
+    int units_killed = 0;
+    int reinforcements_called = 0;
+};
+
+struct LegacyMissionStatisticsSnapshot {
+    bool available = false;
+    bool won = false;
+    bool custom = false;
+    int campaign_index = -1;
+    int chapter_index = -1;
+    int mission_time_seconds = 0;
+    int campaign_time_seconds = 0;
+    int experience_earned = 0;
+    int campaign_experience_current = 0;
+    int campaign_experience_next_level = 0;
+    int campaign_experience_absolute = 0;
+    int campaign_experience_max = 0;
+    std::vector<LegacyMissionStatisticsPlayer> players;
+};
+
 bool InitializeLegacyGameRuntime(
         const NDb::SMapInfo* map,
         const STerrainInfo& terrain_info,
@@ -139,6 +164,7 @@ std::string SelectedLegacyUnitHudStatus();
 std::string SelectedLegacyUnitHudSnapshot();
 void HandleLegacyInputEvent(const char* event_name);
 const char* LegacyMissionOutcome();
+LegacyMissionStatisticsSnapshot CopyLegacyMissionStatisticsSnapshot();
 std::vector<AndroidCombatEffect> CopyActiveAndroidCombatEffects();
 std::vector<AndroidSceneEffect> CopyActiveAndroidSceneEffects();
 std::vector<AndroidDestructionEffect> CopyActiveAndroidDestructionEffects();

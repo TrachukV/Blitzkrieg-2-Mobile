@@ -10,6 +10,7 @@ namespace bk2::android {
 // 1024x768 virtual screen space that the shipped descriptors are authored in.
 struct MenuWindowNode {
     std::string name;
+    std::string path;
     std::string type;
     float x = 0.0f;
     float y = 0.0f;
@@ -38,6 +39,9 @@ struct MenuWindowNode {
 // Loads the original main menu screen descriptor graph through the Android
 // game database and resolves it with the desktop placement rules.
 bool LoadOriginalMenuScreen(const std::string& screen_ref);
+// Opens the shipped SingleStatistics2 screen and fills its runtime-only
+// labels and visibility from the completed legacy mission.
+bool LoadOriginalMissionStatisticsScreen();
 void ShutdownOriginalMenuRuntime();
 
 // Submits the resolved screen through the bgfx 2D path. The original client

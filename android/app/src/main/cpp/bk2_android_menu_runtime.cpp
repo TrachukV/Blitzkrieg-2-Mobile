@@ -2,6 +2,7 @@
 
 #include "bk2_android_audio_backend.h"
 #include "bk2_android_audio_decode.h"
+#include "bk2_android_legacy_game_runtime.h"
 #include "bk2_android_vorbis_stream.h"
 #include "bk2_android_platform.h"
 #include "bk2_legacy_texture_probe.h"
@@ -95,9 +96,15 @@ std::mutex g_menu_mutex;
 std::map<std::string, std::string> g_text_cache;
 // Visibility overrides applied by the menu's own navigation reactions.
 std::map<std::string, bool> g_visibility_overrides;
+// Runtime-built screens can contain duplicate child names in separate
+// branches, so controller state also needs the full window path.
+std::map<std::string, bool> g_path_visibility_overrides;
+std::map<std::string, std::string> g_caption_overrides;
+std::map<std::string, float> g_progress_overrides;
 // IWindow::SetTexture equivalents: a controller swaps a window's art at
 // runtime, keyed by the window name the original looks it up by.
 std::map<std::string, const NDb::STexture*> g_texture_overrides;
+std::map<std::string, const NDb::STexture*> g_path_texture_overrides;
 
 // Template windows a screen's runtime content is cloned from, captured while
 // the descriptor graph is walked.
@@ -1122,7 +1129,8 @@ void CollectWindow(
         float parent_width,
         float parent_height,
         int depth,
-        bool parent_visible) {
+        bool parent_visible,
+        const std::string& parent_path) {
     if (window == nullptr ||
         depth > kMaxMenuWindowDepth ||
         g_nodes.size() >= kMaxMenuWindowNodes) {
@@ -1157,6 +1165,13 @@ void CollectWindow(
 
     MenuWindowNode node;
     node.name = ToStdString(window->szName);
+    node.path = parent_path;
+    if (!node.name.empty()) {
+        if (!node.path.empty()) {
+            node.path += "/";
+        }
+        node.path += node.name;
+    }
     node.type = WindowTypeName(window->GetTypeID());
     node.x = x;
     node.y = y;
@@ -1169,6 +1184,11 @@ void CollectWindow(
             g_visibility_overrides.find(ToStdString(window->szName));
     if (override != g_visibility_overrides.end()) {
         window_visible = override->second;
+    }
+    const std::map<std::string, bool>::const_iterator path_override =
+            g_path_visibility_overrides.find(node.path);
+    if (path_override != g_path_visibility_overrides.end()) {
+        window_visible = path_override->second;
     }
     const bool visible = parent_visible && window_visible;
     node.visible = visible;
@@ -1230,6 +1250,12 @@ void CollectWindow(
         }
     }
 
+    const std::map<std::string, std::string>::const_iterator caption_override =
+            g_caption_overrides.find(node.path);
+    if (caption_override != g_caption_overrides.end()) {
+        node.caption = caption_override->second;
+    }
+
     // CWindow draws its own background, then its foreground, then children.
     // A button's state presentation goes on top of that background rather
     // than instead of it: the shared background is the plate, the state
@@ -1238,15 +1264,53 @@ void CollectWindow(
     if (visible && shared != nullptr) {
         const std::map<std::string, const NDb::STexture*>::const_iterator
                 texture_override = g_texture_overrides.find(node.name);
+        const std::map<std::string, const NDb::STexture*>::const_iterator
+                path_texture_override =
+                        g_path_texture_overrides.find(node.path);
+        const NDb::STexture* resolved_texture_override =
+                path_texture_override != g_path_texture_overrides.end()
+                        ? path_texture_override->second
+                        : (texture_override == g_texture_overrides.end()
+                                   ? nullptr
+                                   : texture_override->second);
         AppendBackgroundQuads(
                 shared->pBackground.GetPtr(),
                 x,
                 y,
                 width,
                 height,
-                texture_override == g_texture_overrides.end()
-                        ? nullptr
-                        : texture_override->second);
+                resolved_texture_override);
+        if (window->GetTypeID() == NDb::SWindowProgressBar::typeID) {
+            const NDb::SWindowProgressBar* progress_bar =
+                    static_cast<const NDb::SWindowProgressBar*>(window);
+            const NDb::SWindowProgressBarShared* progress_shared =
+                    dynamic_cast<const NDb::SWindowProgressBarShared*>(
+                            shared);
+            if (progress_shared != nullptr) {
+                float progress = progress_bar->fProgress;
+                const std::map<std::string, float>::const_iterator
+                        progress_override =
+                                g_progress_overrides.find(node.path);
+                if (progress_override != g_progress_overrides.end()) {
+                    progress = progress_override->second;
+                }
+                progress = std::max(0.0f, std::min(progress, 1.0f));
+                AppendBackgroundQuads(
+                        progress_shared->pBackward.GetPtr(),
+                        x,
+                        y,
+                        width,
+                        height);
+                if (progress > 0.0f) {
+                    AppendBackgroundQuads(
+                            progress_shared->pForward.GetPtr(),
+                            x,
+                            y,
+                            width * progress,
+                            height);
+                }
+            }
+        }
         if (window->GetTypeID() == NDb::SWindowMSButton::typeID) {
             const NDb::SWindowMSButtonShared* button_shared =
                     dynamic_cast<const NDb::SWindowMSButtonShared*>(shared);
@@ -1264,7 +1328,14 @@ void CollectWindow(
             }
         }
         AppendTextQuads(
-                node.caption, node.text_format, x, y, width, height);
+                node.caption,
+                node.text_format,
+                x,
+                y,
+                width,
+                height,
+                node.text_face,
+                node.text_argb);
     }
 
     if (node.button && visible && shared != nullptr) {
@@ -1290,7 +1361,14 @@ void CollectWindow(
                     width,
                     height);
             AppendTextQuads(
-                    node.caption, node.text_format, x, y, width, height);
+                    node.caption,
+                    node.text_format,
+                    x,
+                    y,
+                    width,
+                    height,
+                    node.text_face,
+                    node.text_argb);
             node.pressed_quad_begin =
                     static_cast<int>(g_pressed_quads.size());
             g_pressed_quads.insert(
@@ -1350,7 +1428,14 @@ void CollectWindow(
             });
     for (const NDb::SWindow* child_window : children) {
         CollectWindow(
-                child_window, x, y, width, height, depth + 1, visible);
+                child_window,
+                x,
+                y,
+                width,
+                height,
+                depth + 1,
+                visible,
+                node.path);
     }
     if (visible) {
         AppendBackgroundQuads(
@@ -1397,6 +1482,7 @@ std::vector<std::string> g_screen_stack;
 namespace {
 
 int g_selected_campaign = 0;
+int g_selected_chapter = 0;
 
 std::string JoinHostPath(const std::string& left, const std::string& right) {
     if (left.empty()) {
@@ -1435,7 +1521,7 @@ bool RequestCampaignLaunch(int campaign_index) {
             continue;
         }
         file << "campaign=" << campaign_index << "\n";
-        file << "chapter=0\n";
+        file << "chapter=" << g_selected_chapter << "\n";
         file << "mission=0\n";
         written = true;
     }
@@ -1637,6 +1723,7 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
         const int index = reaction[9] - '1';
         if (index >= 0 && index < 8) {
             g_selected_campaign = index;
+            g_selected_chapter = 0;
             std::ostringstream report;
             report << "original_menu_campaign=" << index;
             PlatformRuntime::instance().log_info(report.str());
@@ -1647,6 +1734,26 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
     // the mission; its Play button is what actually starts one.
     if (reaction == "play") {
         return RequestCampaignLaunch(g_selected_campaign);
+    }
+    // The statistics screen's DB command file names are what ButtonAction()
+    // sees, while the desktop controller receives the reaction string inside
+    // those files. Accept both forms so the shipped controls remain usable.
+    if (reaction == "restart_mission" ||
+        reaction == "RestartMission") {
+        g_mission_launch_requested = true;
+        return true;
+    }
+    if (reaction == "exit_to_chapter" ||
+        reaction == "ExitToChapter" ||
+        reaction == "menu_next" ||
+        reaction == "Next") {
+        return LoadOriginalMenuScreen(
+                "UI/Game/Menu/ChapterMap_WindowScreen.xdb");
+    }
+    if (reaction == "exit_to_main_menu" ||
+        reaction == "ExitToMainMenu") {
+        return LoadOriginalMenuScreen(
+                "UI/Game/Menu/MainMenu_WindowScreen.xdb");
     }
     // Tapping an option row advances it to its next shipped state and stores
     // the value through the same global variable the desktop screen uses.
@@ -1771,7 +1878,11 @@ const NDb::SChapter* SelectedChapter() {
     if (campaign == nullptr || campaign->chapters.empty()) {
         return nullptr;
     }
-    return campaign->chapters[0].GetPtr();
+    const int chapter_index =
+            std::max(0, std::min(
+                    g_selected_chapter,
+                    static_cast<int>(campaign->chapters.size()) - 1));
+    return campaign->chapters[chapter_index].GetPtr();
 }
 
 // CInterfaceChapterMapMenu sets the map artwork on the window it looks up as
@@ -1834,12 +1945,230 @@ void ApplyScreenInitTexturesLocked(const std::string& screen_ref) {
 bool LoadOriginalMenuScreen(const std::string& screen_ref) {
     std::lock_guard<std::mutex> guard(g_menu_mutex);
     g_visibility_overrides.clear();
+    g_path_visibility_overrides.clear();
+    g_caption_overrides.clear();
+    g_progress_overrides.clear();
     g_texture_overrides.clear();
+    g_path_texture_overrides.clear();
     ApplyScreenInitVisibilityLocked(screen_ref);
     ApplyScreenInitTexturesLocked(screen_ref);
     ResolveMenuBackgroundLocked();
     g_options_category = 0;
     return RebuildMenuScreenLocked(screen_ref);
+}
+
+std::string FormatMissionStatisticsTime(int seconds) {
+    seconds = std::max(seconds, 0);
+    std::ostringstream text;
+    const int hours = seconds / 3600;
+    const int minutes = (seconds / 60) % 60;
+    if (hours > 0) {
+        text << hours << "h : ";
+    }
+    if (hours > 0 || minutes > 0) {
+        text << minutes << "m : ";
+    }
+    text << (seconds % 60) << "s";
+    return text.str();
+}
+
+bool LoadOriginalMissionStatisticsScreen() {
+    const LegacyMissionStatisticsSnapshot statistics =
+            CopyLegacyMissionStatisticsSnapshot();
+    if (!statistics.available) {
+        PlatformRuntime::instance().log_warn(
+                "original_mission_statistics=failed; error=no_snapshot");
+        return false;
+    }
+
+    constexpr const char* kScreenRef =
+            "UI/Game/Menu/SingleStatictics2/"
+            "SingleStatistics2_WindowScreen.xdb";
+    std::lock_guard<std::mutex> guard(g_menu_mutex);
+    g_visibility_overrides.clear();
+    g_path_visibility_overrides.clear();
+    g_caption_overrides.clear();
+    g_progress_overrides.clear();
+    g_texture_overrides.clear();
+    g_path_texture_overrides.clear();
+    g_screen_stack.clear();
+
+    g_path_visibility_overrides["Main/InfoPanel/MissionSuccessLabel"] =
+            statistics.won;
+    g_path_visibility_overrides["Main/InfoPanel/MissionFailedLabel"] =
+            !statistics.won;
+    g_path_visibility_overrides["Main/BottomPanel/NextBtn"] =
+            statistics.won;
+    g_path_visibility_overrides["Main/BottomPanel/RestartMissionBtn"] =
+            !statistics.won;
+    g_path_visibility_overrides["Main/BottomPanel/ExitToMainMenuBtn"] =
+            !statistics.won && statistics.custom;
+    g_path_visibility_overrides["Main/BottomPanel/ExitToChapterBtn"] =
+            !statistics.won && !statistics.custom;
+    // The generic save browser is not yet wired to resume the finished
+    // legacy mission, so exposing Load here would lead to a dead end.
+    g_path_visibility_overrides["Main/BottomPanel/LoadBtn"] = false;
+
+    g_path_visibility_overrides["MedalDlg"] = false;
+    g_path_visibility_overrides["NewRankDlg"] = false;
+    g_path_visibility_overrides["ReinfDescriptionBackground"] = false;
+    g_path_visibility_overrides["DlgBg"] = false;
+    g_path_visibility_overrides["BlackBg"] = false;
+
+    g_path_visibility_overrides["Main/InfoPanel/CareerExpNAView"] =
+            statistics.custom;
+    g_path_visibility_overrides["Main/InfoPanel/MissionExpNAView"] =
+            statistics.custom;
+    g_path_visibility_overrides["Main/InfoPanel/CareerProgress"] =
+            !statistics.custom;
+    g_path_visibility_overrides["Main/InfoPanel/ExpProgress"] =
+            !statistics.custom;
+    g_path_visibility_overrides["Main/RewardPanel/NewReinfLabel"] =
+            !statistics.custom;
+
+    for (int index = 0; index < 3; ++index) {
+        const std::string line =
+                "Line0" + std::to_string(index + 1);
+        const std::string player_path =
+                "Main/InfoPanel/" + line;
+        const bool has_player =
+                static_cast<size_t>(index) < statistics.players.size();
+        g_path_visibility_overrides[player_path] = has_player;
+        if (!has_player) {
+            continue;
+        }
+        const LegacyMissionStatisticsPlayer& player =
+                statistics.players[static_cast<size_t>(index)];
+        std::string player_name;
+        if (!player.name_ref.empty()) {
+            player_name = LoadUtf16Text(
+                    NormalizeResourcePath(player.name_ref));
+        }
+        if (player_name.empty()) {
+            player_name = player.name;
+        }
+        g_caption_overrides[player_path + "/NameView"] = player_name;
+        g_caption_overrides[player_path + "/UnitsLostView"] =
+                std::to_string(player.units_lost);
+        g_caption_overrides[player_path + "/UnitsKilledView"] =
+                std::to_string(player.units_killed);
+        g_caption_overrides[player_path + "/ResevedView"] =
+                std::to_string(player.reinforcements_called);
+        if (!player.statistics_icon_ref.empty()) {
+            const NDb::STexture* icon =
+                    NDb::Get<NDb::STexture>(
+                            CDBID(player.statistics_icon_ref.c_str()));
+            if (icon != nullptr) {
+                g_path_texture_overrides[player_path + "/Flag"] =
+                        icon;
+            }
+        }
+    }
+    for (int index = 0; index < 4; ++index) {
+        g_path_visibility_overrides[
+                "Main/RewardPanel/Line0" +
+                std::to_string(index + 1)] = false;
+    }
+
+    g_caption_overrides["Main/InfoPanel/MissionTimeView"] =
+            FormatMissionStatisticsTime(
+                    statistics.mission_time_seconds);
+    g_caption_overrides["Main/InfoPanel/TotalCampaignTimeView"] =
+            FormatMissionStatisticsTime(
+                    statistics.custom
+                            ? statistics.mission_time_seconds
+                            : statistics.campaign_time_seconds);
+    const int rank_start = std::max(
+            0,
+            statistics.campaign_experience_current -
+                    statistics.experience_earned);
+    const int rank_span = std::max(
+            0,
+            statistics.campaign_experience_next_level - rank_start);
+    const int rank_progress = std::max(
+            0,
+            statistics.campaign_experience_current - rank_start);
+    g_caption_overrides["Main/InfoPanel/ExpForNextRankView"] =
+            std::to_string(rank_progress) + "/" +
+            std::to_string(rank_span);
+    // One shipped descriptor accidentally points its visible label at the
+    // two-line tooltip file; the desktop text widget displays only the first
+    // line, while the Android glyph path otherwise draws both on one row.
+    g_caption_overrides["Main/InfoPanel/UnitsLostLabel"] =
+            "Units Lost";
+
+    const float rank_current =
+            statistics.campaign_experience_next_level > 0
+                    ? static_cast<float>(
+                              statistics.campaign_experience_current) /
+                              static_cast<float>(
+                                      statistics
+                                              .campaign_experience_next_level)
+                    : 0.0f;
+    const float rank_previous =
+            statistics.campaign_experience_next_level > 0
+                    ? static_cast<float>(std::max(
+                              0,
+                              statistics.campaign_experience_current -
+                                      statistics.experience_earned)) /
+                              static_cast<float>(
+                                      statistics
+                                              .campaign_experience_next_level)
+                    : 0.0f;
+    const float career_current =
+            statistics.campaign_experience_max > 0
+                    ? static_cast<float>(
+                              statistics.campaign_experience_absolute) /
+                              static_cast<float>(
+                                      statistics.campaign_experience_max)
+                    : 0.0f;
+    const float career_previous =
+            statistics.campaign_experience_max > 0
+                    ? static_cast<float>(std::max(
+                              0,
+                              statistics.campaign_experience_absolute -
+                                      statistics.experience_earned)) /
+                              static_cast<float>(
+                                      statistics.campaign_experience_max)
+                    : 0.0f;
+    g_progress_overrides["Main/InfoPanel/CareerProgress"] =
+            career_previous;
+    g_progress_overrides[
+            "Main/InfoPanel/CareerProgress/NewCareerProgress"] =
+            career_current;
+    g_progress_overrides["Main/InfoPanel/ExpProgress"] =
+            rank_previous;
+    g_progress_overrides[
+            "Main/InfoPanel/ExpProgress/NewExpProgress"] =
+            rank_current;
+
+    if (statistics.campaign_index >= 0) {
+        g_selected_campaign = statistics.campaign_index;
+    }
+    if (statistics.chapter_index >= 0) {
+        g_selected_chapter = statistics.chapter_index;
+    }
+    ResolveMenuBackgroundLocked();
+    g_options_category = 0;
+    const bool loaded = RebuildMenuScreenLocked(kScreenRef);
+    std::ostringstream report;
+    report << "original_mission_statistics="
+           << (loaded ? "ready" : "failed")
+           << "; won=" << (statistics.won ? "true" : "false")
+           << "; custom=" << (statistics.custom ? "true" : "false")
+           << "; campaign=" << statistics.campaign_index
+           << "; chapter=" << statistics.chapter_index
+           << "; players=" << statistics.players.size()
+           << "; mission_time=" << statistics.mission_time_seconds
+           << "; campaign_time=" << statistics.campaign_time_seconds
+           << "; experience=" << statistics.experience_earned;
+    if (!loaded) {
+        report << "; error=" << g_error;
+        PlatformRuntime::instance().log_warn(report.str());
+    } else {
+        PlatformRuntime::instance().log_info(report.str());
+    }
+    return loaded;
 }
 
 namespace {
@@ -2291,7 +2620,8 @@ bool RebuildMenuScreenLocked(const std::string& screen_ref) {
             kVirtualScreenWidth,
             kVirtualScreenHeight,
             0,
-            true);
+            true,
+            std::string());
     if (screen_ref.find("OptionsMenu") != std::string::npos) {
         PopulateOptionsScreenLocked();
     }
@@ -2536,6 +2866,13 @@ void ShutdownOriginalMenuRuntime() {
     g_fonts.clear();
     g_render_logged = false;
     g_text_cache.clear();
+    g_visibility_overrides.clear();
+    g_path_visibility_overrides.clear();
+    g_caption_overrides.clear();
+    g_progress_overrides.clear();
+    g_texture_overrides.clear();
+    g_path_texture_overrides.clear();
+    g_screen_stack.clear();
     g_screen_ref.clear();
     g_error.clear();
     g_button_count = 0;

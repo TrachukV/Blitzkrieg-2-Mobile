@@ -525,6 +525,7 @@ extern "C" void android_main(android_app* app) {
             !bk2::android::IsSinglePlayerRuntimeReady() &&
             bk2::android::IsOriginalMenuReady();
     g_menu_input_active = menu_active;
+    bool mission_statistics_attempted = false;
     bool first_render_frame_logged = false;
     bool mission_script_tick_logged = false;
     uint64_t last_tick_millis = platform.monotonic_millis();
@@ -551,6 +552,7 @@ extern "C" void android_main(android_app* app) {
                 bk2::android::RefreshSinglePlayerRenderResources();
                 menu_active = false;
                 g_menu_input_active = false;
+                mission_statistics_attempted = false;
                 bk2::android::ShutdownOriginalMenuRuntime();
                 platform.log_info(
                         bk2::android::SinglePlayerRuntimeReport());
@@ -573,6 +575,20 @@ extern "C" void android_main(android_app* app) {
                 mission_script_tick_logged = true;
             }
         }
+        if (!menu_active &&
+            !mission_statistics_attempted &&
+            std::string(bk2::android::LegacyMissionOutcome()) != "running") {
+            mission_statistics_attempted = true;
+            if (bk2::android::LoadOriginalMissionStatisticsScreen()) {
+                menu_active = true;
+                g_menu_input_active = true;
+                platform.log_info(
+                        bk2::android::OriginalMenuReport());
+            } else {
+                platform.log_warn(
+                        "mission_statistics_screen=unavailable");
+            }
+        }
         bk2::android::AudioOutput().service();
         if (bk2::android::RenderBackend().is_ready()) {
             // Without a selected mission the shell shows the original menu
@@ -582,7 +598,9 @@ extern "C" void android_main(android_app* app) {
                         bk2::android::RenderBackend().width(),
                         bk2::android::RenderBackend().height());
             }
-            QueueTouchSelectionOverlay();
+            if (!menu_active) {
+                QueueTouchSelectionOverlay();
+            }
             bk2::android::RenderLegacyGfxFrame();
             if (!first_render_frame_logged &&
                 bk2::android::RenderBackend().frame_count() > 0) {
