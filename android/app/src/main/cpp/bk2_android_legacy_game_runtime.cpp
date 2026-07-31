@@ -11,6 +11,7 @@
 #include "AILogic/Specific.h"
 #include "AILogic/AIConsts.h"
 #include "AILogic/B2AI.h"
+#include "AILogic/Bridge.h"
 #include "AILogic/CreateAI.h"
 #include "AILogic/GlobeUpdater.h"
 #include "AILogic/GroupLogic.h"
@@ -63,6 +64,7 @@
 #include <cstring>
 #include <limits>
 #include <set>
+#include <unordered_set>
 #include <sstream>
 #include <unordered_map>
 #include <vector>
@@ -196,6 +198,12 @@ uint64_t g_static_building_snapshot_count = 0;
 uint64_t g_static_building_rpg_update_count = 0;
 uint64_t g_static_building_effect_count = 0;
 bool g_static_building_snapshot_logged = false;
+uint64_t g_bridge_snapshot_count = 0;
+uint64_t g_bridge_rpg_update_count = 0;
+uint64_t g_bridge_effect_count = 0;
+bool g_bridge_snapshot_logged = false;
+std::unordered_map<int32_t, bool> g_bridge_alive_state;
+std::unordered_set<int32_t> g_bridge_instant_death;
 AndroidWarFogSnapshot g_war_fog_snapshot;
 bool g_war_fog_first_update = true;
 enum LegacyMissionOutcomeValue {
@@ -569,6 +577,70 @@ int DamageStageForHitPoints(
         }
     }
     return result;
+}
+
+const NDb::SBridgeRPGStats::SElementRPGStats&
+BridgeElementForFrame(
+        const NDb::SBridgeRPGStats* stats,
+        int frame_index) {
+    return frame_index == 0 ? stats->end : stats->center;
+}
+
+int BridgeDamageStageForHitPoints(
+        const NDb::SBridgeRPGStats* stats,
+        int frame_index,
+        float hit_points) {
+    if (stats == nullptr) {
+        return -1;
+    }
+    const float fraction =
+            stats->fMaxHP > 0.0f ? hit_points / stats->fMaxHP : 1.0f;
+    const NDb::SBridgeRPGStats::SElementRPGStats& element =
+            BridgeElementForFrame(stats, frame_index);
+    int result = -1;
+    float result_fraction = 1.0f;
+    for (size_t index = 0;
+         index < element.damageStates.size();
+         ++index) {
+        const NDb::SBridgeRPGStats::SElementRPGStats::
+                SBridgeDamageState& state = element.damageStates[index];
+        if (state.fDamageHP >= fraction &&
+            state.fDamageHP <= result_fraction) {
+            result_fraction = state.fDamageHP;
+            result = static_cast<int>(index);
+        }
+    }
+    return result;
+}
+
+const NDb::SVisObj* BridgeVisualForHitPoints(
+        const NDb::SBridgeRPGStats* stats,
+        int frame_index,
+        float hit_points,
+        int unique_id) {
+    if (stats == nullptr) {
+        return nullptr;
+    }
+    const NDb::SBridgeRPGStats::SElementRPGStats& element =
+            BridgeElementForFrame(stats, frame_index);
+    const int stage =
+            BridgeDamageStageForHitPoints(
+                    stats,
+                    frame_index,
+                    hit_points);
+    const vector<CDBPtr<NDb::SVisObj> >* visuals =
+            stage < 0
+            ? &element.visualObjects
+            : &element.damageStates[stage].visObjects;
+    if (visuals->empty()) {
+        return nullptr;
+    }
+    // Desktop CMOBridge keeps one random span choice until a model-stage
+    // transition. A stable id-derived choice gives the same per-span variety
+    // without consuming the simulation's synchronized random stream.
+    const uint32_t choice =
+            static_cast<uint32_t>(unique_id) * 2654435761u;
+    return (*visuals)[choice % visuals->size()].GetPtr();
 }
 
 void SetStage(const char* stage) {
@@ -1411,6 +1483,88 @@ int CaptureStaticBuildingRpgUpdate(
     return 1;
 }
 
+int CaptureBridgeRpgUpdate(const SAINotifyRPGStats& update) {
+    CLinkObject* link =
+            CLinkObject::GetObjectByUniqueIdSafe(update.nObjUniqueID);
+    CBridgeSpan* bridge = dynamic_cast<CBridgeSpan*>(link);
+    const NDb::SBridgeRPGStats* stats =
+            bridge == nullptr ? nullptr : bridge->GetBridgeStats();
+    if (bridge == nullptr || stats == nullptr) {
+        return 0;
+    }
+
+    const int stage =
+            BridgeDamageStageForHitPoints(
+                    stats,
+                    bridge->GetFrameIndex(),
+                    update.fHitPoints);
+    const auto previous =
+            g_static_object_damage_stages.find(update.nObjUniqueID);
+    const bool stage_changed =
+            previous == g_static_object_damage_stages.end() ||
+            previous->second != stage;
+    const bool damage_advanced =
+            previous != g_static_object_damage_stages.end() &&
+            previous->second != stage &&
+            stage >= 0;
+    g_static_object_damage_stages[update.nObjUniqueID] = stage;
+    ++g_bridge_rpg_update_count;
+
+    const NDb::SComplexEffect* damage_effect = nullptr;
+    const NDb::SBridgeRPGStats::SElementRPGStats& element =
+            BridgeElementForFrame(stats, bridge->GetFrameIndex());
+    if (damage_advanced &&
+        static_cast<size_t>(stage) < element.damageStates.size()) {
+        damage_effect =
+                element.damageStates[stage].pSmokeEffect.GetPtr();
+        // AddNewBridgeSpan already folds GetVisZ into the AI object's center.
+        // Adding terrain height here again sinks tall bridge supports far below
+        // the map and also offsets destruction effects.
+        const CVec3 bridge_position = bridge->GetCenter();
+        const float heading =
+                static_cast<float>(bridge->GetDir()) *
+                6.28318530717958647692f / 65536.0f;
+        const float rotation_cos = std::cos(heading);
+        const float rotation_sin = std::sin(heading);
+        if (damage_effect != nullptr) {
+            for (const NDb::SBridgeRPGStats::SBridgeFirePoint& point :
+                 stats->smokePoints) {
+                const float local_x =
+                        point.vPos.y - element.vOrigin.x;
+                const float local_y =
+                        point.vPos.x - element.vOrigin.y;
+                const CVec3 effect_position(
+                        bridge_position.x +
+                                rotation_cos * local_x -
+                                rotation_sin * local_y,
+                        bridge_position.y +
+                                rotation_sin * local_x +
+                                rotation_cos * local_y,
+                        bridge_position.z);
+                CaptureDescriptorSceneEffect(
+                        damage_effect,
+                        update.nObjUniqueID,
+                        effect_position);
+                ++g_bridge_effect_count;
+            }
+        }
+    }
+    if (stage_changed) {
+        PlatformRuntime::instance().log_info(
+                std::string("bridge_rpg_update=") +
+                std::to_string(update.nObjUniqueID) +
+                "; hp=" + std::to_string(update.fHitPoints) +
+                "; stage=" + std::to_string(stage) +
+                "; effect=" +
+                (damage_effect == nullptr
+                         ? "<none>"
+                         : damage_effect->GetDBID()
+                                   .ToString()
+                                   .c_str()));
+    }
+    return 1;
+}
+
 void CapturePresentationCorpse(
         int32_t unit_id,
         const CVec3& position,
@@ -2103,7 +2257,8 @@ void DrainLegacyClientUpdates() {
         SAIRPGUpdate* rpg_update =
                 dynamic_cast<SAIRPGUpdate*>(update.GetPtr());
         if (rpg_update != nullptr &&
-            CaptureStaticBuildingRpgUpdate(rpg_update->info) != 0) {
+            (CaptureStaticBuildingRpgUpdate(rpg_update->info) != 0 ||
+             CaptureBridgeRpgUpdate(rpg_update->info) != 0)) {
             continue;
         }
         SAIPlacementUpdate* placement =
@@ -2379,6 +2534,124 @@ void AppendStaticBuildingEntities(
     }
 }
 
+void AppendBridgeEntities(std::vector<Bk2PresentationEntity>* entities) {
+    g_bridge_snapshot_count = 0;
+    if (entities == nullptr ||
+        SLinkObjDataAutoMagic::pLinkObjData == nullptr) {
+        return;
+    }
+    const BYTE player_party = theDipl.GetMyParty();
+    uint64_t visible_count = 0;
+    uint64_t visible_alive_count = 0;
+    uint64_t visible_dead_count = 0;
+    for (const auto& entry :
+         SLinkObjDataAutoMagic::pLinkObjData->unitsID2object) {
+        CLinkObject* link = entry.second;
+        CBridgeSpan* bridge = dynamic_cast<CBridgeSpan*>(link);
+        const NDb::SBridgeRPGStats* stats =
+                bridge == nullptr ? nullptr : bridge->GetBridgeStats();
+        if (bridge == nullptr || stats == nullptr) {
+            continue;
+        }
+        ++g_bridge_snapshot_count;
+        const int32_t bridge_id = bridge->GetUniqueId();
+        const bool alive = bridge->GetHitPoints() > 0.0f;
+        const bool visible = bridge->IsVisible(player_party);
+        const auto state =
+                g_bridge_alive_state.emplace(bridge_id, alive);
+        if (state.second) {
+            if (!alive) {
+                g_bridge_instant_death.insert(bridge_id);
+            }
+        } else if (state.first->second != alive) {
+            state.first->second = alive;
+            if (alive) {
+                g_bridge_instant_death.erase(bridge_id);
+            } else if (visible) {
+                g_bridge_instant_death.erase(bridge_id);
+            } else {
+                // A collapse that happened behind fog must already be at its
+                // final pose when this span is revealed later.
+                g_bridge_instant_death.insert(bridge_id);
+            }
+        }
+        const int damage_stage =
+                BridgeDamageStageForHitPoints(
+                        stats,
+                        bridge->GetFrameIndex(),
+                        bridge->GetHitPoints());
+        g_static_object_damage_stages.emplace(
+                bridge_id,
+                damage_stage);
+        if (!visible) {
+            continue;
+        }
+        const NDb::SVisObj* visual =
+                BridgeVisualForHitPoints(
+                        stats,
+                        bridge->GetFrameIndex(),
+                        bridge->GetHitPoints(),
+                        bridge_id);
+        if (visual == nullptr) {
+            continue;
+        }
+        ++visible_count;
+        if (bridge->GetHitPoints() > 0.0f) {
+            ++visible_alive_count;
+        } else {
+            ++visible_dead_count;
+        }
+        // Unlike buildings, bridge spans receive an absolute visual Z in
+        // CStaticObjects::AddNewBridgeSpan.
+        const CVec3 position = bridge->GetCenter();
+        const int player = bridge->GetPlayer();
+        Bk2PresentationEntity entity{};
+        entity.id = bridge_id;
+        entity.player = player;
+        entity.flags =
+                BK2_PRESENTATION_ENTITY_STATIC_OBJECT |
+                BK2_PRESENTATION_ENTITY_BRIDGE |
+                (bridge->GetHitPoints() > 0.0f
+                         ? BK2_PRESENTATION_ENTITY_ALIVE
+                         : BK2_PRESENTATION_ENTITY_DEAD);
+        if (bridge->GetHitPoints() <= 0.0f &&
+            g_bridge_instant_death.find(bridge_id) !=
+                    g_bridge_instant_death.end()) {
+            entity.flags |= BK2_PRESENTATION_ENTITY_DEATH_INSTANT;
+        }
+        entity.x = AI2Vis(position.x);
+        entity.y = AI2Vis(position.y);
+        entity.z = AI2Vis(position.z);
+        entity.heading_radians =
+                static_cast<float>(bridge->GetDir()) *
+                6.28318530717958647692f / 65536.0f;
+        entity.hit_points = bridge->GetHitPoints();
+        entity.max_hit_points = stats->fMaxHP;
+        entity.rpg_stats_path_hash = VisualPathHash(visual);
+        entity.rpg_stats_record_id = visual->GetRecordID();
+        entity.geometry_record_id = GeometryRecordId(visual);
+        entity.visual_scale = stats->fSelectionScale;
+        entity.relation =
+                player == theDipl.GetMyNumber()
+                ? BK2_PRESENTATION_RELATION_OWN
+                : (theDipl.GetNParty(player) == player_party
+                           ? BK2_PRESENTATION_RELATION_ALLY
+                           : BK2_PRESENTATION_RELATION_ENEMY);
+        entities->push_back(entity);
+    }
+    if (!g_bridge_snapshot_logged && g_bridge_snapshot_count != 0) {
+        g_bridge_snapshot_logged = true;
+        PlatformRuntime::instance().log_info(
+                std::string("bridge_presentation=active") +
+                "; total=" + std::to_string(g_bridge_snapshot_count) +
+                "; visible=" + std::to_string(visible_count) +
+                "; visible_alive=" +
+                std::to_string(visible_alive_count) +
+                "; visible_dead=" +
+                std::to_string(visible_dead_count));
+    }
+}
+
 void PublishPresentationEntities() {
     std::vector<Bk2PresentationEntity> entities;
     entities.reserve(
@@ -2541,6 +2814,7 @@ void PublishPresentationEntities() {
         entities.push_back(projectile.second.entity);
     }
     AppendStaticBuildingEntities(&entities);
+    AppendBridgeEntities(&entities);
     bk2::presentation::PublishEntities(std::move(entities));
 }
 
@@ -2796,6 +3070,12 @@ void ResetReportState() {
     g_static_building_rpg_update_count = 0;
     g_static_building_effect_count = 0;
     g_static_building_snapshot_logged = false;
+    g_bridge_snapshot_count = 0;
+    g_bridge_rpg_update_count = 0;
+    g_bridge_effect_count = 0;
+    g_bridge_snapshot_logged = false;
+    g_bridge_alive_state.clear();
+    g_bridge_instant_death.clear();
     g_mission_outcome.store(kLegacyMissionRunning);
     g_pending_mission_outcome.store(kLegacyMissionRunning);
     g_stage = "not_started";
@@ -4030,6 +4310,79 @@ void HandleLegacyInputEvent(const char* event_name) {
                     "," +
                     std::to_string(AI2Vis(target->GetCenter().y)));
         }
+    } else if (std::strcmp(
+                       event_name,
+                       "debug_destroy_bridge") == 0) {
+        CAIUnit* attacker =
+                CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+        if (attacker == nullptr || !attacker->IsAlive()) {
+            for (CGlobalIter iter(0, ANY_PARTY);
+                 !iter.IsFinished();
+                 iter.Iterate()) {
+                CAIUnit* candidate = *iter;
+                if (candidate != nullptr &&
+                    candidate->IsAlive() &&
+                    candidate->GetPlayer() == 0) {
+                    attacker = candidate;
+                    break;
+                }
+            }
+        }
+        CBridgeSpan* target = nullptr;
+        float best_distance_squared =
+                std::numeric_limits<float>::max();
+        if (attacker != nullptr &&
+            SLinkObjDataAutoMagic::pLinkObjData != nullptr) {
+            for (const auto& entry :
+                 SLinkObjDataAutoMagic::pLinkObjData->unitsID2object) {
+                CLinkObject* link = entry.second;
+                CBridgeSpan* bridge =
+                        dynamic_cast<CBridgeSpan*>(link);
+                if (bridge == nullptr ||
+                    !bridge->IsVisible(theDipl.GetMyParty()) ||
+                    bridge->GetHitPoints() <= 0.0f) {
+                    continue;
+                }
+                const CVec3& center = bridge->GetCenter();
+                const CVec3& source = attacker->GetCenter();
+                const float delta_x = center.x - source.x;
+                const float delta_y = center.y - source.y;
+                const float distance_squared =
+                        delta_x * delta_x + delta_y * delta_y;
+                if (distance_squared < best_distance_squared) {
+                    best_distance_squared = distance_squared;
+                    target = bridge;
+                }
+            }
+        }
+        if (target != nullptr && target->GetBridgeStats() != nullptr) {
+            CenterSinglePlayerCamera(
+                    AI2Vis(target->GetCenter().x),
+                    AI2Vis(target->GetCenter().y));
+            const float before = target->GetHitPoints();
+            target->TakeDamage(
+                    target->GetBridgeStats()->fMaxHP * 1.25f,
+                    true,
+                    attacker->GetPlayer(),
+                    attacker);
+            PlatformRuntime::instance().log_info(
+                    std::string("debug_destroy_bridge=") +
+                    std::to_string(target->GetUniqueId()) +
+                    "; descriptor=" +
+                    target->GetBridgeStats()
+                            ->GetDBID()
+                            .ToString()
+                            .c_str() +
+                    "; frame=" +
+                    std::to_string(target->GetFrameIndex()) +
+                    "; hp_before=" + std::to_string(before) +
+                    "; hp_after=" +
+                    std::to_string(target->GetHitPoints()) +
+                    "; position=" +
+                    std::to_string(AI2Vis(target->GetCenter().x)) +
+                    "," +
+                    std::to_string(AI2Vis(target->GetCenter().y)));
+        }
     } else if (std::strcmp(event_name, "debug_combat_effect") == 0 &&
                g_selected_unit_id >= 0 &&
                g_attack_target_unit_id >= 0) {
@@ -4276,6 +4629,12 @@ void ShutdownLegacyGameRuntime() {
     g_static_building_rpg_update_count = 0;
     g_static_building_effect_count = 0;
     g_static_building_snapshot_logged = false;
+    g_bridge_snapshot_count = 0;
+    g_bridge_rpg_update_count = 0;
+    g_bridge_effect_count = 0;
+    g_bridge_snapshot_logged = false;
+    g_bridge_alive_state.clear();
+    g_bridge_instant_death.clear();
     g_war_fog_snapshot = AndroidWarFogSnapshot();
     g_war_fog_first_update = true;
     g_combat_effects.clear();
@@ -4373,6 +4732,9 @@ std::string LegacyGameRuntimeReport() {
            << g_static_building_rpg_update_count
            << "; static_building_effects="
            << g_static_building_effect_count
+           << "; bridges=" << g_bridge_snapshot_count
+           << "; bridge_rpg_updates=" << g_bridge_rpg_update_count
+           << "; bridge_effects=" << g_bridge_effect_count
            << "; war_fog=" << g_war_fog_snapshot.width
            << "x" << g_war_fog_snapshot.height
            << "; war_fog_generation="

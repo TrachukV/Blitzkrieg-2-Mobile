@@ -824,31 +824,66 @@ def build_index(
         ] = {}
         for frame_index, element_name in ((0, "End"), (1, "Center")):
             element = child(stats, element_name)
-            visual_objects = (
-                child(element, "VisualObjects")
-                if element is not None
-                else None
-            )
-            if visual_objects is None:
+            if element is None:
                 continue
-            for visual_object in visual_objects:
-                vis_path = reference_path(
-                    data_root,
-                    stats_path,
-                    visual_object.attrib.get("href", ""),
-                )
-                binding = (
-                    binding_from_vis_path(
-                        data_root,
-                        vis_path,
-                        converted_geometry_root,
+            visual_groups: list[tuple[ET.Element, bool]] = []
+            visual_objects = child(element, "VisualObjects")
+            if visual_objects is not None:
+                visual_groups.append((visual_objects, True))
+            damage_states = child(element, "DamageStates")
+            if damage_states is not None:
+                for damage_state in damage_states:
+                    damaged_visuals = child(
+                        damage_state,
+                        "VisObjects",
                     )
-                    if vis_path is not None
-                    else None
-                )
-                if binding is not None:
-                    bridge_bindings[frame_index] = binding
-                    break
+                    if damaged_visuals is not None:
+                        visual_groups.append((damaged_visuals, False))
+            for visual_group, is_base_group in visual_groups:
+                for visual_object in visual_group:
+                    vis_path = reference_path(
+                        data_root,
+                        stats_path,
+                        visual_object.attrib.get("href", ""),
+                    )
+                    binding = (
+                        binding_from_vis_path(
+                            data_root,
+                            vis_path,
+                            converted_geometry_root,
+                        )
+                        if vis_path is not None
+                        else None
+                    )
+                    if binding is None or vis_path is None:
+                        continue
+                    if (
+                        is_base_group
+                        and frame_index not in bridge_bindings
+                    ):
+                        bridge_bindings[frame_index] = binding
+                    (
+                        geometry_record_id,
+                        material_quantities,
+                        textures,
+                        geometry_scale,
+                        alpha_modes,
+                    ) = binding
+                    # Live bridge spans publish the exact SVisObj selected for
+                    # their frame and damage state, so retain the material
+                    # binding under that visual's DB path as well as under the
+                    # frame-indexed bridge RPGStats entry.
+                    visual_hash = fnv1a64(
+                        normalized_path(vis_path, data_root)
+                    )
+                    result[(visual_hash, -1)] = (
+                        int(record),
+                        geometry_record_id,
+                        material_quantities,
+                        textures,
+                        geometry_scale,
+                        alpha_modes,
+                    )
         for frame_index, binding in bridge_bindings.items():
             (
                 geometry_record_id,

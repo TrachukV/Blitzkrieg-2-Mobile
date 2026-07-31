@@ -62,6 +62,12 @@ if [[ "${BK2_SKIP_GEOMETRY_CONVERSION:-0}" != "1" ]]; then
             --lying-attack-animation "${DATA_SOURCE}/Data/bin/Animations/3970" \
             --skip-unsupported \
             --all
+        python3 convert_bridge_death_geometry.py \
+            --data-root "${DATA_SOURCE}/Data" \
+            --converter "${SCRIPT_DIR}/convert_granny_geometry.mjs" \
+            --geometry-source "${GEOMETRY_SOURCE}" \
+            --animation-source "${DATA_SOURCE}/Data/bin/Animations" \
+            --output "${CONVERTED_GEOMETRY}"
         python3 build_geometry_index.py \
             --data-root "${DATA_SOURCE}/Data" \
             --converted-geometry-root "${CONVERTED_GEOMETRY}" \

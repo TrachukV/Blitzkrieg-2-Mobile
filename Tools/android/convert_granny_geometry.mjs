@@ -642,12 +642,19 @@ function buildSovietArmoredSeaHunter() {
 }
 
 function canUseAnimation(mesh, skeleton, animation) {
+  const hasExplicitWeights =
+    mesh.vertexWeights.some((weights) => weights.length > 0);
+  // Large static animated models such as bridges store one rigid bone binding
+  // per mesh and omit redundant per-vertex weights. Granny treats every
+  // vertex in that mesh as fully bound to the sole binding.
+  const hasRigidBinding = mesh.boneBindings.length === 1;
   if (
     !skeleton ||
     !animation ||
-    mesh.vertexWeights.length !== mesh.vertexCount ||
     mesh.boneBindings.length === 0 ||
-    !mesh.vertexWeights.some((weights) => weights.length > 0)
+    (hasExplicitWeights &&
+      mesh.vertexWeights.length !== mesh.vertexCount) ||
+    (!hasExplicitWeights && !hasRigidBinding)
   ) {
     return false;
   }
@@ -750,7 +757,13 @@ function animatedFrames(mesh, skeleton, animation, frameCount) {
     const positions = [];
     const normals = [];
     for (let vertex = 0; vertex < mesh.vertexCount; ++vertex) {
-      const weights = mesh.vertexWeights[vertex];
+      const explicitWeights = mesh.vertexWeights[vertex] ?? [];
+      const weights =
+        explicitWeights.length > 0
+          ? explicitWeights
+          : mesh.boneBindings.length === 1
+            ? [{ boneIndex: 0, weight: 1 }]
+            : [];
       const sourcePosition = mesh.positions[vertex] ?? [0, 0, 0];
       const sourceNormal = mesh.normals[vertex] ?? [0, 0, 1];
       let position = [0, 0, 0];

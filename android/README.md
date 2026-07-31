@@ -1245,6 +1245,30 @@ selected `StHouseCrashPhase_ComplexEffect.xdb` and
 `StHouseCrashTotal_ComplexEffect.xdb`, and played the original building
 fatality sounds.
 
+Bridge spans now also leave the immutable scenery batch and are published from
+their live `CBridgeSpan` objects. Frame zero uses the descriptor's end element;
+all other frames use its center element, matching `CMOBridge::GetElement`.
+Visibility, HP, placement, heading, and damaged visual selection remain driven
+by the original AI object. `CBridgeSpan::GetCenter()` already contains terrain
+height, matching `CStaticObjects::AddNewBridgeSpan`, so the presentation path
+does not add `GetVisZ` a second time. When a bridge descriptor supplies smoke
+points, a damage-state transition instantiates its declared `pSmokeEffect` at
+each point with the desktop element-origin transform. On death the renderer
+plays the bridge model's own non-looping death animation, preserves the
+desktop per-span collapse delay, and clamps on its final frame. The content tool
+discovers all 14 center/end geometry-animation bindings across the six shipped
+bridge families and converts each with the death clip referenced by its
+skeleton. These rigid bridge parts omit per-vertex weights, so the Granny
+converter now treats a sole mesh bone binding as full weight, as the original
+runtime does.
+
+The device check covers both bridge startup states. `GER4.2` starts with five
+visible living asphalt spans; the debug damage path propagated 15000 to 0 HP
+through all five original `CBridgeSpan` objects and ran geometry 373's death
+animation without bridge binding fallbacks. `RUS3.1` starts with three visible
+destroyed railway spans; they load directly at the final pose of geometry 509
+instead of replaying their collapse when the mission opens.
+
 The first model-shadow layer projects every converted Granny vertex along one
 sun direction, computes a convex ground hull, and submits that hull once through
 an alpha-blended white-texture layer. Static hulls remain in the cached world

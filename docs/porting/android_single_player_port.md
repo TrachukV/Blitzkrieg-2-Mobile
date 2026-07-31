@@ -115,6 +115,26 @@ progressed from 100 to 60, 20, and 0 HP, rendered its final ruin, played the
 shipped building fatality audio, and selected
 `StHouseCrashPhase_ComplexEffect.xdb` followed by
 `StHouseCrashTotal_ComplexEffect.xdb`.
+Bridge spans now use the same live-object path instead of remaining inside the
+immutable scenery batch. Android enumerates `CBridgeSpan`, preserves its
+frame index, visibility, HP, placement, and heading, and selects the desktop
+`end` model for frame zero or `center` model for every other frame. RPG stage
+updates use the matching element's `SBridgeDamageState`, reproduce the original
+smoke-point/origin rotation, and play its shipped `pSmokeEffect` when the
+descriptor supplies smoke points. A destroyed span is rendered through the
+death animation declared by that model's own skeleton, including the original
+per-span collapse delay. `convert_bridge_death_geometry.py` discovers all 14
+center/end geometry bindings under the six shipped `Data/Bridges` families;
+the Granny converter now correctly treats a mesh with one bone binding and no
+redundant vertex-weight array as rigidly attached to that bone.
+Bridge centers are already terrain-adjusted by
+`CStaticObjects::AddNewBridgeSpan`; the Android presentation path therefore
+uses that absolute Z directly instead of adding `GetVisZ` twice. On-device
+validation destroyed all five visible asphalt spans in `GER4.2`, selected
+geometry 373's death animation, and left the bridge destroyed. A second launch
+of `RUS3.1` loaded its three initially destroyed railway spans directly at
+geometry 509's final death frame. All bridge bindings resolved to converted
+geometry in both checks.
 The compiled animated-light intensity track is similarly represented by a
 short flash envelope rather than a full dynamic-light shader.
 The Android build packages the required 4.2 MiB original HUD subset and the TGA

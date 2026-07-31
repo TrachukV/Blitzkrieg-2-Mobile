@@ -5021,7 +5021,10 @@ void AppendEntityModel(
             entity.rpg_stats_path_hash == 0xe1f6a0043e473508ull;
     ConvertedAnimationVariant animation_variant =
             ConvertedAnimationVariant::Base;
-    if ((entity.flags & BK2_PRESENTATION_ENTITY_INFANTRY) != 0) {
+    if ((entity.flags & BK2_PRESENTATION_ENTITY_BRIDGE) != 0 &&
+        (entity.flags & BK2_PRESENTATION_ENTITY_DEAD) != 0) {
+        animation_variant = ConvertedAnimationVariant::Death;
+    } else if ((entity.flags & BK2_PRESENTATION_ENTITY_INFANTRY) != 0) {
         if ((entity.flags & BK2_PRESENTATION_ENTITY_DEAD) != 0) {
             animation_variant = ConvertedAnimationVariant::Death;
         } else if ((entity.flags & BK2_PRESENTATION_ENTITY_LYING) != 0 &&
@@ -5871,11 +5874,12 @@ void AppendMapObjects(
         if (dynamic_unit && !include_dynamic_units) {
             continue;
         }
-        // Buildings are destructible AI objects. Baking them into this
-        // immutable mesh made every damage-stage and destroyed-model update
-        // invisible. The legacy bridge publishes them after AI startup; the
+        // Buildings and bridge spans are destructible AI objects. Baking them
+        // into this immutable mesh made every damage-stage and destroyed-model
+        // update invisible. The legacy bridge publishes them after AI startup;
         // terrain, flora, roads, and minor scenery stay batched here.
-        if (type_id == NDb::SBuildingRPGStats::typeID) {
+        if (type_id == NDb::SBuildingRPGStats::typeID ||
+            type_id == NDb::SBridgeRPGStats::typeID) {
             continue;
         }
         const bool visible_gameplay_object =
@@ -6396,20 +6400,41 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         const bool static_object =
                 (entity.flags &
                  BK2_PRESENTATION_ENTITY_STATIC_OBJECT) != 0;
+        const bool instant_death =
+                (entity.flags &
+                 BK2_PRESENTATION_ENTITY_DEATH_INSTANT) != 0;
         if ((entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) == 0 && !dead) {
             continue;
         }
         float animation_time_seconds = g_animation_elapsed_seconds;
         if (dead) {
             visible_corpse_ids.insert(entity.id);
-            const auto start =
-                    g_death_animation_start_seconds
-                            .emplace(
-                                    entity.id,
-                                    g_animation_elapsed_seconds)
-                            .first;
-            animation_time_seconds =
-                    g_animation_elapsed_seconds - start->second;
+            if (instant_death) {
+                animation_time_seconds =
+                        std::numeric_limits<float>::max();
+            } else {
+                // Desktop CMOBridge offsets every collapse by up to two
+                // seconds. Keep that stagger without consuming the legacy
+                // simulation's synchronized random stream.
+                const float bridge_death_delay_seconds =
+                        (entity.flags &
+                         BK2_PRESENTATION_ENTITY_BRIDGE) != 0
+                        ? static_cast<float>(
+                                  static_cast<uint32_t>(entity.id) *
+                                  2654435761u %
+                                  2001u) /
+                                  1000.0f
+                        : 0.0f;
+                const auto start =
+                        g_death_animation_start_seconds
+                                .emplace(
+                                        entity.id,
+                                        g_animation_elapsed_seconds +
+                                                bridge_death_delay_seconds)
+                                .first;
+                animation_time_seconds =
+                        g_animation_elapsed_seconds - start->second;
+            }
         }
         // Nothing outside the camera rectangle reaches the screen, and
         // rebuilding its geometry every frame is what used to eat the frame
