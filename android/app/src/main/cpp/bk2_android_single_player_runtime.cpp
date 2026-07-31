@@ -6080,45 +6080,55 @@ bool AppendConvertedGeometry(
                         root_tilt_axis_y,
                         root_tilt_radians);
                 object.bone_matrices = matrices;
-                object.vertices.reserve(part.vertices.size());
-                for (size_t vertex_index = 0;
-                     vertex_index < part.vertices.size();
-                     ++vertex_index) {
-                    const ConvertedGeometryVertex& vertex =
-                            part.vertices[vertex_index];
-                    const ConvertedGeometrySkinWeights& skin =
-                            part.skin_weights[vertex_index];
-                    SkinnedVertex output;
-                    output.x = vertex.x;
-                    output.y = vertex.y;
-                    output.z = vertex.z;
-                    output.u = vertex.u;
-                    output.v = vertex.v;
-                    output.abgr =
-                            has_textures ? 0xffffffffu : abgr;
-                    output.nx = vertex.nx;
-                    output.ny = vertex.ny;
-                    output.nz = vertex.nz;
-                    for (size_t influence = 0;
-                         influence < kMaxSkinInfluences;
-                         ++influence) {
-                        const bool active =
-                                skin.weights[influence] > 0.0f &&
-                                skin.bones[influence] <
-                                        part.bones.size();
-                        output.bone_indices[influence] =
-                                active
-                                ? static_cast<uint8_t>(
-                                          skin.bones[influence])
-                                : 0;
-                        output.bone_weights[influence] =
-                                active
-                                ? skin.weights[influence]
-                                : 0.0f;
+                // The bind pose is immutable: only the bone palette and the
+                // world transform change per frame. Once the backend owns
+                // GPU buffers for this key, rebuilding and shipping the whole
+                // vertex array again is pure copying, and with a platoon of
+                // infantry on screen it was the largest item in the frame.
+                const bool bind_pose_uploaded =
+                        RenderBackend().has_skinned_geometry(
+                                object.geometry_key);
+                if (!bind_pose_uploaded) {
+                    object.vertices.reserve(part.vertices.size());
+                    for (size_t vertex_index = 0;
+                         vertex_index < part.vertices.size();
+                         ++vertex_index) {
+                        const ConvertedGeometryVertex& vertex =
+                                part.vertices[vertex_index];
+                        const ConvertedGeometrySkinWeights& skin =
+                                part.skin_weights[vertex_index];
+                        SkinnedVertex output;
+                        output.x = vertex.x;
+                        output.y = vertex.y;
+                        output.z = vertex.z;
+                        output.u = vertex.u;
+                        output.v = vertex.v;
+                        output.abgr =
+                                has_textures ? 0xffffffffu : abgr;
+                        output.nx = vertex.nx;
+                        output.ny = vertex.ny;
+                        output.nz = vertex.nz;
+                        for (size_t influence = 0;
+                             influence < kMaxSkinInfluences;
+                             ++influence) {
+                            const bool active =
+                                    skin.weights[influence] > 0.0f &&
+                                    skin.bones[influence] <
+                                            part.bones.size();
+                            output.bone_indices[influence] =
+                                    active
+                                    ? static_cast<uint8_t>(
+                                              skin.bones[influence])
+                                    : 0;
+                            output.bone_weights[influence] =
+                                    active
+                                    ? skin.weights[influence]
+                                    : 0.0f;
+                        }
+                        object.vertices.push_back(output);
                     }
-                    object.vertices.push_back(output);
+                    object.triangle_indices = part.triangle_indices;
                 }
-                object.triangle_indices = part.triangle_indices;
                 const auto append_layer =
                         [&](int material_index,
                             uint32_t first_index,
@@ -6179,14 +6189,16 @@ bool AppendConvertedGeometry(
                     }
                     material_base += material_count;
                 }
-                g_gpu_skinned_vertex_count += object.vertices.size();
+                // Counts the pose that reaches the GPU, which is the whole
+                // part whether or not this frame had to ship it again.
+                g_gpu_skinned_vertex_count += part.vertices.size();
                 ++g_gpu_skinned_part_count;
                 if (!g_gpu_skinning_logged) {
                     std::ostringstream report;
                     report << "gpu_skinning=active"
                            << "; geometry="
                            << binding.geometry_record_id
-                           << "; vertices=" << object.vertices.size()
+                           << "; vertices=" << part.vertices.size()
                            << "; bones=" << part.bones.size()
                            << "; frame=" << frame
                            << "; frames="
@@ -8155,6 +8167,16 @@ struct TickBudget {
     uint64_t legacy_micros = 0;
     uint64_t mesh_micros = 0;
     uint64_t water_micros = 0;
+    // The dynamic mesh refresh is the largest item in the frame, so it is
+    // broken down far enough to tell a rebuild cost from an upload cost.
+    uint64_t mesh_snapshot_micros = 0;
+    uint64_t mesh_build_micros = 0;
+    uint64_t mesh_entity_micros = 0;
+    uint64_t mesh_effect_micros = 0;
+    uint64_t mesh_fog_micros = 0;
+    uint64_t mesh_texture_micros = 0;
+    uint64_t mesh_upload_micros = 0;
+    uint64_t mesh_refreshes = 0;
     bool started = false;
 };
 
@@ -8185,6 +8207,21 @@ void ReportTickBudgetLocked(std::chrono::steady_clock::time_point now) {
            << (window_micros / 1000ull) << "ms"
            << "; legacy_ms=" << (g_tick_budget.legacy_micros / 1000ull)
            << "; mesh_ms=" << (g_tick_budget.mesh_micros / 1000ull)
+           << "; mesh_refreshes=" << g_tick_budget.mesh_refreshes
+           << "; mesh_snapshot_ms="
+           << (g_tick_budget.mesh_snapshot_micros / 1000ull)
+           << "; mesh_build_ms="
+           << (g_tick_budget.mesh_build_micros / 1000ull)
+           << "; mesh_entity_ms="
+           << (g_tick_budget.mesh_entity_micros / 1000ull)
+           << "; mesh_effect_ms="
+           << (g_tick_budget.mesh_effect_micros / 1000ull)
+           << "; mesh_fog_ms="
+           << (g_tick_budget.mesh_fog_micros / 1000ull)
+           << "; mesh_texture_ms="
+           << (g_tick_budget.mesh_texture_micros / 1000ull)
+           << "; mesh_upload_ms="
+           << (g_tick_budget.mesh_upload_micros / 1000ull)
            << "; water_ms=" << (g_tick_budget.water_micros / 1000ull)
            << "; static_verts=" << g_static_world_object_mesh.vertices.size()
            << "; dynamic_verts=" << g_world_object_mesh.vertices.size()
@@ -8370,6 +8407,7 @@ bool ReadShadowsDisabledOption() {
 }
 
 bool RefreshDynamicWorldMeshLocked(bool force) {
+    const auto refresh_started = std::chrono::steady_clock::now();
     g_shadows_disabled = ReadShadowsDisabledOption();
     const Bk2PresentationSnapshotInfo info =
             bk2_presentation_snapshot_info();
@@ -8397,8 +8435,12 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         g_active_attached_entity_effect_count == 0 &&
         destruction_effects.empty() &&
         g_active_destruction_effect_count == 0) {
+        g_tick_budget.mesh_snapshot_micros += ElapsedMicros(
+                refresh_started,
+                std::chrono::steady_clock::now());
         return true;
     }
+    ++g_tick_budget.mesh_refreshes;
     std::vector<Bk2PresentationEntity> entities(info.entity_count);
     if (!entities.empty()) {
         const size_t copied = bk2_presentation_copy_entities(
@@ -8412,6 +8454,10 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
             entities.resize(copied);
         }
     }
+
+    const auto snapshot_done = std::chrono::steady_clock::now();
+    g_tick_budget.mesh_snapshot_micros +=
+            ElapsedMicros(refresh_started, snapshot_done);
 
     WorldObjectMesh combined = g_animated_static_world_object_mesh;
     SkinnedWorldObjectMesh skinned;
@@ -8537,6 +8583,9 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
                 animation_time_seconds);
         ++g_dynamic_rendered_object_count;
     }
+    const auto entities_done = std::chrono::steady_clock::now();
+    g_tick_budget.mesh_entity_micros +=
+            ElapsedMicros(snapshot_done, entities_done);
     for (auto death = g_death_animation_start_seconds.begin();
          death != g_death_animation_start_seconds.end();) {
         if (visible_corpse_ids.find(death->first) ==
@@ -8625,6 +8674,9 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         PlatformRuntime::instance().log_info(
                 "destruction_effect_render=cleared");
     }
+    const auto effects_done = std::chrono::steady_clock::now();
+    g_tick_budget.mesh_effect_micros +=
+            ElapsedMicros(entities_done, effects_done);
     if (war_fog.width >= 2 &&
         war_fog.height >= 2 &&
         war_fog.visibility.size() ==
@@ -8712,6 +8764,9 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         }
         combined.layers.push_back(std::move(fog_layer));
     }
+    g_tick_budget.mesh_fog_micros += ElapsedMicros(
+            effects_done,
+            std::chrono::steady_clock::now());
     // Layers submit in creation order, and the bar layer is created by the
     // first unit drawn, so without this everything after it paints over the
     // bars it is meant to sit under.
@@ -8726,6 +8781,9 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
             break;
         }
     }
+    const auto build_done = std::chrono::steady_clock::now();
+    g_tick_budget.mesh_build_micros +=
+            ElapsedMicros(snapshot_done, build_done);
     g_world_object_mesh = std::move(combined);
     g_skinned_world_object_mesh = std::move(skinned);
     RefreshWorldObjectTextureHandles(&g_world_object_mesh);
@@ -8736,10 +8794,19 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
                     ModelTextureHandle(layer.texture_path);
         }
     }
+    const auto texture_done = std::chrono::steady_clock::now();
+    g_tick_budget.mesh_texture_micros +=
+            ElapsedMicros(build_done, texture_done);
     g_rendered_presentation_generation = info.generation;
     g_rendered_war_fog_generation = war_fog.generation;
+    const auto account_upload = [&]() {
+        g_tick_budget.mesh_upload_micros += ElapsedMicros(
+                texture_done,
+                std::chrono::steady_clock::now());
+    };
     if (!RenderBackend().set_skinned_world_object_mesh(
                 g_skinned_world_object_mesh)) {
+        account_upload();
         return false;
     }
     if (g_world_object_mesh.vertices.empty() ||
@@ -8749,9 +8816,13 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         // camera/fog bounds. An empty dynamic mesh is valid; static objects
         // are uploaded separately and a later presentation generation will
         // populate this buffer when an entity becomes visible.
+        account_upload();
         return true;
     }
-    return RenderBackend().set_world_object_mesh(g_world_object_mesh);
+    const bool uploaded =
+            RenderBackend().set_world_object_mesh(g_world_object_mesh);
+    account_upload();
+    return uploaded;
 }
 
 float CameraDegreesToRadians(float degrees) {

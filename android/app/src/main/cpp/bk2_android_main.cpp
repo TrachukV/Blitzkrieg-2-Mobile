@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <string>
 
 namespace {
@@ -106,6 +107,70 @@ struct TouchCameraState {
 TouchCameraState g_touch_camera;
 
 bool g_menu_input_active = false;
+
+// The presentation path already blocks on vsync inside bgfx::frame(). The
+// shell used to sleep another fixed 16 ms after that, so a display-paced
+// 16.6 ms frame always missed the following vblank and the game ran at half
+// the panel rate. Pace against a real 60 Hz budget instead and give back only
+// the part of the budget the frame did not use.
+constexpr uint64_t kTargetFrameMicros = 16667;
+// Nothing is being presented while the app is backgrounded, so the loop only
+// has to stay responsive to lifecycle commands.
+constexpr uint64_t kIdleFrameMicros = 33333;
+
+struct FramePacer {
+    uint64_t window_start_micros = 0;
+    uint64_t window_busy_micros = 0;
+    uint64_t worst_frame_micros = 0;
+    uint32_t frames = 0;
+};
+
+FramePacer g_frame_pacer;
+
+// Sleeps out the remainder of the frame budget and reports the achieved rate
+// once a second so the 60 fps target is measurable from logcat.
+void PaceFrame(uint64_t frame_start_micros, bool presenting) {
+    auto& platform = bk2::android::PlatformRuntime::instance();
+    const uint64_t now_micros = platform.monotonic_micros();
+    const uint64_t busy_micros = now_micros - frame_start_micros;
+    const uint64_t budget_micros =
+            presenting ? kTargetFrameMicros : kIdleFrameMicros;
+    if (busy_micros < budget_micros) {
+        platform.sleep_micros(budget_micros - busy_micros);
+    }
+
+    if (!presenting) {
+        g_frame_pacer = FramePacer{};
+        return;
+    }
+    if (g_frame_pacer.window_start_micros == 0) {
+        g_frame_pacer.window_start_micros = frame_start_micros;
+    }
+    ++g_frame_pacer.frames;
+    g_frame_pacer.window_busy_micros += busy_micros;
+    g_frame_pacer.worst_frame_micros =
+            std::max(g_frame_pacer.worst_frame_micros, busy_micros);
+    const uint64_t window_micros =
+            platform.monotonic_micros() - g_frame_pacer.window_start_micros;
+    if (window_micros < 1000000) {
+        return;
+    }
+    const double seconds = static_cast<double>(window_micros) / 1000000.0;
+    char report[192];
+    std::snprintf(
+            report,
+            sizeof(report),
+            "frame_pacing=measured; fps=%.1f; cpu_ms=%.2f; worst_ms=%.2f; "
+            "budget_ms=%.2f",
+            static_cast<double>(g_frame_pacer.frames) / seconds,
+            static_cast<double>(g_frame_pacer.window_busy_micros) /
+                    static_cast<double>(std::max(1u, g_frame_pacer.frames)) /
+                    1000.0,
+            static_cast<double>(g_frame_pacer.worst_frame_micros) / 1000.0,
+            static_cast<double>(kTargetFrameMicros) / 1000.0);
+    platform.log_info(report);
+    g_frame_pacer = FramePacer{};
+}
 
 void ResetTouchCameraState() {
     g_touch_camera = TouchCameraState{};
@@ -535,6 +600,7 @@ extern "C" void android_main(android_app* app) {
     uint64_t last_tick_millis = platform.monotonic_millis();
     const uint64_t runtime_start_millis = last_tick_millis;
     while (!app->destroyRequested) {
+        const uint64_t frame_start_micros = platform.monotonic_micros();
         android_poll_source* source = nullptr;
         int events = 0;
         while (ALooper_pollOnce(0, nullptr, &events, reinterpret_cast<void**>(&source)) >= 0) {
@@ -594,6 +660,9 @@ extern "C" void android_main(android_app* app) {
             }
         }
         bk2::android::AudioOutput().service();
+        const bool presenting = bk2::android::RenderBackend().is_ready() &&
+                platform.lifecycle_state() ==
+                        bk2::android::LifecycleState::Focused;
         if (bk2::android::RenderBackend().is_ready()) {
             // Without a selected mission the shell shows the original menu
             // screen instead of an empty battlefield.
@@ -613,7 +682,7 @@ extern "C" void android_main(android_app* app) {
             }
         }
 
-        platform.sleep_millis(16);
+        PaceFrame(frame_start_micros, presenting);
     }
 
     platform.log_info("Blitzkrieg 2 Android bootstrap stopped.");

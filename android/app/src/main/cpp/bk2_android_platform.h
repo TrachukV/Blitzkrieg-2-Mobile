@@ -23,7 +23,9 @@ public:
     LifecycleState lifecycle_state() const;
 
     uint64_t monotonic_millis() const;
+    uint64_t monotonic_micros() const;
     void sleep_millis(uint32_t millis) const;
+    void sleep_micros(uint64_t micros) const;
 
     void log_info(std::string_view message) const;
     void log_warn(std::string_view message) const;

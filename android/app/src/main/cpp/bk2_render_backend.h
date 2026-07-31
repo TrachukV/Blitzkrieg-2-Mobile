@@ -185,6 +185,10 @@ public:
             const WorldObjectMesh& mesh) = 0;
     virtual bool set_skinned_world_object_mesh(
             const SkinnedWorldObjectMesh& mesh) = 0;
+    // Bind-pose vertices and indices only have to travel to the backend once
+    // per geometry_key; after that the GPU buffers are reused and a snapshot
+    // can leave those arrays empty.
+    virtual bool has_skinned_geometry(uint64_t geometry_key) const = 0;
     virtual void clear_world_object_mesh() = 0;
     virtual void set_legacy_directional_light(
             const LegacyDirectionalLight& light) = 0;

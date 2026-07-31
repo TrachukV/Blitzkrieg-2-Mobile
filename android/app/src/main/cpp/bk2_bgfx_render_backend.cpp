@@ -628,6 +628,13 @@ public:
         return upload_skinned_world_object_mesh();
     }
 
+    bool has_skinned_geometry(uint64_t geometry_key) const override {
+        const auto found = skinned_geometry_buffers_.find(geometry_key);
+        return found != skinned_geometry_buffers_.end() &&
+                bgfx::isValid(found->second.vertex_buffer) &&
+                bgfx::isValid(found->second.index_buffer);
+    }
+
     void clear_world_object_mesh() override {
         world_object_mesh_ = WorldObjectMesh();
         static_world_object_mesh_ = WorldObjectMesh();
@@ -1017,8 +1024,6 @@ private:
         for (const SkinnedWorldObject& object :
              skinned_world_object_mesh_.objects) {
             if (object.geometry_key == 0 ||
-                object.vertices.empty() ||
-                object.triangle_indices.empty() ||
                 object.bone_matrices.empty() ||
                 object.bone_matrices.size() % 16 != 0 ||
                 object.bone_matrices.size() / 16 > kMaxGpuSkinBones) {
@@ -1032,6 +1037,17 @@ private:
                             object.triangle_indices.size());
             auto found =
                     skinned_geometry_buffers_.find(object.geometry_key);
+            // A snapshot omits the bind pose once this key has GPU buffers,
+            // so an empty array here means "reuse", not "empty geometry".
+            if (found != skinned_geometry_buffers_.end() &&
+                vertex_count == 0 &&
+                index_count == 0) {
+                continue;
+            }
+            if (vertex_count == 0 || index_count == 0) {
+                last_error_ = "invalid skinned world object";
+                return false;
+            }
             if (found != skinned_geometry_buffers_.end() &&
                 (found->second.vertex_count != vertex_count ||
                  found->second.index_count != index_count)) {
