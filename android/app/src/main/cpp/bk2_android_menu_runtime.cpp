@@ -2425,6 +2425,9 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
         {
             std::lock_guard<std::mutex> guard(g_menu_mutex);
             g_options_category = index;
+            // Another category is another list; it starts at its own top.
+            g_text_scroll_lines.erase("options_list");
+            g_text_scroll_pixels.erase("options_list");
             screen_ref = g_screen_ref;
         }
         std::lock_guard<std::mutex> guard(g_menu_mutex);
@@ -3886,13 +3889,37 @@ void PopulateOptionsScreenLocked() {
             "SliderTemplate",
             "MultichoiceTemplate",
             "EditNumberTemplate"};
-    float row_y = list->second.y + 12.0f;
+    // The shipped Video category alone carries more rows than the authored
+    // panel shows, and the desktop screen reaches the rest with its scroll
+    // bar. Collect the rows this category contributes first so the panel can
+    // be dragged through them.
+    std::vector<const NDb::SOptionSystem::SOptionsCategory::SOptionEntry*>
+            eligible;
     for (const NDb::SOptionSystem::SOptionsCategory::SOptionEntry& entry :
          category.options) {
         if (!(entry.nModeFlags & kOptionModeMask) ||
             IsDesktopOnlyOption(ToStdString(entry.szProgName))) {
             continue;
         }
+        eligible.push_back(&entry);
+    }
+    constexpr const char* kOptionScrollKey = "options_list";
+    size_t drawn_rows = 0;
+    float drawn_row_height = 0.0f;
+    size_t first_row = 0;
+    if (!eligible.empty()) {
+        first_row = static_cast<size_t>(std::max(
+                0, ScrollLinesFor(kOptionScrollKey)));
+        if (first_row >= eligible.size()) {
+            first_row = eligible.size() - 1;
+        }
+    }
+    float row_y = list->second.y + 12.0f;
+    for (size_t entry_index = first_row;
+         entry_index < eligible.size();
+         ++entry_index) {
+        const NDb::SOptionSystem::SOptionsCategory::SOptionEntry& entry =
+                *eligible[entry_index];
         const size_t editor = static_cast<size_t>(entry.eEditorType);
         const std::map<std::string, MenuTemplate>::const_iterator row =
                 g_templates.find(
@@ -4010,7 +4037,23 @@ void PopulateOptionsScreenLocked() {
         ++g_button_count;
         g_nodes.push_back(node);
 
+        ++drawn_rows;
+        drawn_row_height = row_height + 4.0f;
         row_y += row_height + 4.0f;
+    }
+
+    if (eligible.size() > drawn_rows && drawn_row_height > 0.0f) {
+        ScrollableTextRegion region;
+        region.key = kOptionScrollKey;
+        region.x = list->second.x;
+        region.y = list->second.y;
+        region.width = list->second.width;
+        region.height = list->second.height;
+        region.line_height = drawn_row_height;
+        region.total_lines = static_cast<int>(eligible.size());
+        region.visible_lines = static_cast<int>(drawn_rows);
+        g_text_regions.push_back(region);
+        g_text_scroll_lines[kOptionScrollKey] = static_cast<int>(first_row);
     }
 }
 
