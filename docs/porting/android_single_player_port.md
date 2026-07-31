@@ -100,6 +100,21 @@ The projectile presentation path now consumes the original
 shell `SProjectile`, renders its converted model without a unit health bar or
 team tint, moves its attached exhaust descriptors with the AI placement, and
 removes it on the same lifecycle event as the desktop world.
+Destructible buildings are no longer baked into the immutable scenery mesh.
+The presentation bridge enumerates the live `CExistingObject` building set,
+preserves its unique AI id, placement, visibility, HP, and heading, and selects
+the same `whole` / `damaged01` / `damaged02` / `damaged03` / `destroyed`
+`SVisObj` that the desktop `ChooseVisObjForHP` path selects. The geometry index
+keys every damage-level visual by its exact resource path, so stage changes do
+not fall back to proxy boxes or overlap an undamaged static copy. Damage effects
+advance only when the building reaches a worse stage and reproduce the desktop
+smoke-point transform for every `SBuildingRPGStats::smokePoints` entry. A
+verified RUS3.1 run published 62 live buildings, three visible to the local
+party at startup, with zero geometry fallbacks. A non-key railroad house
+progressed from 100 to 60, 20, and 0 HP, rendered its final ruin, played the
+shipped building fatality audio, and selected
+`StHouseCrashPhase_ComplexEffect.xdb` followed by
+`StHouseCrashTotal_ComplexEffect.xdb`.
 The compiled animated-light intensity track is similarly represented by a
 short flash envelope rather than a full dynamic-light shader.
 The Android build packages the required 4.2 MiB original HUD subset and the TGA

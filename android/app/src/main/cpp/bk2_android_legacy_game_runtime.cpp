@@ -4,6 +4,7 @@
 #include "bk2_android_audio_backend.h"
 #include "bk2_android_audio_decode.h"
 #include "bk2_android_platform.h"
+#include "bk2_android_single_player_runtime.h"
 #include "bk2_presentation_internal.h"
 
 #include "GameX/stdafx.h"
@@ -16,8 +17,10 @@
 #include "AILogic/Guns.h"
 #include "AILogic/AIMap.h"
 #include "AILogic/AIUnit.h"
+#include "AILogic/LinkObject.h"
 #include "AILogic/NewUpdater.h"
 #include "AILogic/Soldier.h"
+#include "AILogic/StaticObject.h"
 #include "AILogic/Statistics.h"
 #include "AILogic/UnitStates.h"
 #include "AILogic/UnitGuns.h"
@@ -187,6 +190,12 @@ uint64_t g_projectile_created_count = 0;
 uint64_t g_projectile_rejected_count = 0;
 uint64_t g_projectile_removed_count = 0;
 uint64_t g_projectile_exploded_count = 0;
+std::unordered_map<int32_t, int> g_static_object_damage_stages;
+std::unordered_map<int32_t, int> g_static_object_effect_stages;
+uint64_t g_static_building_snapshot_count = 0;
+uint64_t g_static_building_rpg_update_count = 0;
+uint64_t g_static_building_effect_count = 0;
+bool g_static_building_snapshot_logged = false;
 AndroidWarFogSnapshot g_war_fog_snapshot;
 bool g_war_fog_first_update = true;
 enum LegacyMissionOutcomeValue {
@@ -473,11 +482,13 @@ uint64_t ProjectilePathHash(const NDb::SProjectile* projectile) {
             : ResourcePathHash(projectile->GetDBID().ToString().c_str());
 }
 
-int GeometryRecordId(const NDb::SHPObjectRPGStats* stats) {
-    if (stats == nullptr) {
-        return -1;
-    }
-    const NDb::SVisObj* visual = stats->pvisualObject.GetPtr();
+uint64_t VisualPathHash(const NDb::SVisObj* visual) {
+    return visual == nullptr
+            ? 0
+            : ResourcePathHash(visual->GetDBID().ToString().c_str());
+}
+
+int GeometryRecordId(const NDb::SVisObj* visual) {
     if (visual == nullptr) {
         return -1;
     }
@@ -502,12 +513,62 @@ int GeometryRecordId(const NDb::SHPObjectRPGStats* stats) {
     return model == nullptr ? -1 : model->pGeometry->GetRecordID();
 }
 
+int GeometryRecordId(const NDb::SHPObjectRPGStats* stats) {
+    return stats == nullptr
+            ? -1
+            : GeometryRecordId(stats->pvisualObject.GetPtr());
+}
+
 int GeometryRecordId(const NDb::SProjectile* projectile) {
     const NDb::SModel* model =
             projectile == nullptr ? nullptr : projectile->pModel.GetPtr();
     return model == nullptr || model->pGeometry.IsEmpty()
             ? -1
             : model->pGeometry->GetRecordID();
+}
+
+const NDb::SVisObj* VisualForHitPoints(
+        const NDb::SHPObjectRPGStats* stats,
+        float hit_points) {
+    if (stats == nullptr) {
+        return nullptr;
+    }
+    const float fraction =
+            stats->fMaxHP > 0.0f ? hit_points / stats->fMaxHP : 1.0f;
+    const NDb::SVisObj* visual = stats->pvisualObject.GetPtr();
+    float visual_fraction = 1.0f;
+    for (const NDb::SHPObjectRPGStats::SDamageLevel& level :
+         stats->damageLevels) {
+        if (level.fDamageHP >= fraction &&
+            visual_fraction > level.fDamageHP &&
+            level.pVisObj) {
+            visual_fraction = level.fDamageHP;
+            visual = level.pVisObj.GetPtr();
+        }
+    }
+    return visual;
+}
+
+int DamageStageForHitPoints(
+        const NDb::SHPObjectRPGStats* stats,
+        float hit_points) {
+    if (stats == nullptr) {
+        return -1;
+    }
+    const float fraction =
+            stats->fMaxHP > 0.0f ? hit_points / stats->fMaxHP : 1.0f;
+    int result = -1;
+    float result_fraction = 1.0f;
+    for (size_t index = 0; index < stats->damageLevels.size(); ++index) {
+        const NDb::SHPObjectRPGStats::SDamageLevel& level =
+                stats->damageLevels[index];
+        if (level.fDamageHP >= fraction &&
+            result_fraction > level.fDamageHP) {
+            result_fraction = level.fDamageHP;
+            result = static_cast<int>(index);
+        }
+    }
+    return result;
 }
 
 void SetStage(const char* stage) {
@@ -1258,6 +1319,98 @@ void CaptureDescriptorSceneEffect(
     }
 }
 
+int CaptureStaticBuildingRpgUpdate(
+        const SAINotifyRPGStats& update) {
+    CLinkObject* link =
+            CLinkObject::GetObjectByUniqueIdSafe(update.nObjUniqueID);
+    CExistingObject* object = dynamic_cast<CExistingObject*>(link);
+    const NDb::SBuildingRPGStats* stats =
+            object == nullptr
+            ? nullptr
+            : dynamic_cast<const NDb::SBuildingRPGStats*>(
+                      object->GetStats());
+    if (object == nullptr || stats == nullptr) {
+        return 0;
+    }
+
+    const int stage =
+            DamageStageForHitPoints(stats, update.fHitPoints);
+    const auto previous =
+            g_static_object_damage_stages.find(update.nObjUniqueID);
+    const auto previous_effect =
+            g_static_object_effect_stages.find(update.nObjUniqueID);
+    const bool stage_changed =
+            previous == g_static_object_damage_stages.end() ||
+            previous->second != stage;
+    // CMOBuilding keeps nOldModelStage at its highest reached value and starts
+    // it at zero, so the first damage model and repaired stages do not replay
+    // collapse effects.
+    const bool damage_advanced =
+            previous_effect != g_static_object_effect_stages.end() &&
+            stage > previous_effect->second;
+    g_static_object_damage_stages[update.nObjUniqueID] = stage;
+    if (damage_advanced) {
+        g_static_object_effect_stages[update.nObjUniqueID] = stage;
+    }
+    ++g_static_building_rpg_update_count;
+    const NDb::SComplexEffect* damage_effect = nullptr;
+    if (damage_advanced &&
+        stage >= 0 &&
+        static_cast<size_t>(stage) < stats->damageLevels.size()) {
+        damage_effect =
+                stats->damageLevels[stage]
+                        .pDamageEffectSmoke.GetPtr();
+        CVec3 building_position = object->GetCenter();
+        if (g_ai_logic != nullptr && g_ai_logic->GetHeights() != nullptr) {
+            building_position.z +=
+                    g_ai_logic->GetHeights()->GetVisZ(
+                            building_position.x,
+                            building_position.y);
+        }
+        const float heading =
+                static_cast<float>(object->GetDir()) *
+                6.28318530717958647692f / 65536.0f;
+        const float rotation_cos = std::cos(heading);
+        const float rotation_sin = std::sin(heading);
+        if (damage_effect != nullptr) {
+            for (const NDb::SBuildingRPGStats::SFirePoint& point :
+                 stats->smokePoints) {
+                const float local_x =
+                        point.vPos.y - stats->vOrigin.x;
+                const float local_y =
+                        point.vPos.x - stats->vOrigin.y;
+                CVec3 effect_position(
+                        building_position.x +
+                                rotation_cos * local_x -
+                                rotation_sin * local_y,
+                        building_position.y +
+                                rotation_sin * local_x +
+                                rotation_cos * local_y,
+                        building_position.z + point.vPos.z);
+                CaptureDescriptorSceneEffect(
+                        damage_effect,
+                        update.nObjUniqueID,
+                        effect_position);
+                ++g_static_building_effect_count;
+            }
+        }
+    }
+    if (stage_changed) {
+        PlatformRuntime::instance().log_info(
+                std::string("static_building_rpg_update=") +
+                std::to_string(update.nObjUniqueID) +
+                "; hp=" + std::to_string(update.fHitPoints) +
+                "; stage=" + std::to_string(stage) +
+                "; effect=" +
+                (damage_effect == nullptr
+                         ? "<none>"
+                         : damage_effect->GetDBID()
+                                   .ToString()
+                                   .c_str()));
+    }
+    return 1;
+}
+
 void CapturePresentationCorpse(
         int32_t unit_id,
         const CVec3& position,
@@ -1947,6 +2100,12 @@ void DrainLegacyClientUpdates() {
             CaptureProjectile(new_projectile->info);
             continue;
         }
+        SAIRPGUpdate* rpg_update =
+                dynamic_cast<SAIRPGUpdate*>(update.GetPtr());
+        if (rpg_update != nullptr &&
+            CaptureStaticBuildingRpgUpdate(rpg_update->info) != 0) {
+            continue;
+        }
         SAIPlacementUpdate* placement =
                 dynamic_cast<SAIPlacementUpdate*>(
                         update.GetPtr());
@@ -2122,6 +2281,104 @@ void DrainLegacyClientUpdates() {
     }
 }
 
+void AppendStaticBuildingEntities(
+        std::vector<Bk2PresentationEntity>* entities) {
+    g_static_building_snapshot_count = 0;
+    if (entities == nullptr ||
+        SLinkObjDataAutoMagic::pLinkObjData == nullptr) {
+        return;
+    }
+    const BYTE player_party = theDipl.GetMyParty();
+    uint64_t visible_count = 0;
+    for (const auto& entry :
+         SLinkObjDataAutoMagic::pLinkObjData->unitsID2object) {
+        CLinkObject* link = entry.second;
+        CExistingObject* object =
+                dynamic_cast<CExistingObject*>(link);
+        const NDb::SBuildingRPGStats* stats =
+                object == nullptr
+                ? nullptr
+                : dynamic_cast<const NDb::SBuildingRPGStats*>(
+                          object->GetStats());
+        if (object == nullptr || stats == nullptr) {
+            continue;
+        }
+        ++g_static_building_snapshot_count;
+        const int damage_stage =
+                DamageStageForHitPoints(
+                        stats,
+                        object->GetHitPoints());
+        g_static_object_damage_stages.emplace(
+                object->GetUniqueId(),
+                damage_stage);
+        g_static_object_effect_stages.emplace(
+                object->GetUniqueId(),
+                std::max(0, damage_stage));
+        if (!object->IsVisible(player_party)) {
+            continue;
+        }
+
+        const NDb::SVisObj* visual =
+                VisualForHitPoints(stats, object->GetHitPoints());
+        if (visual == nullptr) {
+            continue;
+        }
+        ++visible_count;
+        const bool base_visual =
+                visual == stats->pvisualObject.GetPtr();
+        CVec3 position = object->GetCenter();
+        if (g_ai_logic != nullptr && g_ai_logic->GetHeights() != nullptr) {
+            position.z +=
+                    g_ai_logic->GetHeights()->GetVisZ(
+                            position.x,
+                            position.y);
+        }
+        const int player = object->GetPlayer();
+        Bk2PresentationEntity entity{};
+        entity.id = object->GetUniqueId();
+        entity.player = player;
+        entity.flags =
+                BK2_PRESENTATION_ENTITY_STATIC_OBJECT |
+                (object->GetHitPoints() > 0.0f
+                         ? BK2_PRESENTATION_ENTITY_ALIVE
+                         : BK2_PRESENTATION_ENTITY_DEAD);
+        entity.x = AI2Vis(position.x);
+        entity.y = AI2Vis(position.y);
+        entity.z = AI2Vis(position.z);
+        entity.heading_radians =
+                static_cast<float>(object->GetDir()) *
+                6.28318530717958647692f / 65536.0f;
+        entity.hit_points = object->GetHitPoints();
+        entity.max_hit_points = stats->fMaxHP;
+        entity.rpg_stats_path_hash =
+                base_visual
+                ? StatsPathHash(stats)
+                : VisualPathHash(visual);
+        entity.rpg_stats_record_id =
+                base_visual
+                ? stats->GetRecordID()
+                : visual->GetRecordID();
+        entity.geometry_record_id = GeometryRecordId(visual);
+        entity.visual_scale = stats->fSelectionScale;
+        entity.relation =
+                player == theDipl.GetMyNumber()
+                ? BK2_PRESENTATION_RELATION_OWN
+                : (theDipl.GetNParty(player) == player_party
+                           ? BK2_PRESENTATION_RELATION_ALLY
+                           : BK2_PRESENTATION_RELATION_ENEMY);
+        entities->push_back(entity);
+    }
+    if (!g_static_building_snapshot_logged &&
+        g_static_building_snapshot_count != 0) {
+        g_static_building_snapshot_logged = true;
+        PlatformRuntime::instance().log_info(
+                std::string("static_building_presentation=active") +
+                "; total=" +
+                std::to_string(g_static_building_snapshot_count) +
+                "; visible=" + std::to_string(visible_count));
+    }
+}
+
 void PublishPresentationEntities() {
     std::vector<Bk2PresentationEntity> entities;
     entities.reserve(
@@ -2283,6 +2540,7 @@ void PublishPresentationEntities() {
     for (const auto& projectile : g_presentation_projectiles) {
         entities.push_back(projectile.second.entity);
     }
+    AppendStaticBuildingEntities(&entities);
     bk2::presentation::PublishEntities(std::move(entities));
 }
 
@@ -2532,6 +2790,12 @@ void ResetReportState() {
     g_projectile_rejected_count = 0;
     g_projectile_removed_count = 0;
     g_projectile_exploded_count = 0;
+    g_static_object_damage_stages.clear();
+    g_static_object_effect_stages.clear();
+    g_static_building_snapshot_count = 0;
+    g_static_building_rpg_update_count = 0;
+    g_static_building_effect_count = 0;
+    g_static_building_snapshot_logged = false;
     g_mission_outcome.store(kLegacyMissionRunning);
     g_pending_mission_outcome.store(kLegacyMissionRunning);
     g_stage = "not_started";
@@ -3688,6 +3952,84 @@ void HandleLegacyInputEvent(const char* event_name) {
                     "; forced_shell=" +
                     (projectile_gun == nullptr ? "false" : "true"));
         }
+    } else if (std::strcmp(
+                       event_name,
+                       "debug_damage_building") == 0) {
+        CAIUnit* attacker =
+                CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+        if (attacker == nullptr || !attacker->IsAlive()) {
+            for (CGlobalIter iter(0, ANY_PARTY);
+                 !iter.IsFinished();
+                 iter.Iterate()) {
+                CAIUnit* candidate = *iter;
+                if (candidate != nullptr &&
+                    candidate->IsAlive() &&
+                    candidate->GetPlayer() == 0) {
+                    attacker = candidate;
+                    break;
+                }
+            }
+        }
+        CExistingObject* target = nullptr;
+        const NDb::SBuildingRPGStats* target_stats = nullptr;
+        float best_distance_squared =
+                std::numeric_limits<float>::max();
+        if (attacker != nullptr &&
+            SLinkObjDataAutoMagic::pLinkObjData != nullptr) {
+            for (const auto& entry :
+                 SLinkObjDataAutoMagic::pLinkObjData->unitsID2object) {
+                CLinkObject* link = entry.second;
+                CExistingObject* object =
+                        dynamic_cast<CExistingObject*>(link);
+                const NDb::SBuildingRPGStats* stats =
+                        object == nullptr
+                        ? nullptr
+                        : dynamic_cast<
+                                  const NDb::SBuildingRPGStats*>(
+                                  object->GetStats());
+                if (object == nullptr ||
+                    stats == nullptr ||
+                    object->GetMinHP() > 0.0f ||
+                    !object->IsVisible(theDipl.GetMyParty()) ||
+                    object->GetHitPoints() <= 0.0f) {
+                    continue;
+                }
+                const CVec3& center = object->GetCenter();
+                const CVec3& source = attacker->GetCenter();
+                const float delta_x = center.x - source.x;
+                const float delta_y = center.y - source.y;
+                const float distance_squared =
+                        delta_x * delta_x + delta_y * delta_y;
+                if (distance_squared < best_distance_squared) {
+                    best_distance_squared = distance_squared;
+                    target = object;
+                    target_stats = stats;
+                }
+            }
+        }
+        if (target != nullptr && target_stats != nullptr) {
+            CenterSinglePlayerCamera(
+                    AI2Vis(target->GetCenter().x),
+                    AI2Vis(target->GetCenter().y));
+            const float before = target->GetHitPoints();
+            target->TakeDamage(
+                    target_stats->fMaxHP * 0.4f,
+                    true,
+                    attacker->GetPlayer(),
+                    attacker);
+            PlatformRuntime::instance().log_info(
+                    std::string("debug_damage_building=") +
+                    std::to_string(target->GetUniqueId()) +
+                    "; descriptor=" +
+                    target_stats->GetDBID().ToString().c_str() +
+                    "; hp_before=" + std::to_string(before) +
+                    "; hp_after=" +
+                    std::to_string(target->GetHitPoints()) +
+                    "; position=" +
+                    std::to_string(AI2Vis(target->GetCenter().x)) +
+                    "," +
+                    std::to_string(AI2Vis(target->GetCenter().y)));
+        }
     } else if (std::strcmp(event_name, "debug_combat_effect") == 0 &&
                g_selected_unit_id >= 0 &&
                g_attack_target_unit_id >= 0) {
@@ -3928,6 +4270,12 @@ void ShutdownLegacyGameRuntime() {
     g_projectile_rejected_count = 0;
     g_projectile_removed_count = 0;
     g_projectile_exploded_count = 0;
+    g_static_object_damage_stages.clear();
+    g_static_object_effect_stages.clear();
+    g_static_building_snapshot_count = 0;
+    g_static_building_rpg_update_count = 0;
+    g_static_building_effect_count = 0;
+    g_static_building_snapshot_logged = false;
     g_war_fog_snapshot = AndroidWarFogSnapshot();
     g_war_fog_first_update = true;
     g_combat_effects.clear();
@@ -4019,6 +4367,12 @@ std::string LegacyGameRuntimeReport() {
            << "; projectiles_exploded=" << g_projectile_exploded_count
            << "; active_projectiles="
            << g_presentation_projectiles.size()
+           << "; static_buildings="
+           << g_static_building_snapshot_count
+           << "; static_building_rpg_updates="
+           << g_static_building_rpg_update_count
+           << "; static_building_effects="
+           << g_static_building_effect_count
            << "; war_fog=" << g_war_fog_snapshot.width
            << "x" << g_war_fog_snapshot.height
            << "; war_fog_generation="

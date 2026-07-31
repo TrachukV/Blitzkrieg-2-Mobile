@@ -5092,6 +5092,19 @@ void AppendEntityModel(
                 ArgbToAbgr(0xffffe3a0u));
         return;
     }
+    if ((entity.flags & BK2_PRESENTATION_ENTITY_STATIC_OBJECT) != 0) {
+        AppendOrientedBox(
+                mesh,
+                entity.x,
+                entity.y,
+                entity.z,
+                2.5f,
+                2.5f,
+                3.5f,
+                entity.heading_radians,
+                ArgbToAbgr(0xff8d7960u));
+        return;
+    }
     if ((entity.flags & BK2_PRESENTATION_ENTITY_MECHANIZED) != 0) {
         AppendOrientedBox(
                 mesh,
@@ -5858,6 +5871,13 @@ void AppendMapObjects(
         if (dynamic_unit && !include_dynamic_units) {
             continue;
         }
+        // Buildings are destructible AI objects. Baking them into this
+        // immutable mesh made every damage-stage and destroyed-model update
+        // invisible. The legacy bridge publishes them after AI startup; the
+        // terrain, flora, roads, and minor scenery stay batched here.
+        if (type_id == NDb::SBuildingRPGStats::typeID) {
+            continue;
+        }
         const bool visible_gameplay_object =
                 dynamic_unit ||
                 type_id == NDb::SObjectRPGStats::typeID ||
@@ -6373,6 +6393,9 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         const bool projectile =
                 (entity.flags &
                  BK2_PRESENTATION_ENTITY_PROJECTILE) != 0;
+        const bool static_object =
+                (entity.flags &
+                 BK2_PRESENTATION_ENTITY_STATIC_OBJECT) != 0;
         if ((entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) == 0 && !dead) {
             continue;
         }
@@ -6435,7 +6458,7 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
                              : ArgbToAbgr(0xc8e1452du));
             ++g_active_unit_indicator_count;
         }
-        if (!dead && !projectile) {
+        if (!dead && !projectile && !static_object) {
             AppendUnitHealthBar(
                     &combined,
                     entity,
@@ -6447,7 +6470,7 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         AppendEntityModel(
                 &combined,
                 entity,
-                projectile
+                projectile || static_object
                         ? ArgbToAbgr(0xffffffffu)
                         : ObjectColor(entity.player, false),
                 animation_time_seconds);
@@ -8122,6 +8145,28 @@ bool CenterSinglePlayerCameraFromMinimap(
            << "; target=" << g_camera.target_x << ","
            << g_camera.target_y << "," << g_camera.target_z;
     PlatformRuntime::instance().log_info(report.str());
+    return true;
+}
+
+bool CenterSinglePlayerCamera(float world_x, float world_y) {
+    std::lock_guard<std::mutex> lock(g_runtime_mutex);
+    if (!g_ready ||
+        !std::isfinite(world_x) ||
+        !std::isfinite(world_y) ||
+        g_height_width < 2 ||
+        g_height_height < 2) {
+        return false;
+    }
+    const float maximum_x =
+            static_cast<float>(g_height_width - 1) * VIS_TILE_SIZE;
+    const float maximum_y =
+            static_cast<float>(g_height_height - 1) * VIS_TILE_SIZE;
+    g_camera.target_x = std::clamp(world_x, 0.0f, maximum_x);
+    g_camera.target_y = std::clamp(world_y, 0.0f, maximum_y);
+    g_camera.target_z = TerrainMeshHeightAtLocked(
+            g_camera.target_x,
+            g_camera.target_y);
+    ApplyCameraLocked();
     return true;
 }
 

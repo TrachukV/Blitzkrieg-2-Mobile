@@ -981,12 +981,16 @@ mission Lua, allowing campaign autosave and continuation to be tested without
 completing a full battle. Keyboard `L` toggles one live soldier between the
 original standing and prone states for animation validation. Keyboard `M`
 kills a visible mechanized unit through the same statistics/death path and is
-used to validate the destruction presentation. Keyboard `N` injects the
-reinforcement notification type so descriptor lookup, UTF-16 decoding, JNI
-polling, and five-second expiry can be checked independently of scenario
-timing. The original `CScripts::LandReinforcementFromMap` path remains active in
-the linked AI runtime; `GER3.3` has also produced the same notification from a
-real scenario call. All seven shortcuts are absent from release builds.
+used to validate the destruction presentation. Keyboard `R` forces one
+original projectile lifecycle, including its model, attached exhaust, hit
+effect, and removal. Keyboard `B` focuses and damages the nearest visible
+non-key building through `CBuilding::TakeDamage`, allowing every damage model,
+smoke-point effect, fatality sound, and final ruin to be checked. Keyboard `N`
+injects the reinforcement notification type so descriptor lookup, UTF-16
+decoding, JNI polling, and five-second expiry can be checked independently of
+scenario timing. The original `CScripts::LandReinforcementFromMap` path remains
+active in the linked AI runtime; `GER3.3` has also produced the same notification
+from a real scenario call. All nine shortcuts are absent from release builds.
 
 `Data/Weapons` is required runtime DB payload. Without it, mine descriptors keep
 an unresolved `pWeapon`; the original `CMineStaticObject::Detonate` path then
@@ -1223,6 +1227,23 @@ The attached exhaust and smoky-exhaust descriptors move with that model; an
 explicit projectile explosion selects the same shell hit-effect mapping used
 by the desktop client. Projectile entities do not receive unit health bars or
 player-color tint.
+
+Buildings now leave the immutable scenery batch and become live presentation
+entities backed by their original `CExistingObject` ids. Their visibility,
+placement, heading, HP, and alive/dead state come directly from the AI runtime.
+The renderer selects the same whole, damaged, and destroyed `SVisObj` as the
+desktop client, while `build_geometry_index.py` indexes every damage-level
+visual by its exact DB path. The undamaged baked copy is omitted, so the
+damaged model and final ruin cannot overlap it. Stage transitions reproduce
+the original building smoke-point transform and instantiate the stage's
+`pDamageEffectSmoke` recipe at every declared point; repair transitions do not
+replay destruction effects. On RUS3.1 the runtime published all 62 buildings,
+reported three visible to the local party at startup, and retained zero static
+or dynamic geometry fallbacks. A railroad house was driven through 100, 60,
+20, and 0 HP: Android displayed the shipped damage models and final ruin,
+selected `StHouseCrashPhase_ComplexEffect.xdb` and
+`StHouseCrashTotal_ComplexEffect.xdb`, and played the original building
+fatality sounds.
 
 The first model-shadow layer projects every converted Granny vertex along one
 sun direction, computes a convex ground hull, and submits that hull once through

@@ -738,6 +738,49 @@ def build_index(
                 geometry_scale,
                 alpha_modes,
             )
+        damage_levels = child(stats, "DamageLevels")
+        if damage_levels is not None:
+            for item in damage_levels:
+                vis = child(item, "VisObj")
+                if vis is None:
+                    continue
+                vis_path = reference_path(
+                    data_root,
+                    stats_path,
+                    vis.attrib.get("href", ""),
+                )
+                binding = (
+                    binding_from_vis_path(
+                        data_root,
+                        vis_path,
+                        converted_geometry_root,
+                    )
+                    if vis_path is not None
+                    else None
+                )
+                if binding is None or vis_path is None:
+                    continue
+                (
+                    geometry_record_id,
+                    material_quantities,
+                    textures,
+                    geometry_scale,
+                    alpha_modes,
+                ) = binding
+                # The runtime publishes a damaged building under the exact
+                # SVisObj path selected by ChooseVisObjForHP. Indexing that
+                # path independently lets one stats record switch between
+                # whole, damaged, and destroyed models without inventing an
+                # Android-only damage-stage numbering scheme.
+                visual_hash = fnv1a64(normalized_path(vis_path, data_root))
+                result[(visual_hash, -1)] = (
+                    int(record),
+                    geometry_record_id,
+                    material_quantities,
+                    textures,
+                    geometry_scale,
+                    alpha_modes,
+                )
         segments = child(stats, "segments")
         if segments is not None:
             for frame_index, item in enumerate(segments):
