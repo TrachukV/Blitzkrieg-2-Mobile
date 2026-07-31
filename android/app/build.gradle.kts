@@ -5,6 +5,8 @@ plugins {
 val generatedOriginalHudAssets =
     layout.buildDirectory.dir("generated/originalHudAssets")
 val originalHudRoot = rootProject.file("../Complete/UI")
+val originalChapterArrowRoot =
+    rootProject.file("../Versions/Current/Data/UI/chaptermap/arrows")
 val requiredOriginalHudFiles = listOf(
     originalHudRoot.resolve("Panels/MissionMain.tga"),
     originalHudRoot.resolve("MiniMap/foreground.tga"),
@@ -20,7 +22,11 @@ val requiredOriginalHudFiles = listOf(
     ),
     originalHudRoot.resolve(
         "New_mission/Panels2/ObjectivesBtn_002.tga"
-    )
+    ),
+    originalChapterArrowRoot.resolve("arrow_own.dds"),
+    originalChapterArrowRoot.resolve("arrow_enemy.dds"),
+    originalChapterArrowRoot.resolve("defence_own.dds"),
+    originalChapterArrowRoot.resolve("defence_enemy.dds")
 )
 val stageOriginalHudAssets by tasks.registering(Sync::class) {
     into(generatedOriginalHudAssets)
@@ -75,6 +81,15 @@ val stageOriginalHudAssets by tasks.registering(Sync::class) {
             "RedUnitBar.tga"
         )
         into("Complete/UI/Buttons/HitBars")
+    }
+    from(originalChapterArrowRoot) {
+        include(
+            "arrow_own.dds",
+            "arrow_enemy.dds",
+            "defence_own.dds",
+            "defence_enemy.dds"
+        )
+        into("UI/chaptermap/arrows")
     }
 }
 

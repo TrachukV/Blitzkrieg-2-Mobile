@@ -24,8 +24,10 @@ import android.widget.TextView;
 import com.google.androidgamesdk.GameActivity;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -37,6 +39,12 @@ public final class Blitzkrieg2Activity extends GameActivity {
     public static final String EXTRA_MISSION_ID = "com.nival.blitzkrieg2.MISSION_ID";
     public static final String EXTRA_SHOW_MENU = "com.nival.blitzkrieg2.SHOW_MENU";
     public static final String EXTRA_DIFFICULTY = "com.nival.blitzkrieg2.DIFFICULTY";
+    private static final String[] NATIVE_BUNDLED_ASSETS = {
+            "UI/chaptermap/arrows/arrow_own.dds",
+            "UI/chaptermap/arrows/arrow_enemy.dds",
+            "UI/chaptermap/arrows/defence_own.dds",
+            "UI/chaptermap/arrows/defence_enemy.dds"
+    };
     private final Handler outcomeHandler = new Handler(Looper.getMainLooper());
     private LinearLayout outcomePanel;
     private LinearLayout missionMenu;
@@ -149,6 +157,7 @@ public final class Blitzkrieg2Activity extends GameActivity {
         String externalFilesDir = getExternalFilesDir(null) == null
                 ? ""
                 : getExternalFilesDir(null).getAbsolutePath();
+        stageNativeBundledAssets(resolveDataRoot(externalFilesDir));
         NativeBridge.configurePaths(
                 getFilesDir().getAbsolutePath(),
                 getNoBackupFilesDir().getAbsolutePath(),
@@ -171,6 +180,71 @@ public final class Blitzkrieg2Activity extends GameActivity {
                         ViewGroup.LayoutParams.MATCH_PARENT));
         outcomePolling = true;
         outcomeHandler.post(outcomePoll);
+    }
+
+    private File resolveDataRoot(String externalFilesDir) {
+        File internal = new File(getFilesDir(), "DataAndroid");
+        if (isReadableDataRoot(internal)) {
+            return internal;
+        }
+        if (externalFilesDir != null && !externalFilesDir.isEmpty()) {
+            File external = new File(externalFilesDir, "DataAndroid");
+            if (isReadableDataRoot(external)) {
+                return external;
+            }
+        }
+        return internal;
+    }
+
+    private static boolean isReadableDataRoot(File root) {
+        return root != null &&
+                new File(root, "Data/types.xml").isFile() &&
+                new File(root, "Data/index.bin").isFile();
+    }
+
+    // The native VFS reads from DataAndroid/Data and cannot open APK assets
+    // directly. Copy only the exact bundled originals missing from the public
+    // sparse data set, preserving any full-data file already supplied by the
+    // player.
+    private void stageNativeBundledAssets(File dataRoot) {
+        if (dataRoot == null) {
+            return;
+        }
+        for (String assetPath : NATIVE_BUNDLED_ASSETS) {
+            File destination = new File(
+                    new File(dataRoot, "Data"),
+                    assetPath);
+            if (destination.isFile()) {
+                continue;
+            }
+            File parent = destination.getParentFile();
+            if (parent == null ||
+                    (!parent.isDirectory() && !parent.mkdirs())) {
+                continue;
+            }
+            File temporary = new File(
+                    parent,
+                    destination.getName() + ".tmp");
+            try (InputStream input = getAssets().open(assetPath);
+                 FileOutputStream output =
+                         new FileOutputStream(temporary)) {
+                byte[] buffer = new byte[16 * 1024];
+                while (true) {
+                    int count = input.read(buffer);
+                    if (count < 0) {
+                        break;
+                    }
+                    if (count > 0) {
+                        output.write(buffer, 0, count);
+                    }
+                }
+                if (!temporary.renameTo(destination)) {
+                    temporary.delete();
+                }
+            } catch (IOException ignored) {
+                temporary.delete();
+            }
+        }
     }
 
     @Override

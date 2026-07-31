@@ -38,6 +38,7 @@
 #include "libdb/Db.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <jni.h>
 #include <map>
@@ -76,7 +77,29 @@ struct MenuQuad {
     int texture = -1;
 };
 
+// Four-corner equivalent of CRectLayout's UI quad. Most menu art remains
+// axis-aligned MenuQuad geometry; chapter-map arrows need the original
+// rotated segment vertices.
+struct MenuTexturedQuad {
+    float x0 = 0.0f;
+    float y0 = 0.0f;
+    float x1 = 0.0f;
+    float y1 = 0.0f;
+    float x2 = 0.0f;
+    float y2 = 0.0f;
+    float x3 = 0.0f;
+    float y3 = 0.0f;
+    float u0 = 0.0f;
+    float v0 = 0.0f;
+    float u1 = 1.0f;
+    float v1 = 1.0f;
+    uint32_t argb = 0xffffffffu;
+    int texture = -1;
+};
+
 std::vector<MenuQuad> g_quads;
+std::vector<MenuTexturedQuad> g_textured_quads;
+size_t g_textured_quad_insert_index = static_cast<size_t>(-1);
 std::vector<MenuQuad> g_pressed_quads;
 int g_pressed_button = -1;
 std::vector<std::string> g_texture_paths;
@@ -3368,6 +3391,212 @@ void PopulateOptionsScreenLocked() {
     }
 }
 
+// CWindowPotentialLines::DrawArrows maps every road assigned to the selected
+// mission into a strip of rotated quads. The arrow texture is consumed exactly
+// once along the complete polyline, preserving its authored head and tail.
+void AppendChapterMapArrows(
+        const NDb::SChapter* chapter,
+        const NDb::SMapInfo* details,
+        const MenuTemplate& map_window,
+        float details_scale_x,
+        float details_scale_y) {
+    if (chapter == nullptr ||
+        details == nullptr ||
+        g_selected_mission < 0 ||
+        details_scale_x <= 0.0f ||
+        details_scale_y <= 0.0f) {
+        return;
+    }
+
+    constexpr const char* kArrowTexturePaths[] = {
+            "UI/chaptermap/arrows/arrow_own.dds",
+            "UI/chaptermap/arrows/arrow_enemy.dds",
+            "UI/chaptermap/arrows/defence_own.dds",
+            "UI/chaptermap/arrows/defence_enemy.dds",
+    };
+    constexpr float kArrowTextureWidths[] = {
+            64.0f, 64.0f, 128.0f, 128.0f};
+    constexpr float kArrowTextureHeights[] = {
+            128.0f, 128.0f, 256.0f, 256.0f};
+
+    size_t arrow_count = 0;
+    size_t segment_count = 0;
+    size_t dependent_count = 0;
+    size_t fallback_texture_count = 0;
+    for (const NDb::SVSOInstance& road : details->roads) {
+        if (road.nCMArrowMission != g_selected_mission ||
+            road.nCMArrowType < 0 ||
+            road.nCMArrowType >= 4 ||
+            road.points.size() < 2) {
+            continue;
+        }
+        const size_t texture_index =
+                static_cast<size_t>(road.nCMArrowType);
+        const NDb::STexture* texture_desc =
+                texture_index < chapter->arrowTextures.size()
+                        ? chapter->arrowTextures[texture_index].GetPtr()
+                        : nullptr;
+        const bool texture_descriptor_valid =
+                texture_desc != nullptr &&
+                !texture_desc->IsRefInvalid();
+        std::string texture_path;
+        if (texture_descriptor_valid) {
+            texture_path = TexturePath(texture_desc);
+        }
+        if (texture_path.empty()) {
+            // The public sparse source omits the four descriptor XDB files,
+            // so package their exact final DDS payloads directly.
+            texture_path = kArrowTexturePaths[texture_index];
+            ++fallback_texture_count;
+        }
+        const int texture = TextureIndex(texture_path);
+        if (texture < 0) {
+            continue;
+        }
+        const float texture_width =
+                texture_descriptor_valid && texture_desc->nWidth > 0
+                        ? static_cast<float>(texture_desc->nWidth)
+                        : kArrowTextureWidths[texture_index];
+        const float texture_height =
+                texture_descriptor_valid && texture_desc->nHeight > 0
+                        ? static_cast<float>(texture_desc->nHeight)
+                        : kArrowTextureHeights[texture_index];
+        const float texture_length = texture_height - 4.0f;
+        if (texture_width <= 1.5f || texture_length <= 0.5f) {
+            continue;
+        }
+
+        std::vector<float> segment_lengths(
+                road.points.size() - 1,
+                0.0f);
+        std::vector<float> point_x(road.points.size(), 0.0f);
+        std::vector<float> point_y(road.points.size(), 0.0f);
+        for (size_t point = 0; point < road.points.size(); ++point) {
+            // SChapterMapMenuHelper::Map2Screen swaps the map axes.
+            point_x[point] =
+                    road.points[point].vPos.y * details_scale_x;
+            point_y[point] =
+                    road.points[point].vPos.x * details_scale_y;
+        }
+        float arrow_length = 0.0f;
+        for (size_t segment = 0;
+             segment < segment_lengths.size();
+             ++segment) {
+            const float dx = point_x[segment + 1] - point_x[segment];
+            const float dy = point_y[segment + 1] - point_y[segment];
+            segment_lengths[segment] =
+                    std::sqrt(dx * dx + dy * dy);
+            arrow_length += segment_lengths[segment];
+        }
+        if (arrow_length <= 0.0001f) {
+            continue;
+        }
+
+        uint32_t argb = 0xffffffffu;
+        if (g_selected_mission == 0 &&
+            road.nCMArrowMission2 > 0 &&
+            (static_cast<size_t>(road.nCMArrowMission2) >=
+                     g_chapter_target_states.size() ||
+             g_chapter_target_states[
+                     static_cast<size_t>(road.nCMArrowMission2)] !=
+                     kChapterTargetCompleted)) {
+            argb = 0x40ffffffu;
+            ++dependent_count;
+        }
+
+        const float half_width =
+                road.points[0].fWidth / 8.0f;
+        if (half_width <= 0.0f) {
+            continue;
+        }
+        const float texture_scale = texture_length / arrow_length;
+        const float u0 = 0.5f / texture_width;
+        const float u1 = (texture_width - 1.5f) / texture_width;
+        float texture_y = 0.5f;
+        float positive_start_x = 0.0f;
+        float positive_start_y = 0.0f;
+        float negative_start_x = 0.0f;
+        float negative_start_y = 0.0f;
+        float positive_end_x = 0.0f;
+        float positive_end_y = 0.0f;
+        float negative_end_x = 0.0f;
+        float negative_end_y = 0.0f;
+        size_t arrow_segments = 0;
+        for (size_t segment = 0;
+             segment < segment_lengths.size();
+             ++segment) {
+            const float length = segment_lengths[segment];
+            if (length <= 0.0001f) {
+                continue;
+            }
+            const float dx = point_x[segment + 1] - point_x[segment];
+            const float dy = point_y[segment + 1] - point_y[segment];
+            const float perpendicular_x = (dy / length) * half_width;
+            const float perpendicular_y = (-dx / length) * half_width;
+            if (arrow_segments == 0) {
+                positive_start_x =
+                        point_x[segment] + perpendicular_x;
+                positive_start_y =
+                        point_y[segment] + perpendicular_y;
+                negative_start_x =
+                        point_x[segment] - perpendicular_x;
+                negative_start_y =
+                        point_y[segment] - perpendicular_y;
+            } else {
+                positive_start_x = positive_end_x;
+                positive_start_y = positive_end_y;
+                negative_start_x = negative_end_x;
+                negative_start_y = negative_end_y;
+            }
+            positive_end_x =
+                    point_x[segment + 1] + perpendicular_x;
+            positive_end_y =
+                    point_y[segment + 1] + perpendicular_y;
+            negative_end_x =
+                    point_x[segment + 1] - perpendicular_x;
+            negative_end_y =
+                    point_y[segment + 1] - perpendicular_y;
+
+            const float segment_texture_length =
+                    length * texture_scale;
+            MenuTexturedQuad quad;
+            quad.x0 = map_window.x + negative_start_x;
+            quad.y0 = map_window.y + negative_start_y;
+            quad.x1 = map_window.x + negative_end_x;
+            quad.y1 = map_window.y + negative_end_y;
+            quad.x2 = map_window.x + positive_end_x;
+            quad.y2 = map_window.y + positive_end_y;
+            quad.x3 = map_window.x + positive_start_x;
+            quad.y3 = map_window.y + positive_start_y;
+            quad.u0 = u0;
+            quad.v0 = std::min(texture_y, texture_length) /
+                    texture_height;
+            quad.u1 = u1;
+            quad.v1 = std::min(
+                              texture_y + segment_texture_length,
+                              texture_length) /
+                    texture_height;
+            quad.argb = argb;
+            quad.texture = texture;
+            g_textured_quads.push_back(quad);
+            texture_y += segment_texture_length;
+            ++arrow_segments;
+            ++segment_count;
+        }
+        if (arrow_segments > 0) {
+            ++arrow_count;
+        }
+    }
+
+    std::ostringstream report;
+    report << "original_menu_chapter_arrows=" << arrow_count
+           << "; segments=" << segment_count
+           << "; mission=" << g_selected_mission
+           << "; dependent=" << dependent_count
+           << "; fallback_textures=" << fallback_texture_count;
+    PlatformRuntime::instance().log_info(report.str());
+}
+
 // InitMissions clones a target button onto the chapter map for each mission
 // in the chapter's path. Position comes from the details map when the chapter
 // ships one, and from the mission's own PlaceOnChapterMap otherwise, which is
@@ -3401,6 +3630,13 @@ void PopulateChapterMapLocked() {
                         details->nNumPatchesY * AI_TILE_SIZE *
                         AI_TILES_IN_PATCH);
     }
+    g_textured_quad_insert_index = g_quads.size();
+    AppendChapterMapArrows(
+            chapter,
+            details,
+            map_window->second,
+            details_scale_x,
+            details_scale_y);
     size_t placed = 0;
     for (size_t index = 0; index < chapter->missionPath.size(); ++index) {
         const NDb::SMissionEnableInfo& mission = chapter->missionPath[index];
@@ -3890,6 +4126,8 @@ void PopulateMissionBriefingLocked() {
 bool RebuildMenuScreenLocked(const std::string& screen_ref) {
     g_nodes.clear();
     g_quads.clear();
+    g_textured_quads.clear();
+    g_textured_quad_insert_index = static_cast<size_t>(-1);
     g_texture_paths.clear();
     g_pressed_quads.clear();
     g_pressed_button = -1;
@@ -4046,8 +4284,46 @@ void RenderOriginalMenu(uint32_t screen_width, uint32_t screen_height) {
             ++submitted;
         }
     }
-    for (const MenuQuad& quad : g_quads) {
-        submit(quad);
+    const auto submit_textured_quads = [&]() {
+        for (const MenuTexturedQuad& quad : g_textured_quads) {
+            if (quad.texture < 0 ||
+                static_cast<size_t>(quad.texture) >=
+                        g_texture_handles.size()) {
+                continue;
+            }
+            const uint16_t handle = g_texture_handles[quad.texture];
+            if (handle == UINT16_MAX) {
+                continue;
+            }
+            RenderBackend().queue_textured_quad(
+                    quad.x0 * scale_x,
+                    quad.y0 * scale_y,
+                    quad.x1 * scale_x,
+                    quad.y1 * scale_y,
+                    quad.x2 * scale_x,
+                    quad.y2 * scale_y,
+                    quad.x3 * scale_x,
+                    quad.y3 * scale_y,
+                    handle,
+                    quad.u0,
+                    quad.v0,
+                    quad.u1,
+                    quad.v1,
+                    quad.argb);
+            ++submitted;
+        }
+    };
+    bool textured_quads_submitted = false;
+    for (size_t index = 0; index < g_quads.size(); ++index) {
+        if (!textured_quads_submitted &&
+            index == g_textured_quad_insert_index) {
+            submit_textured_quads();
+            textured_quads_submitted = true;
+        }
+        submit(g_quads[index]);
+    }
+    if (!textured_quads_submitted) {
+        submit_textured_quads();
     }
     // A held button repaints in its pushed presentation on top of the normal
     // one, which is what the desktop button state swap looks like.
@@ -4072,6 +4348,7 @@ void RenderOriginalMenu(uint32_t screen_width, uint32_t screen_height) {
         }
         report << "original_menu_render=ready"
                << "; quads=" << g_quads.size()
+               << "; textured_quads=" << g_textured_quads.size()
                << "; submitted=" << submitted
                << "; textures=" << ready_textures
                << "/" << g_texture_handles.size()
@@ -4178,6 +4455,8 @@ void ShutdownOriginalMenuRuntime() {
     StopMenuMusic();
     g_nodes.clear();
     g_quads.clear();
+    g_textured_quads.clear();
+    g_textured_quad_insert_index = static_cast<size_t>(-1);
     g_texture_paths.clear();
     g_texture_handles.clear();
     g_pressed_quads.clear();

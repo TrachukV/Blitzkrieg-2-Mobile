@@ -157,6 +157,21 @@ public:
             float u1,
             float v1,
             uint32_t argb) = 0;
+    virtual void queue_textured_quad(
+            float x0,
+            float y0,
+            float x1,
+            float y1,
+            float x2,
+            float y2,
+            float x3,
+            float y3,
+            uint16_t texture_handle,
+            float u0,
+            float v0,
+            float u1,
+            float v1,
+            uint32_t argb) = 0;
     virtual bool set_terrain_mesh(const TerrainMesh& mesh) = 0;
     virtual void clear_terrain_mesh() = 0;
     virtual bool set_water_mesh(const WaterMesh& mesh) = 0;

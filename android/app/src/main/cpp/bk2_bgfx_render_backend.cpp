@@ -73,11 +73,15 @@ struct SolidRect {
     uint32_t argb = 0xffffffffu;
 };
 
-struct TexturedRect {
-    float x = 0.0f;
-    float y = 0.0f;
-    float width = 0.0f;
-    float height = 0.0f;
+struct TexturedQuad {
+    float x0 = 0.0f;
+    float y0 = 0.0f;
+    float x1 = 0.0f;
+    float y1 = 0.0f;
+    float x2 = 0.0f;
+    float y2 = 0.0f;
+    float x3 = 0.0f;
+    float y3 = 0.0f;
     uint16_t texture_handle = UINT16_MAX;
     float u0 = 0.0f;
     float v0 = 0.0f;
@@ -494,18 +498,57 @@ public:
             texture_handle == UINT16_MAX) {
             return;
         }
-        TexturedRect rect;
-        rect.x = x;
-        rect.y = y;
-        rect.width = width;
-        rect.height = height;
-        rect.texture_handle = texture_handle;
-        rect.u0 = u0;
-        rect.v0 = v0;
-        rect.u1 = u1;
-        rect.v1 = v1;
-        rect.argb = argb;
-        textured_rect_queue_.push_back(rect);
+        queue_textured_quad(
+                x,
+                y,
+                x,
+                y + height,
+                x + width,
+                y + height,
+                x + width,
+                y,
+                texture_handle,
+                u0,
+                v0,
+                u1,
+                v1,
+                argb);
+    }
+
+    void queue_textured_quad(
+            float x0,
+            float y0,
+            float x1,
+            float y1,
+            float x2,
+            float y2,
+            float x3,
+            float y3,
+            uint16_t texture_handle,
+            float u0,
+            float v0,
+            float u1,
+            float v1,
+            uint32_t argb) override {
+        if (!ready_ || texture_handle == UINT16_MAX) {
+            return;
+        }
+        TexturedQuad quad;
+        quad.x0 = x0;
+        quad.y0 = y0;
+        quad.x1 = x1;
+        quad.y1 = y1;
+        quad.x2 = x2;
+        quad.y2 = y2;
+        quad.x3 = x3;
+        quad.y3 = y3;
+        quad.texture_handle = texture_handle;
+        quad.u0 = u0;
+        quad.v0 = v0;
+        quad.u1 = u1;
+        quad.v1 = v1;
+        quad.argb = argb;
+        textured_rect_queue_.push_back(quad);
     }
 
     bool set_terrain_mesh(const TerrainMesh& mesh) override {
@@ -1531,7 +1574,7 @@ private:
         }
 
         const uint16_t indices[6] = {0, 1, 2, 0, 2, 3};
-        for (const TexturedRect& rect : textured_rect_queue_) {
+        for (const TexturedQuad& quad : textured_rect_queue_) {
             bgfx::TransientVertexBuffer tvb;
             bgfx::TransientIndexBuffer tib;
             if (!bgfx::allocTransientBuffers(
@@ -1543,29 +1586,47 @@ private:
                 break;
             }
 
-            const float x0 =
-                    (rect.x / static_cast<float>(width_)) * 2.0f - 1.0f;
-            const float x1 =
-                    ((rect.x + rect.width) / static_cast<float>(width_)) *
-                            2.0f -
-                    1.0f;
-            const float y0 =
-                    1.0f - (rect.y / static_cast<float>(height_)) * 2.0f;
-            const float y1 =
-                    1.0f -
-                    ((rect.y + rect.height) / static_cast<float>(height_)) *
-                            2.0f;
-
-            const uint32_t abgr = ArgbToAbgr(rect.argb);
+            const auto screen_x = [&](float x) {
+                return (x / static_cast<float>(width_)) * 2.0f - 1.0f;
+            };
+            const auto screen_y = [&](float y) {
+                return 1.0f -
+                        (y / static_cast<float>(height_)) * 2.0f;
+            };
+            const uint32_t abgr = ArgbToAbgr(quad.argb);
             TexturedRectVertex* vertices =
                     reinterpret_cast<TexturedRectVertex*>(tvb.data);
-            vertices[0] = {x0, y0, 0.0f, rect.u0, rect.v0, abgr};
-            vertices[1] = {x0, y1, 0.0f, rect.u0, rect.v1, abgr};
-            vertices[2] = {x1, y1, 0.0f, rect.u1, rect.v1, abgr};
-            vertices[3] = {x1, y0, 0.0f, rect.u1, rect.v0, abgr};
+            vertices[0] = {
+                    screen_x(quad.x0),
+                    screen_y(quad.y0),
+                    0.0f,
+                    quad.u0,
+                    quad.v0,
+                    abgr};
+            vertices[1] = {
+                    screen_x(quad.x1),
+                    screen_y(quad.y1),
+                    0.0f,
+                    quad.u0,
+                    quad.v1,
+                    abgr};
+            vertices[2] = {
+                    screen_x(quad.x2),
+                    screen_y(quad.y2),
+                    0.0f,
+                    quad.u1,
+                    quad.v1,
+                    abgr};
+            vertices[3] = {
+                    screen_x(quad.x3),
+                    screen_y(quad.y3),
+                    0.0f,
+                    quad.u1,
+                    quad.v0,
+                    abgr};
             std::memcpy(tib.data, indices, sizeof(indices));
 
-            bgfx::TextureHandle texture = {rect.texture_handle};
+            bgfx::TextureHandle texture = {quad.texture_handle};
             bgfx::setViewTransform(kUiView, kIdentityMatrix, kIdentityMatrix);
             bgfx::setTransform(kIdentityMatrix);
             bgfx::setTexture(0, texture_sampler_, texture);
@@ -1646,7 +1707,7 @@ private:
     LegacyDirectionalLight legacy_terrain_light_;
     TerrainCamera terrain_camera_;
     std::vector<SolidRect> rect_queue_;
-    std::vector<TexturedRect> textured_rect_queue_;
+    std::vector<TexturedQuad> textured_rect_queue_;
     std::string renderer_name_;
     std::string last_error_;
 };

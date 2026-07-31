@@ -773,6 +773,23 @@ information state, but their Play button renders disabled and cannot emit a
 mission route. An enabled target opens the briefing for its exact
 `missionPath` index.
 
+The selected target now also drives the original
+`CWindowPotentialLines::DrawArrows` route layer. The runtime scans the chapter
+details map's `roads` for the selected `nCMArrowMission`, maps their authored
+points into the chapter-map rectangle, and emits joined rotated textured quads.
+UVs advance by each segment's share of the complete polyline length, so one
+arrow texture spans the whole route rather than repeating per segment. Roads
+with `nCMArrowMission2` retain the original `0x40ffffff` dependency alpha until
+that target is completed. The marker quads are submitted afterward and
+therefore remain above the arrows.
+
+The sparse source tree contains the final four arrow DDS files but not every
+descriptor that names them. The APK stages only those exact DDS files under
+`UI/chaptermap/arrows`; `Blitzkrieg2Activity` copies a missing fallback into
+the resolved writable `DataAndroid/Data` root without overwriting full game or
+player-supplied files. Native TGA staging is intentionally not used because it
+caused an ARM64 memory-pressure kill on the chapter-map frame.
+
 Chapter-map mission targets now enter the shipped
 `MissionBriefing_WindowScreen.xdb` instead of writing a launch request
 immediately. Its runtime binding follows `CInterfaceMissionBriefing`: the
@@ -800,6 +817,14 @@ final target changed it to the red forbidden-selected art, hid the enabled
 light, showed a disabled Play button, and produced no Play reaction. Selecting
 USA mission index 2 updated the name and two reward icons, then Play loaded
 `Scenario/Campaigns/USA/Chapter1/US1.2/MapInfo.xdb`.
+
+The arrow layer was then exercised on the same ARM64 GLES3 emulator. USA
+mission index 1 produced two routes / 36 textured segments; selecting mission
+index 2 rebuilt them as two routes / 33 segments with different endpoints and
+reward state. A clean Germany campaign selection produced its own two-route /
+36-segment chapter map. All four bundled DDS files were present in the APK and
+the writable data root, all referenced textures received valid GPU handles,
+and the native process remained alive.
 
 On the ARM64 emulator the main menu screen resolves 28 windows, 16 buttons, 20
 textures, and 17 captions, loads 4 shipped fonts, and submits 158 quads with
@@ -1595,10 +1620,11 @@ The mission briefing route, text binding, minimap, Back, and Play behavior are
 linked. The production campaign-selection route, cards, selection state,
 difficulty handoff, selected chapter-map transition, chapter mission
 availability, target-state art, selected-mission panel, reserve counts,
-reinforcement/reward icons, and locked-mission Play guard are linked. Campaign
+reinforcement/reward icons, selected-mission road arrows, dependency alpha,
+and locked-mission Play guard are linked. Campaign
 intro playback is still bypassed while most referenced Bink sources are
 unavailable. Touch scrolling for text longer than the authored viewport,
-chapter-map frontline arrows/transition effects and reinforcement detail
+chapter-map potential/frontline transition effects and reinforcement detail
 dialogs, and result rank/medal popups remain unfinished. The core Action
 Report and its reward rows are linked. Empty initial
 dynamic-world snapshots are now accepted as valid, and entity removals between

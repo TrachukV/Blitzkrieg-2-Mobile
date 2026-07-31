@@ -85,6 +85,15 @@ and enabled light for the selected target. Completed progress is consumed from
 the Android mission-runtime checkpoint when returning from an Action Report;
 a newly selected campaign starts from the chapter descriptor's original
 availability rules.
+Selecting a chapter-map target also restores the original road-arrow layer:
+the port reads the selected mission and dependency fields from the shipped
+chapter `roads`, converts every authored polyline into rotated textured
+segments, and consumes each arrow texture once across its full route just as
+`CWindowPotentialLines::DrawArrows` does. Main-mission dependency arrows use
+the original reduced alpha until their prerequisite target is completed. The
+four final arrow DDS files are bundled as a non-destructive fallback because
+their sparse-checkout XDB references are absent; external full-game data still
+takes precedence.
 The map renderer now includes general `SObjectRPGStats` records in addition to
 buildings, fences, entrenchments, squads, and mechanized units. This restores
 the original mission's vegetation and small props through their converted

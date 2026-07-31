@@ -708,10 +708,12 @@ state from `SMissionEnableInfo`, renders the shipped seven-state regular and
 final markers, binds the mission/reinforcement/reward panel, and prevents a
 locked target from emitting Play. ARM64 checks covered the five-target USA and
 Germany chapter-one maps, locked-final selection, and an exact USA mission
-index 2 briefing route. UI work still includes chapter-map frontline arrows and
-transition effects, reinforcement detail dialogs, rank/medal result popups,
-and replacement of temporary immediate-mode stubs with proper batching and
-render-target behavior.
+index 2 briefing route. Selected-mission road arrows now follow the shipped
+chapter `roads`, full-route UVs, arrow types, and dependency alpha; ARM64 checks
+covered USA mission indices 1 and 2 plus Germany mission index 1. UI work still
+includes chapter-map potential/frontline transition effects, reinforcement
+detail dialogs, rank/medal result popups, and replacement of temporary
+immediate-mode stubs with proper batching and render-target behavior.
 
 Mission startup also treats an empty initial dynamic-world mesh as valid:
 static scenery is uploaded separately and later presentation generations fill
