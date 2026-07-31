@@ -48,6 +48,7 @@
 #include <memory>
 #include <fstream>
 #include <functional>
+#include <set>
 #include <sstream>
 #include <vector>
 
@@ -102,6 +103,14 @@ struct MenuTexturedQuad {
 std::vector<MenuQuad> g_quads;
 std::vector<MenuTexturedQuad> g_textured_quads;
 size_t g_textured_quad_insert_index = static_cast<size_t>(-1);
+// A modal dialog is one branch of the authored screen graph, but the chapter
+// map appends its generated frontline, route arrows, and mission markers
+// after the whole tree has been walked. The modal's quad range is remembered
+// so it can be lifted back over that dynamic content, the way the desktop
+// draws a modal over the screen beneath it.
+std::string g_modal_quad_path;
+size_t g_modal_quad_begin = 0;
+size_t g_modal_quad_end = 0;
 CObj<NGfx::CTexture> g_chapter_potential_texture;
 std::vector<MenuQuad> g_pressed_quads;
 int g_pressed_button = -1;
@@ -131,6 +140,12 @@ std::map<std::string, bool> g_path_visibility_overrides;
 std::map<std::string, bool> g_path_enabled_overrides;
 std::map<std::string, size_t> g_path_button_state_overrides;
 std::map<std::string, std::string> g_caption_overrides;
+// A window whose descriptor carries no name inherits its parent's path, so
+// one path can resolve to several windows: the shipped composition dialog
+// pairs each label with a thin rule that shares the label's name. The
+// original binds text through one window handle, so a caption override stops
+// at the first window that resolves to its path.
+std::set<std::string> g_applied_caption_paths;
 std::map<std::string, float> g_progress_overrides;
 // IWindow::SetTexture equivalents: a controller swaps a window's art at
 // runtime, keyed by the window name the original looks it up by.
@@ -1304,6 +1319,22 @@ void CollectWindow(
         }
         node.path += node.name;
     }
+    // Closes over every exit from this call, including the child walk, so a
+    // modal branch reports the exact quad range it produced.
+    struct ModalQuadRangeScope {
+        bool active = false;
+        explicit ModalQuadRangeScope(const std::string& path) {
+            if (!g_modal_quad_path.empty() && path == g_modal_quad_path) {
+                active = true;
+                g_modal_quad_begin = g_quads.size();
+            }
+        }
+        ~ModalQuadRangeScope() {
+            if (active) {
+                g_modal_quad_end = g_quads.size();
+            }
+        }
+    } modal_quad_scope(node.path);
     node.type = WindowTypeName(window->GetTypeID());
     node.x = x;
     node.y = y;
@@ -1389,7 +1420,8 @@ void CollectWindow(
 
     const std::map<std::string, std::string>::const_iterator caption_override =
             g_caption_overrides.find(node.path);
-    if (caption_override != g_caption_overrides.end()) {
+    if (caption_override != g_caption_overrides.end() &&
+        g_applied_caption_paths.insert(node.path).second) {
         node.caption = caption_override->second;
     }
 
@@ -1428,6 +1460,23 @@ void CollectWindow(
                     TextureIndex(TexturePath(resolved_texture_override));
             if (minimap.texture >= 0) {
                 g_quads.push_back(minimap);
+            }
+        }
+        if (window->GetTypeID() ==
+                    NDb::SWindow3DControl::typeID &&
+            resolved_texture_override != nullptr) {
+            // The desktop dialog renders the selected DB model into this
+            // control. Until the menu has its own render target, keep the
+            // authored slot functional with that unit's shipped HUD icon.
+            MenuQuad preview;
+            preview.x = x;
+            preview.y = y;
+            preview.width = width;
+            preview.height = height;
+            preview.texture = TextureIndex(
+                    TexturePath(resolved_texture_override));
+            if (preview.texture >= 0) {
+                g_quads.push_back(preview);
             }
         }
         if (window->GetTypeID() == NDb::SWindowProgressBar::typeID) {
@@ -1586,6 +1635,19 @@ void CollectWindow(
     if (shared == nullptr) {
         return;
     }
+    // This chapter-map modal contains eight complete panel variants. Walking
+    // every hidden sibling exhausts the screen's legacy-node budget before
+    // the active composition panel is reached. The desktop window tree also
+    // stops at an invisible parent; preserve other screens' hidden template
+    // discovery until their runtime builders no longer depend on it.
+    if (!visible &&
+        node.path.compare(
+                0,
+                std::char_traits<char>::length(
+                        "ReinfDescriptionBackground"),
+                "ReinfDescriptionBackground") == 0) {
+        return;
+    }
     // CWindow keeps its children in a priority-sorted draw order and draws
     // background, then text, then children, and its foreground last.
     std::vector<const NDb::SWindow*> children;
@@ -1685,9 +1747,21 @@ bool g_chapter_frontline_animation_requested = false;
 int g_chapter_frontline_animation_mission = -1;
 int g_chapter_calls_available = 0;
 int g_chapter_calls_for_selected_mission = 0;
+std::map<int, const NDb::SReinforcement*>
+        g_chapter_reinforcements;
 bool g_chapter_roller_selection_requested = false;
 int g_chapter_roller_chapter_from = 0;
 int g_chapter_roller_mission_from = 0;
+
+enum class ChapterReinfDialogMode {
+    kNone,
+    kComposition,
+};
+
+ChapterReinfDialogMode g_chapter_reinf_dialog_mode =
+        ChapterReinfDialogMode::kNone;
+int g_chapter_reinf_dialog_type = -1;
+int g_chapter_reinf_dialog_unit = 0;
 
 // The original WindowPlayer widgets play this Bink strip at 30 fps. Android
 // stages an atlas derived losslessly from all 1,440 source frames so the
@@ -2029,6 +2103,8 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
             g_chapter_selection_campaign = -1;
             g_chapter_selection_chapter = -1;
             g_chapter_runtime_state_allowed = false;
+            g_chapter_reinf_dialog_mode =
+                    ChapterReinfDialogMode::kNone;
             std::ostringstream report;
             report << "original_menu_campaign=" << index;
             PlatformRuntime::instance().log_info(report.str());
@@ -2091,7 +2167,51 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
         g_chapter_selection_campaign = -1;
         g_chapter_selection_chapter = -1;
         g_chapter_runtime_state_allowed = false;
+        g_chapter_reinf_dialog_mode =
+                ChapterReinfDialogMode::kNone;
         return RunOriginalMenuReaction("chapter_map");
+    }
+    if (reaction.compare(
+                0,
+                23,
+                "show_reinf_composition_") == 0 &&
+        current_screen ==
+                "UI/Game/Menu/ChapterMap_WindowScreen.xdb") {
+        const int reinforcement_type =
+                std::atoi(reaction.c_str() + 23);
+        if (g_chapter_reinforcements.find(
+                    reinforcement_type) ==
+            g_chapter_reinforcements.end()) {
+            return false;
+        }
+        g_chapter_reinf_dialog_mode =
+                ChapterReinfDialogMode::kComposition;
+        g_chapter_reinf_dialog_type = reinforcement_type;
+        g_chapter_reinf_dialog_unit = 0;
+        return LoadOriginalMenuScreen(current_screen);
+    }
+    if (reaction == "close_reinf_composition" &&
+        current_screen ==
+                "UI/Game/Menu/ChapterMap_WindowScreen.xdb") {
+        g_chapter_reinf_dialog_mode =
+                ChapterReinfDialogMode::kNone;
+        return LoadOriginalMenuScreen(current_screen);
+    }
+    if (reaction.compare(
+                0,
+                30,
+                "select_reinf_composition_unit_") == 0 &&
+        current_screen ==
+                "UI/Game/Menu/ChapterMap_WindowScreen.xdb" &&
+        g_chapter_reinf_dialog_mode ==
+                ChapterReinfDialogMode::kComposition) {
+        const int unit_index =
+                std::atoi(reaction.c_str() + 30);
+        if (unit_index < 0 || unit_index >= 4) {
+            return false;
+        }
+        g_chapter_reinf_dialog_unit = unit_index;
+        return LoadOriginalMenuScreen(current_screen);
     }
     if (reaction.compare(0, 15, "select_mission_") == 0) {
         const int mission_index =
@@ -2115,6 +2235,8 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
                         g_chapter_calls_for_selected_mission);
         g_chapter_roller_mission_from =
                 std::max(0, g_chapter_calls_for_selected_mission);
+        g_chapter_reinf_dialog_mode =
+                ChapterReinfDialogMode::kNone;
         g_selected_mission = mission_index;
         return LoadOriginalMenuScreen(current_screen);
     }
@@ -2509,6 +2631,7 @@ void BindChapterReinforcement(
             "ChapterMapMain/ChapterMapRight/ReinforcementGrid/" +
             button_name;
     HideReinfButtonDetails(button_path);
+    g_path_enabled_overrides[button_path] = state == 2;
     if (state == 2) {
         g_path_button_state_overrides[button_path] = 0;
         g_path_visibility_overrides[button_path + "/Icon"] = true;
@@ -2531,6 +2654,227 @@ void BindChapterReinforcement(
     }
 }
 
+struct ChapterReinfDialogUnit {
+    const NDb::SHPObjectRPGStats* stats = nullptr;
+    int count = 0;
+};
+
+std::vector<ChapterReinfDialogUnit> ChapterReinfDialogUnits(
+        const NDb::SReinforcement* reinforcement) {
+    std::vector<ChapterReinfDialogUnit> units;
+    if (reinforcement == nullptr) {
+        return units;
+    }
+    for (const NDb::SReinforcementEntry& entry :
+         reinforcement->entries) {
+        const NDb::SHPObjectRPGStats* stats =
+                entry.pMechUnit
+                        ? static_cast<
+                                  const NDb::SHPObjectRPGStats*>(
+                                  entry.pMechUnit.GetPtr())
+                        : static_cast<
+                                  const NDb::SHPObjectRPGStats*>(
+                                  entry.pSquad.GetPtr());
+        if (stats == nullptr) {
+            continue;
+        }
+        std::vector<ChapterReinfDialogUnit>::iterator existing =
+                std::find_if(
+                        units.begin(),
+                        units.end(),
+                        [stats](const ChapterReinfDialogUnit& unit) {
+                            return unit.stats == stats;
+                        });
+        if (existing == units.end()) {
+            ChapterReinfDialogUnit unit;
+            unit.stats = stats;
+            unit.count = 1;
+            units.push_back(unit);
+        } else {
+            ++existing->count;
+        }
+    }
+    return units;
+}
+
+void HideChapterReinfDialogPanelsLocked() {
+    constexpr const char* kDialogRoot =
+            "ReinfDescriptionBackground";
+    const char* const panels[] = {
+            "ReinfDesc1Unit",
+            "ReinfDesc1Reinf",
+            "ReinfDescMultiReinf",
+            "ReinfDescUpgrade",
+            "UpgradePanel",
+            "CompositionPanel",
+            "MissionDesc",
+            "ChapterDesc",
+    };
+    for (const char* panel : panels) {
+        g_path_visibility_overrides[
+                std::string(kDialogRoot) + "/" + panel] = false;
+    }
+}
+
+void ApplyChapterReinfCompositionBindingsLocked() {
+    HideChapterReinfDialogPanelsLocked();
+    if (g_chapter_reinf_dialog_mode !=
+        ChapterReinfDialogMode::kComposition) {
+        return;
+    }
+    const std::map<
+            int,
+            const NDb::SReinforcement*>::const_iterator reinforcement_it =
+            g_chapter_reinforcements.find(
+                    g_chapter_reinf_dialog_type);
+    if (reinforcement_it == g_chapter_reinforcements.end() ||
+        reinforcement_it->second == nullptr) {
+        g_chapter_reinf_dialog_mode =
+                ChapterReinfDialogMode::kNone;
+        return;
+    }
+    const NDb::SReinforcement* reinforcement =
+            reinforcement_it->second;
+    const std::vector<ChapterReinfDialogUnit> units =
+            ChapterReinfDialogUnits(reinforcement);
+    if (units.empty()) {
+        g_chapter_reinf_dialog_unit = 0;
+    } else {
+        g_chapter_reinf_dialog_unit = std::clamp(
+                g_chapter_reinf_dialog_unit,
+                0,
+                static_cast<int>(
+                        std::min<size_t>(units.size(), 4) - 1));
+    }
+
+    constexpr const char* kDialogRoot =
+            "ReinfDescriptionBackground";
+    constexpr const char* kPanel =
+            "ReinfDescriptionBackground/CompositionPanel";
+    constexpr const char* kDescription =
+            "ReinfDescriptionBackground/CompositionPanel";
+    g_visibility_overrides[kDialogRoot] = true;
+    g_path_visibility_overrides[kPanel] = true;
+
+    g_caption_overrides[
+            std::string(kDescription) + "/ReinfNameView"] =
+            LoadUtf16Text(NormalizeResourcePath(
+                    ToStdString(
+                            reinforcement
+                                    ->szLocalizedNameFileRef)));
+    if (reinforcement->pIconTexture) {
+        g_path_texture_overrides[
+                std::string(kDescription) +
+                "/ReinfIcon"] =
+                reinforcement->pIconTexture.GetPtr();
+    }
+
+    constexpr size_t kCompositionSlots = 4;
+    for (size_t index = 0; index < kCompositionSlots; ++index) {
+        const std::string unit_path =
+                std::string(kDescription) + "/Unit" +
+                std::to_string(index + 1);
+        const std::string sub_panel =
+                unit_path;
+        const std::string unit_button =
+                sub_panel + "/UnitBtn";
+        const std::string appearance =
+                unit_button + "/UnitAppearance";
+        const std::string control =
+                sub_panel + "/3DControl";
+        const bool populated = index < units.size();
+        g_path_enabled_overrides[unit_button] = populated;
+        g_path_enabled_overrides[
+                sub_panel + "/UnitCountBtn"] = populated;
+        g_path_visibility_overrides[appearance] = populated;
+        g_path_visibility_overrides[control] = populated;
+        g_path_visibility_overrides[
+                sub_panel + "/UnitUnknown"] = false;
+        g_path_visibility_overrides[
+                sub_panel + "/UnitNone"] = !populated;
+        g_path_visibility_overrides[
+                sub_panel + "/UnitSelection"] =
+                populated &&
+                static_cast<int>(index) ==
+                        g_chapter_reinf_dialog_unit;
+        const bool show_count =
+                populated && units[index].count > 1;
+        g_path_visibility_overrides[
+                sub_panel + "/UnitCountBtn/UnitCount"] =
+                show_count;
+        if (!populated) {
+            continue;
+        }
+        const NDb::SHPObjectRPGStats* stats =
+                units[index].stats;
+        g_caption_overrides[
+                appearance + "/HPView"] =
+                std::to_string(static_cast<int>(
+                        std::round(std::max(
+                                0.0f,
+                                stats->fMaxHP))));
+        g_progress_overrides[appearance + "/HPBar"] = 1.0f;
+        g_caption_overrides[
+                sub_panel +
+                "/UnitCountBtn/UnitCount/UnitCountView"] =
+                show_count
+                        ? std::to_string(units[index].count)
+                        : std::string();
+        if (stats->pIconTexture) {
+            g_path_texture_overrides[control] =
+                    stats->pIconTexture.GetPtr();
+        }
+        const char* const armor_views[] = {
+                "ArmorFrontView",
+                "ArmorLeftView",
+                "ArmorRightView",
+                "ArmorTopView",
+                "ArmorBackView",
+        };
+        for (const char* armor_view : armor_views) {
+            g_path_visibility_overrides[
+                    control + "/" + armor_view] = false;
+        }
+    }
+
+    const std::string info =
+            std::string(kDescription);
+    for (int weapon = 1; weapon <= 4; ++weapon) {
+        g_path_visibility_overrides[
+                info + "/UnitWeapon" +
+                std::to_string(weapon)] = false;
+    }
+    g_path_visibility_overrides[
+            std::string(kDescription) +
+            "/UnitSupplyLabel"] = false;
+    g_path_visibility_overrides[
+            std::string(kDescription) +
+            "/UnitSupplyView"] = false;
+    if (!units.empty()) {
+        const NDb::SHPObjectRPGStats* selected =
+                units[static_cast<size_t>(
+                        g_chapter_reinf_dialog_unit)].stats;
+        g_caption_overrides[info + "/UnitName"] =
+                LoadUtf16Text(NormalizeResourcePath(
+                        ToStdString(
+                                selected
+                                        ->szLocalizedNameFileRef)));
+    } else {
+        g_caption_overrides[info + "/UnitName"] = std::string();
+    }
+
+    std::ostringstream report;
+    report << "original_menu_chapter_reinf_composition=ready"
+           << "; type=" << g_chapter_reinf_dialog_type
+           << "; reinforcement="
+           << ToStdString(reinforcement->GetDBID().ToString())
+           << "; entries=" << reinforcement->entries.size()
+           << "; unit_types=" << units.size()
+           << "; selected=" << g_chapter_reinf_dialog_unit
+           << "; preview=icon_fallback";
+    PlatformRuntime::instance().log_info(report.str());
+}
+
 void ApplyChapterMapBindingsLocked(const std::string& screen_ref) {
     if (screen_ref != "UI/Game/Menu/ChapterMap_WindowScreen.xdb") {
         return;
@@ -2547,6 +2891,7 @@ void ApplyChapterMapBindingsLocked(const std::string& screen_ref) {
     g_chapter_frontline_animation_mission = -1;
     g_chapter_roller_selection_requested = false;
     g_chapter_roller_transition = ChapterRollerTransition();
+    g_chapter_reinforcements.clear();
     const NDb::SGameRoot* root = NGameX::GetGameRoot();
     const NDb::SChapter* chapter = SelectedChapter();
     if (root == nullptr ||
@@ -2723,6 +3068,7 @@ void ApplyChapterMapBindingsLocked(const std::string& screen_ref) {
                     "ReinforcementGrid/" +
                     button_name;
             HideReinfButtonDetails(button_path);
+            g_path_enabled_overrides[button_path] = false;
             g_path_button_state_overrides[button_path] = 2;
         }
     }
@@ -2739,6 +3085,12 @@ void ApplyChapterMapBindingsLocked(const std::string& screen_ref) {
                     reinforcement_state.type,
                     reinforcement,
                     reinforcement_state.state);
+            if (reinforcement != nullptr &&
+                reinforcement_state.state == 2) {
+                g_chapter_reinforcements[
+                        reinforcement_state.type] =
+                        reinforcement;
+            }
         }
         g_chapter_calls_available = std::max(
                 0,
@@ -2756,6 +3108,9 @@ void ApplyChapterMapBindingsLocked(const std::string& screen_ref) {
                         static_cast<int>(reinforcement->eType),
                         reinforcement,
                         2);
+                g_chapter_reinforcements[
+                        static_cast<int>(reinforcement->eType)] =
+                        reinforcement;
             }
         }
         g_chapter_calls_available =
@@ -2843,6 +3198,8 @@ void ApplyChapterMapBindingsLocked(const std::string& screen_ref) {
             g_path_texture_overrides[button_path + "/Icon"] = texture;
         }
     }
+
+    ApplyChapterReinfCompositionBindingsLocked();
 
     std::ostringstream report;
     report << "original_menu_chapter_state="
@@ -2940,6 +3297,8 @@ bool LoadOriginalMissionBriefingScreen(int mission_index) {
             "MissionBriefing_WindowScreen.xdb";
     std::lock_guard<std::mutex> guard(g_menu_mutex);
     g_selected_mission = mission_index;
+    g_chapter_reinf_dialog_mode =
+            ChapterReinfDialogMode::kNone;
     g_visibility_overrides.clear();
     g_path_visibility_overrides.clear();
     g_path_enabled_overrides.clear();
@@ -2975,6 +3334,11 @@ bool LoadOriginalMissionBriefingScreen(int mission_index) {
 
 bool LoadOriginalMenuScreen(const std::string& screen_ref) {
     std::lock_guard<std::mutex> guard(g_menu_mutex);
+    if (screen_ref !=
+        "UI/Game/Menu/ChapterMap_WindowScreen.xdb") {
+        g_chapter_reinf_dialog_mode =
+                ChapterReinfDialogMode::kNone;
+    }
     g_visibility_overrides.clear();
     g_path_visibility_overrides.clear();
     g_path_enabled_overrides.clear();
@@ -5161,6 +5525,78 @@ void UpdateChapterRollerAnimationLocked() {
     g_chapter_roller_animation.reset();
 }
 
+void BindChapterReinfCompositionActionsLocked() {
+    size_t branch_actions = 0;
+    size_t unit_actions = 0;
+    for (MenuWindowNode& node : g_nodes) {
+        for (const auto& reinforcement :
+             g_chapter_reinforcements) {
+            const NDb::SReinfButton* button =
+                    ReinfButtonForType(reinforcement.first);
+            const std::string button_name =
+                    ReinfButtonName(button);
+            if (!button_name.empty() &&
+                node.path ==
+                        "ChapterMapMain/ChapterMapRight/"
+                        "ReinforcementGrid/" +
+                                button_name) {
+                node.action =
+                        "show_reinf_composition_" +
+                        std::to_string(reinforcement.first);
+                ++branch_actions;
+            }
+        }
+        if (node.button &&
+            node.path ==
+                    "ReinfDescriptionBackground/CompositionPanel") {
+            node.action = "close_reinf_composition";
+            continue;
+        }
+        if (!node.button ||
+            (node.name != "UnitBtn" &&
+             node.name != "UnitCountBtn")) {
+            continue;
+        }
+        constexpr const char* kUnitPrefix =
+                "ReinfDescriptionBackground/CompositionPanel/"
+                "Unit";
+        if (node.path.compare(
+                    0,
+                    std::char_traits<char>::length(kUnitPrefix),
+                    kUnitPrefix) != 0) {
+            continue;
+        }
+        const size_t digit_offset =
+                std::char_traits<char>::length(kUnitPrefix);
+        if (digit_offset >= node.path.size() ||
+            node.path[digit_offset] < '1' ||
+            node.path[digit_offset] > '4') {
+            continue;
+        }
+        if (node.path.find("/UnitBtn") ==
+                    std::string::npos &&
+            node.path.find("/UnitCountBtn") ==
+                    std::string::npos) {
+            continue;
+        }
+        node.action =
+                "select_reinf_composition_unit_" +
+                std::to_string(
+                        node.path[digit_offset] - '1');
+        ++unit_actions;
+    }
+    std::ostringstream report;
+    report << "original_menu_chapter_reinf_actions=ready"
+           << "; branches=" << branch_actions
+           << "; unit_buttons=" << unit_actions
+           << "; dialog="
+           << (g_chapter_reinf_dialog_mode ==
+                       ChapterReinfDialogMode::kComposition
+                       ? "composition"
+                       : "none");
+    PlatformRuntime::instance().log_info(report.str());
+}
+
 // InitMissions clones a target button onto the chapter map for each mission
 // in the chapter's path. Position comes from the details map when the chapter
 // ships one, and from the mission's own PlaceOnChapterMap otherwise, which is
@@ -5332,6 +5768,7 @@ void PopulateChapterMapLocked() {
     }
 
     AppendChapterRollers();
+    BindChapterReinfCompositionActionsLocked();
 
     std::ostringstream report;
     report << "original_menu_chapter_targets=" << placed
@@ -5645,11 +6082,41 @@ void PopulateMissionBriefingLocked() {
     PlatformRuntime::instance().log_info(report.str());
 }
 
+// Moves the modal branch behind nothing: the chapter map's generated layers
+// and mission markers are appended after the screen graph, so the dialog has
+// to be rotated back to the end of the draw list.
+void LiftModalQuadsLocked() {
+    if (g_modal_quad_end <= g_modal_quad_begin ||
+        g_modal_quad_end > g_quads.size() ||
+        g_modal_quad_end == g_quads.size()) {
+        return;
+    }
+    const size_t moved = g_modal_quad_end - g_modal_quad_begin;
+    std::rotate(
+            g_quads.begin() + static_cast<std::ptrdiff_t>(g_modal_quad_begin),
+            g_quads.begin() + static_cast<std::ptrdiff_t>(g_modal_quad_end),
+            g_quads.end());
+    if (g_textured_quad_insert_index != static_cast<size_t>(-1) &&
+        g_textured_quad_insert_index >= g_modal_quad_end) {
+        g_textured_quad_insert_index -= moved;
+    }
+    g_modal_quad_begin = g_quads.size() - moved;
+    g_modal_quad_end = g_quads.size();
+}
+
 bool RebuildMenuScreenLocked(const std::string& screen_ref) {
     g_nodes.clear();
     g_quads.clear();
     g_textured_quads.clear();
     g_textured_quad_insert_index = static_cast<size_t>(-1);
+    g_applied_caption_paths.clear();
+    g_modal_quad_path =
+            g_chapter_reinf_dialog_mode != ChapterReinfDialogMode::kNone &&
+                    screen_ref == "UI/Game/Menu/ChapterMap_WindowScreen.xdb"
+                    ? std::string("ReinfDescriptionBackground")
+                    : std::string();
+    g_modal_quad_begin = 0;
+    g_modal_quad_end = 0;
     g_chapter_potential_texture = nullptr;
     g_chapter_potential_animation.reset();
     g_chapter_roller_animation.reset();
@@ -5711,6 +6178,7 @@ bool RebuildMenuScreenLocked(const std::string& screen_ref) {
         "MissionBriefing_WindowScreen.xdb") {
         PopulateMissionBriefingLocked();
     }
+    LiftModalQuadsLocked();
     g_ready = g_nodes.size() > 1;
     if (!g_ready) {
         g_error = "empty_screen_graph";
@@ -5909,6 +6377,9 @@ int PickMenuButtonLocked(
             static_cast<float>(screen_height);
     // Later children draw on top, so the last match wins.
     int picked = -1;
+    const bool modal_reinforcement_dialog =
+            g_chapter_reinf_dialog_mode !=
+            ChapterReinfDialogMode::kNone;
     for (size_t index = 0; index < g_nodes.size(); ++index) {
         const MenuWindowNode& node = g_nodes[index];
         // A touch target is a button with an area. Requiring a pressed-state
@@ -5916,6 +6387,14 @@ int PickMenuButtonLocked(
         // row template draws no pressed art.
         if (!node.button || !node.visible || !node.enabled ||
             node.width <= 0.0f || node.height <= 0.0f) {
+            continue;
+        }
+        if (modal_reinforcement_dialog &&
+            node.path.compare(
+                    0,
+                    std::char_traits<char>::length(
+                            "ReinfDescriptionBackground"),
+                    "ReinfDescriptionBackground") != 0) {
             continue;
         }
         if (virtual_x >= node.x &&
@@ -5995,6 +6474,11 @@ void ShutdownOriginalMenuRuntime() {
     g_chapter_roller_animation.reset();
     g_chapter_roller_transition = ChapterRollerTransition();
     g_chapter_roller_selection_requested = false;
+    g_chapter_reinforcements.clear();
+    g_chapter_reinf_dialog_mode =
+            ChapterReinfDialogMode::kNone;
+    g_chapter_reinf_dialog_type = -1;
+    g_chapter_reinf_dialog_unit = 0;
     g_texture_paths.clear();
     g_texture_handles.clear();
     g_pressed_quads.clear();
