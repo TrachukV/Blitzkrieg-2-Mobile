@@ -81,7 +81,12 @@ death events also resolve their original `SComplexEffect` XDB descriptors,
 including emitter timing, texture sequences, scale, speed, and alpha/additive
 blend mode. Descriptor light instances add a short original-texture additive
 ground flash; the old fixed fire/smoke recipe is retained only as a fallback
-for content without a usable descriptor. Static objects and live units now cast
+for content without a usable descriptor. Destructible buildings, bridge spans,
+and connected fence sections are published from their live legacy AI objects
+instead of immutable scenery. Their shipped damaged/destroyed models follow
+the original HP or frame state; breaking a fence also switches both connected
+neighbors to the original left/right damaged visuals. Static objects and live
+units now cast
 translucent projected silhouettes
 derived from their actual converted Granny vertices; animated infantry shadows
 follow the current frame instead of using fixed circles. The battlefield camera

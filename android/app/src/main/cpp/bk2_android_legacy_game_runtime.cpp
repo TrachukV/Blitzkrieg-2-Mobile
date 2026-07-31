@@ -13,6 +13,7 @@
 #include "AILogic/B2AI.h"
 #include "AILogic/Bridge.h"
 #include "AILogic/CreateAI.h"
+#include "AILogic/Fence.h"
 #include "AILogic/GlobeUpdater.h"
 #include "AILogic/GroupLogic.h"
 #include "AILogic/Guns.h"
@@ -204,6 +205,8 @@ uint64_t g_bridge_effect_count = 0;
 bool g_bridge_snapshot_logged = false;
 std::unordered_map<int32_t, bool> g_bridge_alive_state;
 std::unordered_set<int32_t> g_bridge_instant_death;
+uint64_t g_fence_snapshot_count = 0;
+bool g_fence_snapshot_logged = false;
 AndroidWarFogSnapshot g_war_fog_snapshot;
 bool g_war_fog_first_update = true;
 enum LegacyMissionOutcomeValue {
@@ -2652,6 +2655,112 @@ void AppendBridgeEntities(std::vector<Bk2PresentationEntity>* entities) {
     }
 }
 
+void AppendFenceEntities(std::vector<Bk2PresentationEntity>* entities) {
+    g_fence_snapshot_count = 0;
+    if (entities == nullptr ||
+        SLinkObjDataAutoMagic::pLinkObjData == nullptr) {
+        return;
+    }
+    const BYTE player_party = theDipl.GetMyParty();
+    uint64_t visible_count = 0;
+    uint64_t safe_count = 0;
+    uint64_t left_damage_count = 0;
+    uint64_t right_damage_count = 0;
+    uint64_t destroyed_count = 0;
+    for (const auto& entry :
+         SLinkObjDataAutoMagic::pLinkObjData->unitsID2object) {
+        CLinkObject* link = entry.second;
+        CFence* fence = dynamic_cast<CFence*>(link);
+        const NDb::SFenceRPGStats* stats =
+                fence == nullptr
+                ? nullptr
+                : dynamic_cast<const NDb::SFenceRPGStats*>(
+                          fence->GetStats());
+        if (fence == nullptr || stats == nullptr) {
+            continue;
+        }
+        ++g_fence_snapshot_count;
+        if (!fence->IsVisible(player_party)) {
+            continue;
+        }
+        const int frame_index = fence->GetFrameIndex();
+        const NDb::SVisObj* visual =
+                stats->GetVisObjByFrameIndex(frame_index);
+        if (visual == nullptr) {
+            continue;
+        }
+        const NDb::SFenceRPGStats::ETypesOfLife life_type =
+                stats->GetDamageTypeByFrameIndex(frame_index);
+        const bool destroyed =
+                life_type == NDb::SFenceRPGStats::ETOL_DESTROYED;
+        ++visible_count;
+        switch (life_type) {
+            case NDb::SFenceRPGStats::ETOL_SAFE:
+                ++safe_count;
+                break;
+            case NDb::SFenceRPGStats::ETOL_LEFT:
+                ++left_damage_count;
+                break;
+            case NDb::SFenceRPGStats::ETOL_RIGHT:
+                ++right_damage_count;
+                break;
+            case NDb::SFenceRPGStats::ETOL_DESTROYED:
+                ++destroyed_count;
+                break;
+        }
+        CVec3 position = fence->GetCenter();
+        if (g_ai_logic != nullptr && g_ai_logic->GetHeights() != nullptr) {
+            position.z +=
+                    g_ai_logic->GetHeights()->GetVisZ(
+                            position.x,
+                            position.y);
+        }
+        const int player = fence->GetPlayer();
+        Bk2PresentationEntity entity{};
+        entity.id = fence->GetUniqueId();
+        entity.player = player;
+        entity.flags =
+                BK2_PRESENTATION_ENTITY_STATIC_OBJECT |
+                (destroyed
+                         ? BK2_PRESENTATION_ENTITY_DEAD
+                         : BK2_PRESENTATION_ENTITY_ALIVE);
+        entity.x = AI2Vis(position.x);
+        entity.y = AI2Vis(position.y);
+        entity.z = AI2Vis(position.z);
+        entity.heading_radians =
+                static_cast<float>(fence->GetDir()) *
+                6.28318530717958647692f / 65536.0f;
+        entity.hit_points =
+                destroyed ? 0.0f : fence->GetHitPoints();
+        entity.max_hit_points = stats->fMaxHP;
+        entity.rpg_stats_path_hash = VisualPathHash(visual);
+        entity.rpg_stats_record_id = visual->GetRecordID();
+        entity.geometry_record_id = GeometryRecordId(visual);
+        entity.visual_scale = stats->fSelectionScale;
+        entity.relation =
+                player == theDipl.GetMyNumber()
+                ? BK2_PRESENTATION_RELATION_OWN
+                : (theDipl.GetNParty(player) == player_party
+                           ? BK2_PRESENTATION_RELATION_ALLY
+                           : BK2_PRESENTATION_RELATION_ENEMY);
+        entities->push_back(entity);
+    }
+    if (!g_fence_snapshot_logged && g_fence_snapshot_count != 0) {
+        g_fence_snapshot_logged = true;
+        PlatformRuntime::instance().log_info(
+                std::string("fence_presentation=active") +
+                "; total=" + std::to_string(g_fence_snapshot_count) +
+                "; visible=" + std::to_string(visible_count) +
+                "; safe=" + std::to_string(safe_count) +
+                "; left_damage=" +
+                std::to_string(left_damage_count) +
+                "; right_damage=" +
+                std::to_string(right_damage_count) +
+                "; destroyed=" +
+                std::to_string(destroyed_count));
+    }
+}
+
 void PublishPresentationEntities() {
     std::vector<Bk2PresentationEntity> entities;
     entities.reserve(
@@ -2815,6 +2924,7 @@ void PublishPresentationEntities() {
     }
     AppendStaticBuildingEntities(&entities);
     AppendBridgeEntities(&entities);
+    AppendFenceEntities(&entities);
     bk2::presentation::PublishEntities(std::move(entities));
 }
 
@@ -3076,6 +3186,8 @@ void ResetReportState() {
     g_bridge_snapshot_logged = false;
     g_bridge_alive_state.clear();
     g_bridge_instant_death.clear();
+    g_fence_snapshot_count = 0;
+    g_fence_snapshot_logged = false;
     g_mission_outcome.store(kLegacyMissionRunning);
     g_pending_mission_outcome.store(kLegacyMissionRunning);
     g_stage = "not_started";
@@ -4383,6 +4495,121 @@ void HandleLegacyInputEvent(const char* event_name) {
                     "," +
                     std::to_string(AI2Vis(target->GetCenter().y)));
         }
+    } else if (std::strcmp(
+                       event_name,
+                       "debug_destroy_fence") == 0) {
+        CAIUnit* attacker =
+                CAIUnit::GetUnitByUniqueID(g_selected_unit_id);
+        if (attacker == nullptr || !attacker->IsAlive()) {
+            for (CGlobalIter iter(0, ANY_PARTY);
+                 !iter.IsFinished();
+                 iter.Iterate()) {
+                CAIUnit* candidate = *iter;
+                if (candidate != nullptr &&
+                    candidate->IsAlive() &&
+                    candidate->GetPlayer() == 0) {
+                    attacker = candidate;
+                    break;
+                }
+            }
+        }
+        CFence* target = nullptr;
+        const NDb::SFenceRPGStats* target_stats = nullptr;
+        float best_distance_squared =
+                std::numeric_limits<float>::max();
+        std::unordered_map<int32_t, int> frame_before;
+        if (attacker != nullptr &&
+            SLinkObjDataAutoMagic::pLinkObjData != nullptr) {
+            for (const auto& entry :
+                 SLinkObjDataAutoMagic::pLinkObjData->unitsID2object) {
+                CLinkObject* link = entry.second;
+                CFence* fence = dynamic_cast<CFence*>(link);
+                const NDb::SFenceRPGStats* stats =
+                        fence == nullptr
+                        ? nullptr
+                        : dynamic_cast<const NDb::SFenceRPGStats*>(
+                                  fence->GetStats());
+                if (fence == nullptr || stats == nullptr) {
+                    continue;
+                }
+                frame_before[fence->GetUniqueId()] =
+                        fence->GetFrameIndex();
+                if (!fence->IsVisible(theDipl.GetMyParty()) ||
+                    stats->GetDamageTypeByFrameIndex(
+                            fence->GetFrameIndex()) ==
+                            NDb::SFenceRPGStats::ETOL_DESTROYED) {
+                    continue;
+                }
+                const CVec3& center = fence->GetCenter();
+                const CVec3& source = attacker->GetCenter();
+                const float delta_x = center.x - source.x;
+                const float delta_y = center.y - source.y;
+                const float distance_squared =
+                        delta_x * delta_x + delta_y * delta_y;
+                if (distance_squared < best_distance_squared) {
+                    best_distance_squared = distance_squared;
+                    target = fence;
+                    target_stats = stats;
+                }
+            }
+        }
+        if (target != nullptr && target_stats != nullptr) {
+            CenterSinglePlayerCamera(
+                    AI2Vis(target->GetCenter().x),
+                    AI2Vis(target->GetCenter().y));
+            const int target_id = target->GetUniqueId();
+            const int target_frame_before = target->GetFrameIndex();
+            target->Die(0.0f);
+            uint64_t changed_count = 0;
+            uint64_t partially_damaged_count = 0;
+            uint64_t destroyed_count = 0;
+            for (const auto& entry :
+                 SLinkObjDataAutoMagic::pLinkObjData->unitsID2object) {
+                CLinkObject* link = entry.second;
+                CFence* fence = dynamic_cast<CFence*>(link);
+                const NDb::SFenceRPGStats* stats =
+                        fence == nullptr
+                        ? nullptr
+                        : dynamic_cast<const NDb::SFenceRPGStats*>(
+                                  fence->GetStats());
+                if (fence == nullptr || stats == nullptr) {
+                    continue;
+                }
+                const auto previous =
+                        frame_before.find(fence->GetUniqueId());
+                if (previous == frame_before.end() ||
+                    previous->second == fence->GetFrameIndex()) {
+                    continue;
+                }
+                ++changed_count;
+                if (stats->GetDamageTypeByFrameIndex(
+                            fence->GetFrameIndex()) ==
+                    NDb::SFenceRPGStats::ETOL_DESTROYED) {
+                    ++destroyed_count;
+                } else {
+                    ++partially_damaged_count;
+                }
+            }
+            PlatformRuntime::instance().log_info(
+                    std::string("debug_destroy_fence=") +
+                    std::to_string(target_id) +
+                    "; descriptor=" +
+                    target_stats->GetDBID().ToString().c_str() +
+                    "; frame_before=" +
+                    std::to_string(target_frame_before) +
+                    "; frame_after=" +
+                    std::to_string(target->GetFrameIndex()) +
+                    "; changed=" +
+                    std::to_string(changed_count) +
+                    "; partial=" +
+                    std::to_string(partially_damaged_count) +
+                    "; destroyed=" +
+                    std::to_string(destroyed_count) +
+                    "; position=" +
+                    std::to_string(AI2Vis(target->GetCenter().x)) +
+                    "," +
+                    std::to_string(AI2Vis(target->GetCenter().y)));
+        }
     } else if (std::strcmp(event_name, "debug_combat_effect") == 0 &&
                g_selected_unit_id >= 0 &&
                g_attack_target_unit_id >= 0) {
@@ -4635,6 +4862,8 @@ void ShutdownLegacyGameRuntime() {
     g_bridge_snapshot_logged = false;
     g_bridge_alive_state.clear();
     g_bridge_instant_death.clear();
+    g_fence_snapshot_count = 0;
+    g_fence_snapshot_logged = false;
     g_war_fog_snapshot = AndroidWarFogSnapshot();
     g_war_fog_first_update = true;
     g_combat_effects.clear();

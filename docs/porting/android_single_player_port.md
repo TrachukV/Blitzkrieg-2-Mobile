@@ -135,6 +135,21 @@ geometry 373's death animation, and left the bridge destroyed. A second launch
 of `RUS3.1` loaded its three initially destroyed railway spans directly at
 geometry 509's final death frame. All bridge bindings resolved to converted
 geometry in both checks.
+Fence sections use the same live-object boundary instead of remaining baked
+into scenery. Android enumerates `CFence`, resolves its current
+`GetFrameIndex()` through `SFenceRPGStats::GetVisObjByFrameIndex`, and publishes
+the exact center, left-damaged, right-damaged, or destroyed visual selected by
+the legacy simulation. The geometry index keys each fence `SVisObj` by exact
+resource path, so a live frame transition does not require extending or
+duplicating the simulation state in the presentation API. Destroyed sections
+keep their original broken mesh and report zero HP; terrain Z, heading,
+diplomacy, and fog visibility remain simulation-driven.
+
+The RUS3.1 device check enumerated 618 fence sections and published 13 visible
+sections at mission start. Destroying one field-fence section through the
+original `CFence::Die`/`Delete` path changed its frame from 0 to 4 and changed
+both connected neighbors to partial-damage frames. The rendered result retained
+zero static and dynamic geometry fallback types.
 The compiled animated-light intensity track is similarly represented by a
 short flash envelope rather than a full dynamic-light shader.
 The Android build packages the required 4.2 MiB original HUD subset and the TGA

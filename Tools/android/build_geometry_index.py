@@ -954,6 +954,17 @@ def build_index(
                         geometry_scale,
                         alpha_modes,
                     ) = binding
+                    visual_hash = fnv1a64(
+                        normalized_path(vis_path, data_root)
+                    )
+                    result[(visual_hash, -1)] = (
+                        int(record),
+                        geometry_record_id,
+                        material_quantities,
+                        textures,
+                        geometry_scale,
+                        alpha_modes,
+                    )
                     result[(path_hash, fence_frame_index)] = (
                         int(record),
                         geometry_record_id,

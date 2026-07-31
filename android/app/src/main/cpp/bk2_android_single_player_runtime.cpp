@@ -5874,12 +5874,14 @@ void AppendMapObjects(
         if (dynamic_unit && !include_dynamic_units) {
             continue;
         }
-        // Buildings and bridge spans are destructible AI objects. Baking them
-        // into this immutable mesh made every damage-stage and destroyed-model
-        // update invisible. The legacy bridge publishes them after AI startup;
-        // terrain, flora, roads, and minor scenery stay batched here.
+        // Buildings, bridge spans, and fences are destructible AI objects.
+        // Baking them into this immutable mesh made every damage-stage and
+        // destroyed-model update invisible. The legacy bridge publishes them
+        // after AI startup; terrain, flora, roads, and minor scenery stay
+        // batched here.
         if (type_id == NDb::SBuildingRPGStats::typeID ||
-            type_id == NDb::SBridgeRPGStats::typeID) {
+            type_id == NDb::SBridgeRPGStats::typeID ||
+            type_id == NDb::SFenceRPGStats::typeID) {
             continue;
         }
         const bool visible_gameplay_object =

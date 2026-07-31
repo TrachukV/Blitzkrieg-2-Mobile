@@ -985,12 +985,16 @@ used to validate the destruction presentation. Keyboard `R` forces one
 original projectile lifecycle, including its model, attached exhaust, hit
 effect, and removal. Keyboard `B` focuses and damages the nearest visible
 non-key building through `CBuilding::TakeDamage`, allowing every damage model,
-smoke-point effect, fatality sound, and final ruin to be checked. Keyboard `N`
+smoke-point effect, fatality sound, and final ruin to be checked. Keyboard `G`
+focuses and destroys the nearest visible live bridge span. Keyboard `H`
+focuses and destroys the nearest visible intact fence section through the
+original `CFence::Die`/`Delete` path, including the resulting left/right damage
+on connected neighbors. Keyboard `N`
 injects the reinforcement notification type so descriptor lookup, UTF-16
 decoding, JNI polling, and five-second expiry can be checked independently of
 scenario timing. The original `CScripts::LandReinforcementFromMap` path remains
 active in the linked AI runtime; `GER3.3` has also produced the same notification
-from a real scenario call. All nine shortcuts are absent from release builds.
+from a real scenario call. All eleven shortcuts are absent from release builds.
 
 `Data/Weapons` is required runtime DB payload. Without it, mine descriptors keep
 an unresolved `pWeapon`; the original `CMineStaticObject::Detonate` path then
@@ -1152,7 +1156,8 @@ AI geometry is available, the converter uses the legacy `AI_TO_VIS` scale from
 `Vis2AI.h`. On USA 1.0 this replaces all 142 entrenchment proxies with the
 original segment meshes and materials. Fence frames follow the original
 `GetSegmentsByFrameIndex` order across center, both damaged, and destroyed
-segment lists; minor fence objects are now included in the presentation mesh.
+segment lists. Fence sections now use the live presentation path described
+below instead of remaining in the immutable presentation mesh.
 On GB3.1 this reduces converted-geometry fallbacks from 1,263 to 377, and on
 GER1.0 from 905 to 95. Bridge spans follow `CMOBridge::GetElement`: frame zero
 uses the end model and all other frames use the center model. The open content
@@ -1268,6 +1273,22 @@ through all five original `CBridgeSpan` objects and ran geometry 373's death
 animation without bridge binding fallbacks. `RUS3.1` starts with three visible
 destroyed railway spans; they load directly at the final pose of geometry 509
 instead of replaying their collapse when the mission opens.
+
+Fence sections now also leave the immutable scenery batch and are published
+from live `CFence` objects. Each snapshot resolves the exact frame through
+`SFenceRPGStats::GetVisObjByFrameIndex`, so the renderer follows the desktop
+center, left-damaged, right-damaged, and destroyed model ranges. Destroyed
+sections remain visible as their shipped broken model while reporting zero HP;
+terrain placement, heading, diplomacy, and fog visibility stay owned by the
+original simulation. The geometry index maps every fence visual by its exact
+DB path as well as retaining the frame-index mapping used by static composite
+objects.
+
+On RUS3.1 the runtime enumerated 618 fence sections, with 13 visible at the
+starting camera. The debug destruction path changed one field-fence frame from
+0 to 4 through `CFence::Die` and changed both connected neighbors to their
+partial-damage frames. The resulting broken center and damaged ends rendered
+with zero static or dynamic geometry fallback types.
 
 The first model-shadow layer projects every converted Granny vertex along one
 sun direction, computes a convex ground hull, and submits that hull once through
