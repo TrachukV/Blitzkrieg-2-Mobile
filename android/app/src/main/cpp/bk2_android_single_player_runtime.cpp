@@ -5079,6 +5079,19 @@ void AppendEntityModel(
     // Selection in the original is a separate terrain patch. It does not
     // enlarge the unit if its real converted mesh is unavailable.
     const float scale = 1.0f;
+    if ((entity.flags & BK2_PRESENTATION_ENTITY_PROJECTILE) != 0) {
+        AppendOrientedBox(
+                mesh,
+                entity.x,
+                entity.y,
+                entity.z,
+                0.75f,
+                0.12f,
+                0.12f,
+                entity.heading_radians,
+                ArgbToAbgr(0xffffe3a0u));
+        return;
+    }
     if ((entity.flags & BK2_PRESENTATION_ENTITY_MECHANIZED) != 0) {
         AppendOrientedBox(
                 mesh,
@@ -6357,6 +6370,9 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
     for (const Bk2PresentationEntity& entity : entities) {
         const bool dead =
                 (entity.flags & BK2_PRESENTATION_ENTITY_DEAD) != 0;
+        const bool projectile =
+                (entity.flags &
+                 BK2_PRESENTATION_ENTITY_PROJECTILE) != 0;
         if ((entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) == 0 && !dead) {
             continue;
         }
@@ -6419,7 +6435,7 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
                              : ArgbToAbgr(0xc8e1452du));
             ++g_active_unit_indicator_count;
         }
-        if (!dead) {
+        if (!dead && !projectile) {
             AppendUnitHealthBar(
                     &combined,
                     entity,
@@ -6431,7 +6447,9 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         AppendEntityModel(
                 &combined,
                 entity,
-                ObjectColor(entity.player, false),
+                projectile
+                        ? ArgbToAbgr(0xffffffffu)
+                        : ObjectColor(entity.player, false),
                 animation_time_seconds);
         ++g_dynamic_rendered_object_count;
     }

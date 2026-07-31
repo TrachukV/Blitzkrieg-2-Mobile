@@ -23,6 +23,7 @@ enum Bk2PresentationEntityFlags {
     BK2_PRESENTATION_ENTITY_ATTACKING = 1u << 9,
     BK2_PRESENTATION_ENTITY_DEAD = 1u << 10,
     BK2_PRESENTATION_ENTITY_LYING = 1u << 11,
+    BK2_PRESENTATION_ENTITY_PROJECTILE = 1u << 12,
 };
 
 typedef struct Bk2PresentationVertex {

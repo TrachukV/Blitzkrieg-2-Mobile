@@ -74,11 +74,14 @@ loaded both emitters, their shipped `Explosion1_Texture.dds`, and one light
 instance backed by `Flare_Texture.dds`, then removed the effect after its
 declared lifetime without a process failure.
 Long combustion recipes retain their full descriptor lifetime instead of being
-clipped to twelve seconds. Mechanized wreck geometry remains until the mission
-runtime resets, while infantry bodies clear after thirty seconds. The debug
-installer explicitly stages `Scene/Effects/All/Destructions`, `Effects/_Lights`,
-and the shipped effect texture tree even when the rest of the multi-gigabyte
-game data was already present on the device.
+clipped to twelve seconds. Mechanized wreck geometry remains until the
+simulation explicitly sends `ACTION_NOTIFY_DISSAPEAR_OBJ`; Android then plays
+the unit's original `pEffectDisappear` recipe when requested and removes the
+wreck. Infantry bodies clear after thirty seconds. The debug installer
+explicitly stages `Scene/Effects/All/Destructions`,
+`Scene/Effects/All/Exhaust`, `Effects/_Lights`, `Other/Projectile`, and the
+shipped effect texture tree even when the rest of the multi-gigabyte game data
+was already present on the device.
 The old fixed fire/smoke recipe now runs only when no usable descriptor exists.
 The compiled desktop particle keyframe tracks are not available to this path,
 so per-particle position, size, and color curves remain a billboard
@@ -91,6 +94,12 @@ Lua `PlayEffect` calls now reach the same bridge through their native
 `SPlayEffectUpdate`. This restores mission-authored smoke screens, bridge
 demolitions, and other positioned `ScriptEffects` instead of consuming those
 updates without presenting them.
+The projectile presentation path now consumes the original
+`SAINewProjectileUpdate`, `SAIPlacementUpdate`,
+`SExplodeProjectileUpdate`, and dead/disappear updates. It resolves the exact
+shell `SProjectile`, renders its converted model without a unit health bar or
+team tint, moves its attached exhaust descriptors with the AI placement, and
+removes it on the same lifecycle event as the desktop world.
 The compiled animated-light intensity track is similarly represented by a
 short flash envelope rather than a full dynamic-light shader.
 The Android build packages the required 4.2 MiB original HUD subset and the TGA

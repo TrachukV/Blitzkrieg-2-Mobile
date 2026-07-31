@@ -576,6 +576,25 @@ def binding_from_vis_path(
     )
 
 
+def binding_from_model_path(
+    data_root: Path,
+    model: Path,
+    converted_geometry_root: Path | None,
+) -> tuple[int, list[int], list[str], float, list[str]] | None:
+    geometry = geometry_info(data_root, model, converted_geometry_root)
+    if geometry is None:
+        return None
+    geometry_record_id, material_quantities, geometry_scale = geometry
+    textures, alpha_modes = material_bindings(data_root, model)
+    return (
+        geometry_record_id,
+        material_quantities,
+        textures,
+        geometry_scale,
+        alpha_modes,
+    )
+
+
 def normalized_path(path: Path, data_root: Path) -> str:
     return path.relative_to(data_root).as_posix().lstrip("/").lower()
 
@@ -594,6 +613,26 @@ def stats_visual_binding(
     stats: ET.Element,
     converted_geometry_root: Path | None,
 ) -> tuple[int, list[int], list[str], float, list[str]] | None:
+    # Projectiles point directly at an SModel instead of going through the
+    # seasonal SVisObj used by map objects. Index them under the Projectile.xdb
+    # path so the Android presentation bridge can render the exact moving
+    # rocket, shell, or bomb named by SAINewProjectileUpdate.
+    model = child(stats, "Model")
+    if model is not None:
+        direct_model_path = reference_path(
+            data_root,
+            stats_path,
+            model.attrib.get("href", ""),
+        )
+        if direct_model_path is not None:
+            binding = binding_from_model_path(
+                data_root,
+                direct_model_path,
+                converted_geometry_root,
+            )
+            if binding is not None:
+                return binding
+
     visual = child(stats, "visualObject")
     if visual is not None:
         vis_path = reference_path(

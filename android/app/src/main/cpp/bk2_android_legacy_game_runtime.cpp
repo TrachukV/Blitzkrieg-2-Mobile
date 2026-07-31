@@ -13,12 +13,14 @@
 #include "AILogic/CreateAI.h"
 #include "AILogic/GlobeUpdater.h"
 #include "AILogic/GroupLogic.h"
+#include "AILogic/Guns.h"
 #include "AILogic/AIMap.h"
 #include "AILogic/AIUnit.h"
 #include "AILogic/NewUpdater.h"
 #include "AILogic/Soldier.h"
 #include "AILogic/Statistics.h"
 #include "AILogic/UnitStates.h"
+#include "AILogic/UnitGuns.h"
 #include "AILogic/UnitsIterators.h"
 #include "B2_M1_Terrain/DBTerrain.h"
 #include "B2_M1_World/MissionObjectiveStates.h"
@@ -148,6 +150,7 @@ struct UnitDeathEffectCandidates {
     std::vector<AndroidParticleEmitter> fatality_emitters;
     std::vector<AndroidEffectLight> fatality_lights;
     uint32_t fatality_lifetime_millis = 0;
+    CDBPtr<NDb::SComplexEffect> disappear_effect;
 };
 std::unordered_map<int32_t, UnitDeathEffectCandidates>
         g_unit_death_effect_candidates;
@@ -165,10 +168,25 @@ struct PresentationCorpse {
     Bk2PresentationEntity entity{};
     uint64_t expires_millis = 0;
 };
+struct PresentationProjectile {
+    Bk2PresentationEntity entity{};
+    CDBPtr<NDb::SWeaponRPGStats> weapon;
+    int shell_index = -1;
+    std::vector<AndroidSceneEffect> attached_effects;
+    uint64_t effect_created_millis = 0;
+};
 std::unordered_map<int32_t, Bk2PresentationEntity>
         g_last_presentation_entities;
 std::unordered_map<int32_t, PresentationCorpse> g_presentation_corpses;
+std::unordered_map<int32_t, PresentationProjectile>
+        g_presentation_projectiles;
 uint64_t g_presentation_death_count = 0;
+uint64_t g_presentation_disappear_count = 0;
+uint64_t g_projectile_update_count = 0;
+uint64_t g_projectile_created_count = 0;
+uint64_t g_projectile_rejected_count = 0;
+uint64_t g_projectile_removed_count = 0;
+uint64_t g_projectile_exploded_count = 0;
 AndroidWarFogSnapshot g_war_fog_snapshot;
 bool g_war_fog_first_update = true;
 enum LegacyMissionOutcomeValue {
@@ -422,11 +440,7 @@ bool UpdateWarFogSnapshot() {
     return true;
 }
 
-uint64_t StatsPathHash(const NDb::SHPObjectRPGStats* stats) {
-    if (stats == nullptr) {
-        return 0;
-    }
-    std::string path(stats->GetDBID().ToString().c_str());
+uint64_t ResourcePathHash(std::string path) {
     const size_t xpointer = path.find('#');
     if (xpointer != std::string::npos) {
         path.resize(xpointer);
@@ -445,6 +459,18 @@ uint64_t StatsPathHash(const NDb::SHPObjectRPGStats* stats) {
         result *= 0x100000001b3ull;
     }
     return result;
+}
+
+uint64_t StatsPathHash(const NDb::SHPObjectRPGStats* stats) {
+    return stats == nullptr
+            ? 0
+            : ResourcePathHash(stats->GetDBID().ToString().c_str());
+}
+
+uint64_t ProjectilePathHash(const NDb::SProjectile* projectile) {
+    return projectile == nullptr
+            ? 0
+            : ResourcePathHash(projectile->GetDBID().ToString().c_str());
 }
 
 int GeometryRecordId(const NDb::SHPObjectRPGStats* stats) {
@@ -474,6 +500,14 @@ int GeometryRecordId(const NDb::SHPObjectRPGStats* stats) {
     }
     const NDb::SModel* model = summer == nullptr ? fallback : summer;
     return model == nullptr ? -1 : model->pGeometry->GetRecordID();
+}
+
+int GeometryRecordId(const NDb::SProjectile* projectile) {
+    const NDb::SModel* model =
+            projectile == nullptr ? nullptr : projectile->pModel.GetPtr();
+    return model == nullptr || model->pGeometry.IsEmpty()
+            ? -1
+            : model->pGeometry->GetRecordID();
 }
 
 void SetStage(const char* stage) {
@@ -1009,19 +1043,22 @@ UnitDeathEffectCandidates BuildUnitDeathEffectCandidates(
             &result.fatality_descriptor_id,
             &result.fatality_emitters,
             &result.fatality_lights);
+    result.disappear_effect = mechanized->pEffectDisappear;
     return result;
 }
 
-const NDb::SComplexEffect* ResolveHitEffect(
-        const SAINotifyHitInfo& info) {
-    const NDb::SWeaponRPGStats* weapon = info.pWeapon.GetPtr();
+const NDb::SComplexEffect* ResolveShellHitEffect(
+        const NDb::SWeaponRPGStats* weapon,
+        int shell_index,
+        SAINotifyHitInfo::EHitType hit_type) {
     if (weapon == nullptr ||
-        info.wShell >= weapon->shells.size()) {
+        shell_index < 0 ||
+        static_cast<size_t>(shell_index) >= weapon->shells.size()) {
         return nullptr;
     }
     const NDb::SWeaponRPGStats::SShell& shell =
-            weapon->shells[info.wShell];
-    switch (info.eHitType) {
+            weapon->shells[shell_index];
+    switch (hit_type) {
         case SAINotifyHitInfo::EHT_HIT:
             return shell.pEffectHitDirect.GetPtr();
         case SAINotifyHitInfo::EHT_MISS:
@@ -1038,6 +1075,14 @@ const NDb::SComplexEffect* ResolveHitEffect(
         default:
             return nullptr;
     }
+}
+
+const NDb::SComplexEffect* ResolveHitEffect(
+        const SAINotifyHitInfo& info) {
+    return ResolveShellHitEffect(
+            info.pWeapon.GetPtr(),
+            info.wShell,
+            info.eHitType);
 }
 
 // Mission sound. The effect descriptors the port already resolves for hits and
@@ -1381,6 +1426,60 @@ void CapturePresentationCorpse(
     }
 }
 
+void RemovePresentationObject(int32_t object_id, bool show_effects) {
+    const auto projectile = g_presentation_projectiles.find(object_id);
+    if (projectile != g_presentation_projectiles.end()) {
+        g_presentation_projectiles.erase(projectile);
+        ++g_projectile_removed_count;
+        if (g_projectile_removed_count == 1) {
+            PlatformRuntime::instance().log_info(
+                    std::string("projectile_removed=") +
+                    std::to_string(object_id));
+        }
+        return;
+    }
+
+    const auto corpse = g_presentation_corpses.find(object_id);
+    if (corpse == g_presentation_corpses.end()) {
+        return;
+    }
+    if (show_effects) {
+        const auto candidates =
+                g_unit_death_effect_candidates.find(object_id);
+        if (candidates != g_unit_death_effect_candidates.end() &&
+            candidates->second.disappear_effect) {
+            CVec3 ai_position(
+                    corpse->second.entity.x,
+                    corpse->second.entity.y,
+                    corpse->second.entity.z);
+            Vis2AI(&ai_position);
+            CaptureDescriptorSceneEffect(
+                    candidates->second.disappear_effect.GetPtr(),
+                    object_id,
+                    ai_position);
+        }
+    }
+    g_presentation_corpses.erase(corpse);
+    g_last_presentation_entities.erase(object_id);
+    g_unit_death_effect_candidates.erase(object_id);
+    g_destruction_effects.erase(
+            std::remove_if(
+                    g_destruction_effects.begin(),
+                    g_destruction_effects.end(),
+                    [object_id](const TimedDestructionEffect& effect) {
+                        return effect.effect.unit_id == object_id;
+                    }),
+            g_destruction_effects.end());
+    ++g_presentation_disappear_count;
+    if (g_presentation_disappear_count == 1) {
+        PlatformRuntime::instance().log_info(
+                std::string("corpse_disappear_presentation=") +
+                std::to_string(object_id) +
+                "; effect=" +
+                (show_effects ? "requested" : "suppressed"));
+    }
+}
+
 const NDb::SWeaponRPGStats* ResolveMechShotWeapon(
         int unit_id,
         int platform_index,
@@ -1403,6 +1502,205 @@ const NDb::SWeaponRPGStats* ResolveMechShotWeapon(
         return nullptr;
     }
     return platform.guns[gun_index].pWeapon.GetPtr();
+}
+
+const NDb::SWeaponRPGStats* ResolveProjectileWeapon(
+        int unit_id,
+        int platform_index,
+        int gun_index) {
+    CAIUnit* unit = CAIUnit::GetUnitByUniqueID(unit_id);
+    const NDb::SUnitBaseRPGStats* stats =
+            unit == nullptr ? nullptr : unit->GetStats();
+    if (stats == nullptr ||
+        platform_index < 0 ||
+        gun_index < 0) {
+        return nullptr;
+    }
+    return stats->GetGun(
+                    unit->GetUniqueIdQU(),
+                    platform_index,
+                    gun_index)
+            .pWeapon.GetPtr();
+}
+
+void CaptureProjectile(const SAINotifyNewProjectile& info) {
+    const auto reject = [&info](const char* reason) {
+        ++g_projectile_rejected_count;
+        if (g_projectile_rejected_count <= 4) {
+            PlatformRuntime::instance().log_warn(
+                    std::string("projectile_presentation=rejected; id=") +
+                    std::to_string(info.nObjUniqueID) +
+                    "; source=" +
+                    std::to_string(info.nSourceUniqueID) +
+                    "; platform=" +
+                    std::to_string(info.nPlatform) +
+                    "; gun=" +
+                    std::to_string(info.nGun) +
+                    "; shell=" +
+                    std::to_string(info.nShell) +
+                    "; reason=" + reason);
+        }
+    };
+    const NDb::SWeaponRPGStats* weapon = ResolveProjectileWeapon(
+            info.nSourceUniqueID,
+            info.nPlatform,
+            info.nGun);
+    if (weapon == nullptr) {
+        reject("weapon_missing");
+        return;
+    }
+    if (info.nShell < 0 ||
+        static_cast<size_t>(info.nShell) >= weapon->shells.size()) {
+        reject("shell_out_of_range");
+        return;
+    }
+    const NDb::SWeaponRPGStats::SShell& shell =
+            weapon->shells[info.nShell];
+    const NDb::SProjectile* projectile =
+            shell.pvisProjectile.GetPtr();
+    if (projectile == nullptr) {
+        reject("descriptor_missing");
+        return;
+    }
+    if (projectile->pModel.IsEmpty()) {
+        reject("model_missing");
+        return;
+    }
+    CAIUnit* source =
+            CAIUnit::GetUnitByUniqueID(info.nSourceUniqueID);
+    if (source == nullptr) {
+        reject("source_missing");
+        return;
+    }
+
+    PresentationProjectile presentation;
+    presentation.entity.id = info.nObjUniqueID;
+    presentation.entity.player = source->GetPlayer();
+    presentation.entity.flags =
+            BK2_PRESENTATION_ENTITY_ALIVE |
+            BK2_PRESENTATION_ENTITY_PROJECTILE;
+    presentation.entity.x = AI2Vis(info.vAIStartPos.x);
+    presentation.entity.y = AI2Vis(info.vAIStartPos.y);
+    presentation.entity.z = AI2Vis(info.vAIStartPos.z);
+    presentation.entity.heading_radians = source->GetDir();
+    presentation.entity.hit_points = 1.0f;
+    presentation.entity.max_hit_points = 1.0f;
+    presentation.entity.rpg_stats_path_hash =
+            ProjectilePathHash(projectile);
+    presentation.entity.rpg_stats_record_id =
+            projectile->GetRecordID();
+    // Some projectile SModel records leave their geometry DB pointer lazy in
+    // the legacy Android database. The path hash still resolves the exact
+    // geometry/material binding generated from Projectile.xdb.
+    presentation.entity.geometry_record_id =
+            GeometryRecordId(projectile);
+    presentation.entity.visual_scale = 1.0f;
+    presentation.entity.relation =
+            source->GetPlayer() == theDipl.GetMyNumber()
+            ? BK2_PRESENTATION_RELATION_OWN
+            : (source->GetParty() == theDipl.GetMyParty()
+                       ? BK2_PRESENTATION_RELATION_ALLY
+                       : BK2_PRESENTATION_RELATION_ENEMY);
+    presentation.weapon = weapon;
+    presentation.shell_index = info.nShell;
+    presentation.effect_created_millis = g_timer_millis;
+
+    const auto append_attached_effect =
+            [&presentation, &info](
+                    const NDb::SComplexEffect* complex_effect) {
+        if (complex_effect == nullptr) {
+            return;
+        }
+        AndroidSceneEffect effect;
+        effect.victim_unit_id = info.nObjUniqueID;
+        effect.x = AI2Vis(info.vAIStartPos.x);
+        effect.y = AI2Vis(info.vAIStartPos.y);
+        effect.z = AI2Vis(info.vAIStartPos.z);
+        effect.lifetime_millis = BuildComplexEffectRecipe(
+                complex_effect,
+                &effect.descriptor_id,
+                &effect.emitters,
+                &effect.lights);
+        if (effect.lifetime_millis > 0 &&
+            (!effect.emitters.empty() || !effect.lights.empty())) {
+            presentation.attached_effects.push_back(std::move(effect));
+        }
+    };
+    append_attached_effect(projectile->pAttachedEffect.GetPtr());
+    append_attached_effect(projectile->pSmokyExhaustEffect.GetPtr());
+    if (projectile->pAttachedEffect) {
+        PlayComplexSound(
+                projectile->pAttachedEffect->pSoundEffect.GetPtr(),
+                info.vAIStartPos);
+    } else if (shell.pEffectTrajectory) {
+        PlayComplexSound(
+                shell.pEffectTrajectory->pSoundEffect.GetPtr(),
+                info.vAIStartPos);
+    }
+
+    g_presentation_projectiles[info.nObjUniqueID] =
+            std::move(presentation);
+    ++g_projectile_created_count;
+    if (g_projectile_created_count == 1) {
+        const PresentationProjectile& created =
+                g_presentation_projectiles[info.nObjUniqueID];
+        PlatformRuntime::instance().log_info(
+                std::string("projectile_presentation=created; id=") +
+                std::to_string(info.nObjUniqueID) +
+                "; descriptor=" +
+                projectile->GetDBID().ToString().c_str() +
+                "; geometry=" +
+                std::to_string(
+                        created.entity.geometry_record_id) +
+                "; attached_effects=" +
+                std::to_string(created.attached_effects.size()));
+    }
+}
+
+void UpdateProjectilePlacement(const SAINotifyPlacement& placement) {
+    const auto projectile =
+            g_presentation_projectiles.find(
+                    placement.nObjUniqueID);
+    if (projectile == g_presentation_projectiles.end()) {
+        return;
+    }
+    Bk2PresentationEntity& entity = projectile->second.entity;
+    if (placement.bNewFormat) {
+        entity.x = AI2Vis(placement.vPlacement.x);
+        entity.y = AI2Vis(placement.vPlacement.y);
+        entity.z = AI2Vis(placement.vPlacement.z);
+        const CVec3 forward = placement.rotation.GetXAxis();
+        entity.heading_radians = std::atan2(forward.y, forward.x);
+    } else {
+        entity.x = AI2Vis(placement.center.x);
+        entity.y = AI2Vis(placement.center.y);
+        entity.z = AI2Vis(placement.z);
+        entity.heading_radians =
+                static_cast<float>(placement.dir) *
+                6.28318530717958647692f / 65536.0f;
+    }
+}
+
+void CaptureProjectileExplosion(
+        const SExplodeProjectileUpdate& update) {
+    const auto projectile =
+            g_presentation_projectiles.find(update.nProjectileID);
+    if (projectile == g_presentation_projectiles.end()) {
+        return;
+    }
+    CaptureDescriptorSceneEffect(
+            ResolveShellHitEffect(
+                    projectile->second.weapon.GetPtr(),
+                    projectile->second.shell_index,
+                    update.eHitType),
+            update.nProjectileID,
+            update.vExplCenter);
+    ++g_projectile_exploded_count;
+    if (g_projectile_exploded_count == 1) {
+        PlatformRuntime::instance().log_info(
+                std::string("projectile_presentation=exploded; id=") +
+                std::to_string(update.nProjectileID));
+    }
 }
 
 // Gun fire carries its own complex effect on the shell, the same record the
@@ -1621,6 +1919,46 @@ void DrainLegacyClientUpdates() {
                                       placement.z),
                     nullptr,
                     dead->dieAnimation.nParam);
+            continue;
+        }
+        SAIDissapearObjUpdate* disappeared =
+                dynamic_cast<SAIDissapearObjUpdate*>(
+                        update.GetPtr());
+        if (disappeared != nullptr) {
+            RemovePresentationObject(
+                    disappeared->nDissapearObjID,
+                    disappeared->bShowEffects);
+            continue;
+        }
+        SAIDeadProjectileUpdate* dead_projectile =
+                dynamic_cast<SAIDeadProjectileUpdate*>(
+                        update.GetPtr());
+        if (dead_projectile != nullptr) {
+            RemovePresentationObject(
+                    dead_projectile->nProjectileUnqiueID,
+                    false);
+            continue;
+        }
+        SAINewProjectileUpdate* new_projectile =
+                dynamic_cast<SAINewProjectileUpdate*>(
+                        update.GetPtr());
+        if (new_projectile != nullptr) {
+            ++g_projectile_update_count;
+            CaptureProjectile(new_projectile->info);
+            continue;
+        }
+        SAIPlacementUpdate* placement =
+                dynamic_cast<SAIPlacementUpdate*>(
+                        update.GetPtr());
+        if (placement != nullptr) {
+            UpdateProjectilePlacement(placement->info);
+            continue;
+        }
+        SExplodeProjectileUpdate* exploded_projectile =
+                dynamic_cast<SExplodeProjectileUpdate*>(
+                        update.GetPtr());
+        if (exploded_projectile != nullptr) {
+            CaptureProjectileExplosion(*exploded_projectile);
             continue;
         }
         SAITurretUpdate* turret =
@@ -1942,6 +2280,9 @@ void PublishPresentationEntities() {
         entities.push_back(corpse->second.entity);
         ++corpse;
     }
+    for (const auto& projectile : g_presentation_projectiles) {
+        entities.push_back(projectile.second.entity);
+    }
     bk2::presentation::PublishEntities(std::move(entities));
 }
 
@@ -2168,6 +2509,7 @@ void ResetReportState() {
     g_forwarded_unit_kill_error_count = 0;
     g_last_presentation_entities.clear();
     g_presentation_corpses.clear();
+    g_presentation_projectiles.clear();
     g_turret_aim.clear();
     g_turret_bones.clear();
     g_gun_bones.clear();
@@ -2184,6 +2526,12 @@ void ResetReportState() {
     g_unit_ack_unresolved = 0;
     g_unit_ack_logged_paths.clear();
     g_presentation_death_count = 0;
+    g_presentation_disappear_count = 0;
+    g_projectile_update_count = 0;
+    g_projectile_created_count = 0;
+    g_projectile_rejected_count = 0;
+    g_projectile_removed_count = 0;
+    g_projectile_exploded_count = 0;
     g_mission_outcome.store(kLegacyMissionRunning);
     g_pending_mission_outcome.store(kLegacyMissionRunning);
     g_stage = "not_started";
@@ -3231,6 +3579,115 @@ void HandleLegacyInputEvent(const char* event_name) {
                     "; target=" +
                     std::to_string(target->GetUniqueIdQU()));
         }
+    } else if (std::strcmp(
+                       event_name,
+                       "debug_force_projectile_combat") == 0) {
+        CAIUnit* attacker = nullptr;
+        CAIUnit* target = nullptr;
+        float best_distance_squared =
+                std::numeric_limits<float>::max();
+        for (CGlobalIter attacker_iter(0, ANY_PARTY);
+             !attacker_iter.IsFinished();
+             attacker_iter.Iterate()) {
+            CAIUnit* candidate = *attacker_iter;
+            const NDb::SMechUnitRPGStats* stats =
+                    candidate == nullptr
+                    ? nullptr
+                    : dynamic_cast<const NDb::SMechUnitRPGStats*>(
+                              candidate->GetStats());
+            if (candidate == nullptr ||
+                !candidate->IsAlive() ||
+                !candidate->IsSelectable() ||
+                candidate->GetPlayer() != 0 ||
+                stats == nullptr) {
+                continue;
+            }
+            bool has_projectile = false;
+            const int platform_count =
+                    stats->GetPlatformsSize(
+                            candidate->GetUniqueIdQU());
+            for (int platform = 0;
+                 platform < platform_count && !has_projectile;
+                 ++platform) {
+                const int gun_count = stats->GetGunsSize(
+                        candidate->GetUniqueIdQU(),
+                        platform);
+                for (int gun = 0; gun < gun_count; ++gun) {
+                    const NDb::SWeaponRPGStats* weapon =
+                            stats->GetGun(
+                                         candidate->GetUniqueIdQU(),
+                                         platform,
+                                         gun)
+                                    .pWeapon.GetPtr();
+                    if (weapon == nullptr) {
+                        continue;
+                    }
+                    has_projectile = std::any_of(
+                            weapon->shells.begin(),
+                            weapon->shells.end(),
+                            [](const NDb::SWeaponRPGStats::SShell& shell) {
+                                return shell.pvisProjectile != nullptr;
+                            });
+                    if (has_projectile) {
+                        break;
+                    }
+                }
+            }
+            if (!has_projectile) {
+                continue;
+            }
+            for (CGlobalIter target_iter(0, ANY_PARTY);
+                 !target_iter.IsFinished();
+                 target_iter.Iterate()) {
+                CAIUnit* enemy = *target_iter;
+                if (enemy == nullptr ||
+                    !enemy->IsAlive() ||
+                    enemy->GetPlayer() == candidate->GetPlayer()) {
+                    continue;
+                }
+                const CVec2 delta =
+                        enemy->GetCenterPlain() -
+                        candidate->GetCenterPlain();
+                const float distance_squared =
+                        delta.x * delta.x + delta.y * delta.y;
+                if (distance_squared < best_distance_squared) {
+                    best_distance_squared = distance_squared;
+                    attacker = candidate;
+                    target = enemy;
+                }
+            }
+        }
+        if (attacker != nullptr && target != nullptr &&
+            SelectLegacyUnit(attacker->GetUniqueIdQU(), 0) &&
+            AttackSelectedLegacyUnit(target->GetUniqueIdQU())) {
+            CBasicGun* projectile_gun = nullptr;
+            CUnitGuns* guns = attacker->GetGuns();
+            if (guns != nullptr) {
+                for (int index = 0;
+                     index < guns->GetNGuns();
+                     ++index) {
+                    CBasicGun* gun = guns->GetGun(index);
+                    if (gun != nullptr &&
+                        gun->GetShell().pvisProjectile) {
+                        projectile_gun = gun;
+                        break;
+                    }
+                }
+            }
+            if (projectile_gun != nullptr) {
+                projectile_gun->Fire(
+                        target->GetCenterPlain(),
+                        target->GetCenter().z,
+                        true);
+            }
+            PlatformRuntime::instance().log_info(
+                    std::string("debug_force_projectile_combat=") +
+                    std::to_string(attacker->GetUniqueIdQU()) +
+                    "; target=" +
+                    std::to_string(target->GetUniqueIdQU()) +
+                    "; forced_shell=" +
+                    (projectile_gun == nullptr ? "false" : "true"));
+        }
     } else if (std::strcmp(event_name, "debug_combat_effect") == 0 &&
                g_selected_unit_id >= 0 &&
                g_attack_target_unit_id >= 0) {
@@ -3372,7 +3829,12 @@ std::vector<AndroidCombatEffect> CopyActiveAndroidCombatEffects() {
 
 std::vector<AndroidSceneEffect> CopyActiveAndroidSceneEffects() {
     std::vector<AndroidSceneEffect> result;
-    result.reserve(g_scene_effects.size());
+    size_t projectile_effect_count = 0;
+    for (const auto& projectile : g_presentation_projectiles) {
+        projectile_effect_count +=
+                projectile.second.attached_effects.size();
+    }
+    result.reserve(g_scene_effects.size() + projectile_effect_count);
     for (const TimedSceneEffect& timed : g_scene_effects) {
         AndroidSceneEffect effect = timed.effect;
         effect.age_millis = static_cast<uint32_t>(
@@ -3381,6 +3843,24 @@ std::vector<AndroidSceneEffect> CopyActiveAndroidSceneEffects() {
                         static_cast<uint64_t>(
                                 effect.lifetime_millis)));
         result.push_back(std::move(effect));
+    }
+    for (const auto& projectile_entry : g_presentation_projectiles) {
+        const PresentationProjectile& projectile =
+                projectile_entry.second;
+        for (const AndroidSceneEffect& recipe :
+             projectile.attached_effects) {
+            AndroidSceneEffect effect = recipe;
+            effect.x = projectile.entity.x;
+            effect.y = projectile.entity.y;
+            effect.z = projectile.entity.z;
+            if (effect.lifetime_millis > 0) {
+                effect.age_millis = static_cast<uint32_t>(
+                        (g_timer_millis -
+                         projectile.effect_created_millis) %
+                        effect.lifetime_millis);
+            }
+            result.push_back(std::move(effect));
+        }
     }
     return result;
 }
@@ -3440,7 +3920,14 @@ void ShutdownLegacyGameRuntime() {
     g_hud_notification_count = 0;
     g_last_presentation_entities.clear();
     g_presentation_corpses.clear();
+    g_presentation_projectiles.clear();
     g_presentation_death_count = 0;
+    g_presentation_disappear_count = 0;
+    g_projectile_update_count = 0;
+    g_projectile_created_count = 0;
+    g_projectile_rejected_count = 0;
+    g_projectile_removed_count = 0;
+    g_projectile_exploded_count = 0;
     g_war_fog_snapshot = AndroidWarFogSnapshot();
     g_war_fog_first_update = true;
     g_combat_effects.clear();
@@ -3523,6 +4010,15 @@ std::string LegacyGameRuntimeReport() {
            << g_forwarded_unit_kill_error_count
            << "; presented_deaths=" << g_presentation_death_count
            << "; active_corpses=" << g_presentation_corpses.size()
+           << "; presented_disappearances="
+           << g_presentation_disappear_count
+           << "; projectile_updates=" << g_projectile_update_count
+           << "; projectiles_created=" << g_projectile_created_count
+           << "; projectiles_rejected=" << g_projectile_rejected_count
+           << "; projectiles_removed=" << g_projectile_removed_count
+           << "; projectiles_exploded=" << g_projectile_exploded_count
+           << "; active_projectiles="
+           << g_presentation_projectiles.size()
            << "; war_fog=" << g_war_fog_snapshot.width
            << "x" << g_war_fog_snapshot.height
            << "; war_fog_generation="

@@ -315,6 +315,8 @@ git sparse-checkout add \
   Versions/Current/Data/Consts \
   Versions/Current/Data/Reinforcements \
   Versions/Current/Data/Other/Text \
+  Versions/Current/Data/Other/Projectile \
+  Versions/Current/Data/Scene/Effects/All/Exhaust \
   Versions/Current/Data/Scene/TexAndMats/All/Effects \
   Versions/Current/Data/Scene/TexAndMats/All/Units/Weapons \
   Versions/Current/Data/UI \
@@ -1191,11 +1193,14 @@ placement, cycle, speed, offset, and scale timing and produce an additive
 ground pulse through the shipped `LightFX/Flare_Texture.dds`; the unavailable
 desktop animated-light track is approximated with a fast flash envelope. The
 shipped `MachineryCombustion` effect now keeps its complete thirty-second
-cycle, and the visible wreck remains until the mission runtime resets. Infantry
-bodies clear after thirty seconds. The debug installer separately synchronizes
-`Scene/Effects/All/Destructions`, `Effects/_Lights`, and
+cycle, and the visible wreck remains until the original AI explicitly sends
+`ACTION_NOTIFY_DISSAPEAR_OBJ`; that update also selects the unit's shipped
+`pEffectDisappear` recipe before removing the wreck. Infantry bodies clear
+after thirty seconds. The debug installer separately synchronizes
+`Scene/Effects/All/Destructions`, `Scene/Effects/All/Exhaust`,
+`Effects/_Lights`, `Other/Projectile`, and
 `Scene/TexAndMats/All/Effects`, so a previously staged data directory cannot
-silently leave a complex effect with zero emitters. The earlier fixed
+silently leave a complex effect or projectile with missing payload. The earlier fixed
 `Fire2`–`Fire5` plus
 `Explosion2`/`Explosion3` recipe remains only as a fallback when the content
 has no usable effect descriptor. Legacy effect DDS files that encode
@@ -1211,6 +1216,13 @@ Mission Lua `PlayEffect` calls are also forwarded from their original
 `SPlayEffectUpdate` into this descriptor path. Campaign-authored smoke screens,
 bridge demolitions, and positioned explosions therefore use the map's
 `ScriptEffects` list instead of remaining simulation-only events.
+`SAINewProjectileUpdate` now resolves the shell's original `SProjectile`,
+publishes its converted rocket, mortar, cannon-grenade, or bomb model, and
+keeps it on the AI placement stream until the matching dead-projectile update.
+The attached exhaust and smoky-exhaust descriptors move with that model; an
+explicit projectile explosion selects the same shell hit-effect mapping used
+by the desktop client. Projectile entities do not receive unit health bars or
+player-color tint.
 
 The first model-shadow layer projects every converted Granny vertex along one
 sun direction, computes a convex ground hull, and submits that hull once through

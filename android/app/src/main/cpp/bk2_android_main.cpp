@@ -430,6 +430,10 @@ void PollInput(android_app* app) {
                 bk2::android::HandleLegacyInputEvent(
                         "debug_force_combat");
                 break;
+            case AKEYCODE_R:
+                bk2::android::HandleLegacyInputEvent(
+                        "debug_force_projectile_combat");
+                break;
             case AKEYCODE_T:
                 bk2::android::HandleLegacyInputEvent(
                         "debug_combat_effect");
