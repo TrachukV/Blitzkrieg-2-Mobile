@@ -319,8 +319,10 @@ git sparse-checkout add \
   Versions/Current/Data/Reinforcements \
   Versions/Current/Data/Other/Text \
   Versions/Current/Data/Other/Projectile \
+  Versions/Current/Data/Spots \
   Versions/Current/Data/Scene/Effects/All/Exhaust \
   Versions/Current/Data/Scene/TexAndMats/All/Effects \
+  Versions/Current/Data/Scene/TexAndMats/All/Objects/TerraObjects \
   Versions/Current/Data/Scene/TexAndMats/All/Units/Weapons \
   Versions/Current/Data/UI \
   Versions/Current/Data/Fonts \
@@ -654,7 +656,27 @@ with 5,472 triangles, 34 foot skirts, and 11 GPU-ready layers; its remaining
 bank has no column above the minimum precipice height, so the original draws
 nothing there either. US1.2, which has no river, rendered all 36 crag
 precipices and 36 foot skirts with 7 GPU-ready layers. `bStayedOnTerrain`
-bottom-vertex snapping and the `SPeak` collection are still follow-up work.
+bottom-vertex snapping remains follow-up work. Serialized `SPeak` geometry now
+follows `PeaksCreator.cpp`: three curved pendent bands reach 45 degrees and two
+bands continue vertically downward, using the terrain type's
+`pPeakMaterial`. US1.0, GB3.1, and GER1.1 all contain zero serialized peaks,
+so this compatibility branch is compiled and runtime-instrumented but does not
+alter those three maps. The desktop peak material's secondary TileMask blend
+remains a follow-up if content containing `SPeak` is recovered.
+
+Terrain spots are no longer discarded. Every four-point
+`STerrainSpotInstance` is converted from AI to visual coordinates, clipped
+against both triangles of every covered terrain tile, lifted by the original
+`DEF_TERRASPOT_HEIGHT` of `0.1`, and rendered through its descriptor's
+`AM_OVERLAY` material. This restores authored grass variation, grazes,
+flowers, split ground, and crater decals while keeping them conformal on
+slopes instead of floating as a single quad. An installed ARM64 US1.0 run
+rendered all 223 spot descriptors as 17,216 clipped triangles over 36 original
+DDS textures; all 36 texture layers reached valid GPU handles. Sparse
+checkouts need both `Data/Spots` and
+`Data/Scene/TexAndMats/All/Objects/TerraObjects`. The debug installer now
+incrementally synchronizes both small trees even when the multi-gigabyte
+payload was already staged.
 
 The original menu screens are now loaded from their shipped descriptors rather
 than approximated by an Android layout. `bk2_android_menu_runtime.*` resolves
@@ -1266,8 +1288,9 @@ cycle, and the visible wreck remains until the original AI explicitly sends
 after thirty seconds. The debug installer separately synchronizes
 `Scene/Effects/All/Destructions`, `Scene/Effects/All/Exhaust`,
 `Effects/_Lights`, `Other/Projectile`, and
-`Scene/TexAndMats/All/Effects`, so a previously staged data directory cannot
-silently leave a complex effect or projectile with missing payload. The earlier fixed
+`Scene/TexAndMats/All/Effects`, plus the terrain-spot descriptor and texture
+trees, so a previously staged data directory cannot silently leave a complex
+effect, projectile, or authored surface overlay with missing payload. The earlier fixed
 `Fire2`–`Fire5` plus
 `Explosion2`/`Explosion3` recipe remains only as a fallback when the content
 has no usable effect descriptor. Legacy effect DDS files that encode

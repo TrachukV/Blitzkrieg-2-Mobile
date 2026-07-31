@@ -81,7 +81,8 @@ wreck. Infantry bodies clear after thirty seconds. The debug installer
 explicitly stages `Scene/Effects/All/Destructions`,
 `Scene/Effects/All/Exhaust`, `Effects/_Lights`, `Other/Projectile`, and the
 shipped effect texture tree even when the rest of the multi-gigabyte game data
-was already present on the device.
+was already present on the device. It also refreshes `Spots` and
+`Scene/TexAndMats/All/Objects/TerraObjects` for the terrain overlay renderer.
 The old fixed fire/smoke recipe now runs only when no usable descriptor exists.
 The compiled desktop particle keyframe tracks are not available to this path,
 so per-particle position, size, and color curves remain a billboard
@@ -304,8 +305,22 @@ GPU layers over 3 textures, with the bank resolving to
 crags and one river bank — with 5,472 triangles, 34 foot skirts, and 11 ready
 GPU layers; its remaining bank has no column above the minimum precipice
 height. US1.2, which has no river, verified 36 crag precipices, 36 foot skirts,
-and 7 ready GPU layers. `bStayedOnTerrain` bottom snapping and `SPeak`
-collection remain follow-up work.
+and 7 ready GPU layers. `bStayedOnTerrain` bottom snapping is still pending.
+The serialized `SPeak` path now recreates the
+five-band `PeaksCreator.cpp` pendent profile and resolves `pPeakMaterial`; its
+secondary TileMask blend is not yet reproduced. US1.0, GB3.1, and GER1.1
+contain no serialized peaks, so the path is runtime-instrumented but empty on
+those validation maps.
+
+The renderer now consumes `SMapInfo::spots` rather than dropping the authored
+terrain overlay layer. Each four-corner spot is converted from AI space,
+clipped per terrain triangle, lifted by the desktop `0.1` bias, and submitted
+with its `AM_OVERLAY` material. US1.0 rendered all 223 descriptors as 17,216
+triangles across 36 textures, and every texture reached a valid GPU handle.
+The sparse checkout and incremental debug installer include both
+`Data/Spots` and
+`Data/Scene/TexAndMats/All/Objects/TerraObjects`, restoring grass variation,
+grazes, flowers, split ground, and crater decals on already staged devices.
 
 ## Implemented In This Slice
 

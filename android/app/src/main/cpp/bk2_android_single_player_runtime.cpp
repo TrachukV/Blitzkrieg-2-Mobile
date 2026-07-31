@@ -165,6 +165,19 @@ size_t g_crag_texture_count = 0;
 size_t g_crag_texture_gpu_count = 0;
 std::unordered_set<std::string> g_crag_texture_paths;
 bool g_crag_texture_logged = false;
+size_t g_peak_count = 0;
+size_t g_peak_segment_count = 0;
+size_t g_peak_triangle_count = 0;
+size_t g_peak_texture_count = 0;
+size_t g_peak_texture_gpu_count = 0;
+std::unordered_set<std::string> g_peak_texture_paths;
+bool g_peak_texture_logged = false;
+size_t g_terrain_spot_count = 0;
+size_t g_terrain_spot_triangle_count = 0;
+size_t g_terrain_spot_texture_count = 0;
+size_t g_terrain_spot_texture_gpu_count = 0;
+std::unordered_set<std::string> g_terrain_spot_texture_paths;
+bool g_terrain_spot_texture_logged = false;
 bool g_turret_pose_logged = false;
 // Mirrors the shipped gfx_noshadows option, refreshed once a frame.
 bool g_shadows_disabled = false;
@@ -3443,6 +3456,627 @@ void AppendTerrainPrecipices(
     PlatformRuntime::instance().log_info(report.str());
 }
 
+const NDb::STGTerraType* TerrainTypeAt(
+        const NDb::STGTerraSet* terra_set,
+        const STerrainInfo& terrain_info,
+        float world_x,
+        float world_y) {
+    if (terra_set == nullptr ||
+        terra_set->terraTypes.empty() ||
+        terrain_info.tileTerraMap.GetSizeX() <= 0 ||
+        terrain_info.tileTerraMap.GetSizeY() <= 0) {
+        return nullptr;
+    }
+    const int tile_x = std::clamp(
+            static_cast<int>(std::floor(world_x / VIS_TILE_SIZE)),
+            0,
+            terrain_info.tileTerraMap.GetSizeX() - 1);
+    const int tile_y = std::clamp(
+            static_cast<int>(std::floor(world_y / VIS_TILE_SIZE)),
+            0,
+            terrain_info.tileTerraMap.GetSizeY() - 1);
+    const int terrain_type =
+            static_cast<int>(
+                    terrain_info.tileTerraMap[tile_y][tile_x]);
+    if (terrain_type < 0 ||
+        terrain_type >=
+                static_cast<int>(terra_set->terraTypes.size())) {
+        return nullptr;
+    }
+    return terra_set->terraTypes[
+            static_cast<size_t>(terrain_type)].GetPtr();
+}
+
+void AppendTerrainPeaks(
+        const NDb::SMapInfo* map,
+        const STerrainInfo& terrain_info,
+        WorldObjectMesh* mesh) {
+    g_peak_count = 0;
+    g_peak_segment_count = 0;
+    g_peak_triangle_count = 0;
+    g_peak_texture_count = 0;
+    g_peak_texture_gpu_count = 0;
+    g_peak_texture_paths.clear();
+    g_peak_texture_logged = false;
+    const NDb::STGTerraSet* terra_set =
+            map != nullptr && map->pTerraSet
+            ? map->pTerraSet.GetPtr()
+            : nullptr;
+    if (terra_set == nullptr ||
+        terra_set->terraTypes.empty() ||
+        mesh == nullptr) {
+        return;
+    }
+
+    // Mirrors PeaksCreator.cpp: three curved bands reach pi/4 and two more
+    // bands continue vertically downward. The original also samples a
+    // secondary TileMask texture; the Android material pass currently keeps
+    // its primary terrain texture and exact serialized skirt geometry.
+    constexpr float kPendentWidth = VIS_TILE_SIZE * 0.1125f;
+    constexpr int kPendentCurvedBandCount = 3;
+    constexpr int kPendentBandCount = 5;
+    constexpr float kPendentAngleStep =
+            (kPi * 0.25f) /
+            static_cast<float>(kPendentCurvedBandCount - 1);
+    constexpr float kPeakHeightBias = 0.01f;
+    const float texture_world_size =
+            VIS_TILE_SIZE * static_cast<float>(DEF_PATCH_SIZE);
+
+    struct PeakEndpoint {
+        std::array<TerrainVertex, kPendentBandCount + 1> vertices;
+    };
+    auto make_endpoint =
+            [&](const STerrainInfo::SVSOPoint& point,
+                float fallback_normal_x,
+                float fallback_normal_y,
+                float texture_scale) {
+        PeakEndpoint endpoint;
+        float normal_x = point.vNorm.x;
+        float normal_y = point.vNorm.y;
+        const float normal_length =
+                std::sqrt(
+                        normal_x * normal_x +
+                        normal_y * normal_y);
+        if (!std::isfinite(normal_length) ||
+            normal_length <= 0.0001f) {
+            normal_x = fallback_normal_x;
+            normal_y = fallback_normal_y;
+        } else {
+            normal_x /= normal_length;
+            normal_y /= normal_length;
+        }
+        const float terrain_height =
+                TerrainHeightAt(
+                        terrain_info,
+                        point.vPos.x,
+                        point.vPos.y);
+        const float serialized_height =
+                std::isfinite(point.vPos.z)
+                ? point.vPos.z
+                : terrain_height;
+        const float base_height =
+                std::max(terrain_height, serialized_height) +
+                kPeakHeightBias;
+        auto make_vertex =
+                [&](float x,
+                    float y,
+                    float z,
+                    float projected_x,
+                    float projected_y) {
+            return TerrainVertex{
+                    x,
+                    y,
+                    z,
+                    projected_x / texture_world_size *
+                            texture_scale,
+                    projected_y / texture_world_size *
+                            texture_scale,
+                    0xffffffffu};
+        };
+        endpoint.vertices[0] = make_vertex(
+                point.vPos.x,
+                point.vPos.y,
+                base_height,
+                point.vPos.x,
+                point.vPos.y);
+
+        float last_x = point.vPos.x;
+        float last_y = point.vPos.y;
+        float last_z = base_height;
+        for (int band = 0; band < kPendentBandCount; ++band) {
+            const float width =
+                    kPendentWidth *
+                    static_cast<float>(band + 1);
+            if (band < kPendentCurvedBandCount) {
+                const float angle =
+                        kPendentAngleStep *
+                        static_cast<float>(band);
+                last_x =
+                        point.vPos.x +
+                        normal_x * std::cos(angle) * width;
+                last_y =
+                        point.vPos.y +
+                        normal_y * std::cos(angle) * width;
+                last_z =
+                        base_height -
+                        std::sin(angle) * width;
+            } else {
+                last_z -= kPendentWidth;
+            }
+            endpoint.vertices[
+                    static_cast<size_t>(band + 1)] =
+                    make_vertex(
+                            last_x,
+                            last_y,
+                            last_z,
+                            point.vPos.x + normal_x * width,
+                            point.vPos.y + normal_y * width);
+        }
+        return endpoint;
+    };
+
+    for (const STerrainInfo::SPeak& peak : terrain_info.peaks) {
+        bool peak_rendered = false;
+        for (const vector<STerrainInfo::SVSOPoint>& points :
+             peak.points) {
+            if (points.size() < 2) {
+                continue;
+            }
+            for (size_t point_index = 0;
+                 point_index + 1 < points.size();
+                 ++point_index) {
+                const STerrainInfo::SVSOPoint& first =
+                        points[point_index];
+                const STerrainInfo::SVSOPoint& second =
+                        points[point_index + 1];
+                if (!std::isfinite(first.vPos.x) ||
+                    !std::isfinite(first.vPos.y) ||
+                    !std::isfinite(second.vPos.x) ||
+                    !std::isfinite(second.vPos.y)) {
+                    continue;
+                }
+                const float segment_x =
+                        second.vPos.x - first.vPos.x;
+                const float segment_y =
+                        second.vPos.y - first.vPos.y;
+                const float segment_length =
+                        std::sqrt(
+                                segment_x * segment_x +
+                                segment_y * segment_y);
+                if (!std::isfinite(segment_length) ||
+                    segment_length <= 0.001f) {
+                    continue;
+                }
+                const NDb::STGTerraType* terrain_type =
+                        TerrainTypeAt(
+                                terra_set,
+                                terrain_info,
+                                (first.vPos.x + second.vPos.x) *
+                                        0.5f,
+                                (first.vPos.y + second.vPos.y) *
+                                        0.5f);
+                const NDb::SMaterial* material =
+                        terrain_type != nullptr &&
+                                        terrain_type->pPeakMaterial
+                        ? terrain_type->pPeakMaterial.GetPtr()
+                        : nullptr;
+                const std::string texture_path =
+                        PrecipiceTexturePath(material);
+                if (texture_path.empty()) {
+                    continue;
+                }
+                const size_t layer_index =
+                        FindOrAddOpaqueWorldObjectLayer(
+                                mesh,
+                                texture_path);
+                if (layer_index ==
+                    std::numeric_limits<size_t>::max()) {
+                    continue;
+                }
+                g_peak_texture_paths.insert(texture_path);
+
+                const float fallback_normal_x =
+                        segment_y / segment_length;
+                const float fallback_normal_y =
+                        -segment_x / segment_length;
+                const float texture_scale =
+                        terrain_type != nullptr
+                        ? terrain_type->fScaleCoeff
+                        : 1.0f;
+                const PeakEndpoint first_endpoint =
+                        make_endpoint(
+                                first,
+                                fallback_normal_x,
+                                fallback_normal_y,
+                                texture_scale);
+                const PeakEndpoint second_endpoint =
+                        make_endpoint(
+                                second,
+                                fallback_normal_x,
+                                fallback_normal_y,
+                                texture_scale);
+                const uint32_t first_vertex =
+                        static_cast<uint32_t>(
+                                mesh->vertices.size());
+                mesh->vertices.insert(
+                        mesh->vertices.end(),
+                        first_endpoint.vertices.begin(),
+                        first_endpoint.vertices.end());
+                const uint32_t second_vertex =
+                        static_cast<uint32_t>(
+                                mesh->vertices.size());
+                mesh->vertices.insert(
+                        mesh->vertices.end(),
+                        second_endpoint.vertices.begin(),
+                        second_endpoint.vertices.end());
+                WorldObjectMesh::Layer& layer =
+                        mesh->layers[layer_index];
+                for (int band = 0;
+                     band < kPendentBandCount;
+                     ++band) {
+                    const uint32_t first_top =
+                            first_vertex +
+                            static_cast<uint32_t>(band);
+                    const uint32_t first_bottom =
+                            first_top + 1;
+                    const uint32_t second_top =
+                            second_vertex +
+                            static_cast<uint32_t>(band);
+                    const uint32_t second_bottom =
+                            second_top + 1;
+                    layer.triangle_indices.push_back(first_top);
+                    layer.triangle_indices.push_back(second_top);
+                    layer.triangle_indices.push_back(second_bottom);
+                    layer.triangle_indices.push_back(first_top);
+                    layer.triangle_indices.push_back(second_bottom);
+                    layer.triangle_indices.push_back(first_bottom);
+                    g_peak_triangle_count += 2;
+                }
+                ++g_peak_segment_count;
+                peak_rendered = true;
+            }
+        }
+        if (peak_rendered) {
+            ++g_peak_count;
+        }
+    }
+    g_peak_texture_count = g_peak_texture_paths.size();
+    std::ostringstream report;
+    report << "terrain_peaks="
+           << (g_peak_count > 0 ? "ready" : "empty")
+           << "; serialized=" << terrain_info.peaks.size()
+           << "; rendered=" << g_peak_count
+           << "; segments=" << g_peak_segment_count
+           << "; triangles=" << g_peak_triangle_count
+           << "; textures=" << g_peak_texture_count;
+    PlatformRuntime::instance().log_info(report.str());
+}
+
+void AppendTerrainSpots(
+        const NDb::SMapInfo* map,
+        const STerrainInfo& terrain_info,
+        WorldObjectMesh* mesh) {
+    g_terrain_spot_count = 0;
+    g_terrain_spot_triangle_count = 0;
+    g_terrain_spot_texture_count = 0;
+    g_terrain_spot_texture_gpu_count = 0;
+    g_terrain_spot_texture_paths.clear();
+    g_terrain_spot_texture_logged = false;
+    if (map == nullptr || mesh == nullptr) {
+        return;
+    }
+    const int terrain_width = HeightWidth(terrain_info);
+    const int terrain_height = HeightHeight(terrain_info);
+    if (terrain_width < 2 || terrain_height < 2) {
+        return;
+    }
+
+    struct SpotVertex {
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        float u = 0.0f;
+        float v = 0.0f;
+    };
+    auto cross_2d =
+            [](float ax, float ay, float bx, float by) {
+        return ax * by - ay * bx;
+    };
+    auto interpolate =
+            [](const SpotVertex& first,
+               const SpotVertex& second,
+               float amount) {
+        SpotVertex result;
+        result.x = first.x + (second.x - first.x) * amount;
+        result.y = first.y + (second.y - first.y) * amount;
+        result.z = first.z + (second.z - first.z) * amount;
+        result.u = first.u + (second.u - first.u) * amount;
+        result.v = first.v + (second.v - first.v) * amount;
+        return result;
+    };
+
+    constexpr float kTerrainSpotHeight = 0.1f;
+    constexpr float kClipEpsilon = 0.0001f;
+    for (const NDb::STerrainSpotInstance& spot : map->spots) {
+        const NDb::STerrainSpotDesc* descriptor =
+                spot.pDescriptor
+                ? spot.pDescriptor.GetPtr()
+                : nullptr;
+        const NDb::SMaterial* material =
+                descriptor != nullptr && descriptor->pMaterial
+                ? descriptor->pMaterial.GetPtr()
+                : nullptr;
+        if (descriptor == nullptr ||
+            material == nullptr ||
+            spot.points.size() != 4) {
+            continue;
+        }
+        const std::string texture_path =
+                PrecipiceTexturePath(material);
+        if (texture_path.empty()) {
+            continue;
+        }
+
+        std::array<CVec2, 4> points;
+        bool points_valid = true;
+        float minimum_x = std::numeric_limits<float>::max();
+        float minimum_y = std::numeric_limits<float>::max();
+        float maximum_x = std::numeric_limits<float>::lowest();
+        float maximum_y = std::numeric_limits<float>::lowest();
+        float signed_area = 0.0f;
+        for (size_t index = 0; index < points.size(); ++index) {
+            points[index].x = AI2Vis(spot.points[index].x);
+            points[index].y = AI2Vis(spot.points[index].y);
+            if (!std::isfinite(points[index].x) ||
+                !std::isfinite(points[index].y)) {
+                points_valid = false;
+                break;
+            }
+            minimum_x = std::min(minimum_x, points[index].x);
+            minimum_y = std::min(minimum_y, points[index].y);
+            maximum_x = std::max(maximum_x, points[index].x);
+            maximum_y = std::max(maximum_y, points[index].y);
+        }
+        if (!points_valid) {
+            continue;
+        }
+        for (size_t index = 0; index < points.size(); ++index) {
+            const CVec2& current = points[index];
+            const CVec2& next =
+                    points[(index + 1) % points.size()];
+            signed_area +=
+                    current.x * next.y -
+                    current.y * next.x;
+        }
+        if (!std::isfinite(signed_area) ||
+            std::fabs(signed_area) <= kClipEpsilon) {
+            continue;
+        }
+        const float orientation =
+                signed_area > 0.0f ? 1.0f : -1.0f;
+        const float axis_u_x = points[1].x - points[0].x;
+        const float axis_u_y = points[1].y - points[0].y;
+        const float axis_v_x = points[3].x - points[0].x;
+        const float axis_v_y = points[3].y - points[0].y;
+        const float uv_determinant =
+                cross_2d(
+                        axis_u_x,
+                        axis_u_y,
+                        axis_v_x,
+                        axis_v_y);
+        if (!std::isfinite(uv_determinant) ||
+            std::fabs(uv_determinant) <= kClipEpsilon) {
+            continue;
+        }
+        const float used_texture_x =
+                descriptor->fUsedTexSizeX;
+        const float used_texture_y =
+                descriptor->fUsedTexSizeY;
+        auto make_vertex =
+                [&](float x, float y) {
+            SpotVertex vertex;
+            vertex.x = x;
+            vertex.y = y;
+            vertex.z =
+                    TerrainHeightAt(terrain_info, x, y) +
+                    kTerrainSpotHeight;
+            const float relative_x = x - points[0].x;
+            const float relative_y = y - points[0].y;
+            vertex.u =
+                    cross_2d(
+                            relative_x,
+                            relative_y,
+                            axis_v_x,
+                            axis_v_y) /
+                    uv_determinant * used_texture_x;
+            vertex.v =
+                    cross_2d(
+                            axis_u_x,
+                            axis_u_y,
+                            relative_x,
+                            relative_y) /
+                    uv_determinant * used_texture_y;
+            return vertex;
+        };
+        auto clip_to_spot =
+                [&](std::vector<SpotVertex> polygon) {
+            for (size_t edge_index = 0;
+                 edge_index < points.size() &&
+                 !polygon.empty();
+                 ++edge_index) {
+                const CVec2& edge_start =
+                        points[edge_index];
+                const CVec2& edge_end =
+                        points[(edge_index + 1) %
+                               points.size()];
+                const float edge_x =
+                        edge_end.x - edge_start.x;
+                const float edge_y =
+                        edge_end.y - edge_start.y;
+                auto signed_distance =
+                        [&](const SpotVertex& vertex) {
+                    return orientation *
+                            cross_2d(
+                                    edge_x,
+                                    edge_y,
+                                    vertex.x - edge_start.x,
+                                    vertex.y - edge_start.y);
+                };
+                std::vector<SpotVertex> clipped;
+                clipped.reserve(polygon.size() + 1);
+                SpotVertex previous = polygon.back();
+                float previous_distance =
+                        signed_distance(previous);
+                bool previous_inside =
+                        previous_distance >= -kClipEpsilon;
+                for (const SpotVertex& current : polygon) {
+                    const float current_distance =
+                            signed_distance(current);
+                    const bool current_inside =
+                            current_distance >=
+                            -kClipEpsilon;
+                    if (current_inside != previous_inside) {
+                        const float denominator =
+                                previous_distance -
+                                current_distance;
+                        if (std::fabs(denominator) >
+                            kClipEpsilon) {
+                            const float amount =
+                                    std::clamp(
+                                            previous_distance /
+                                                    denominator,
+                                            0.0f,
+                                            1.0f);
+                            clipped.push_back(
+                                    interpolate(
+                                            previous,
+                                            current,
+                                            amount));
+                        }
+                    }
+                    if (current_inside) {
+                        clipped.push_back(current);
+                    }
+                    previous = current;
+                    previous_distance = current_distance;
+                    previous_inside = current_inside;
+                }
+                polygon = std::move(clipped);
+            }
+            return polygon;
+        };
+
+        const int first_tile_x = std::clamp(
+                static_cast<int>(
+                        std::floor(minimum_x / VIS_TILE_SIZE)),
+                0,
+                terrain_width - 2);
+        const int first_tile_y = std::clamp(
+                static_cast<int>(
+                        std::floor(minimum_y / VIS_TILE_SIZE)),
+                0,
+                terrain_height - 2);
+        const int last_tile_x = std::clamp(
+                static_cast<int>(
+                        std::floor(maximum_x / VIS_TILE_SIZE)),
+                0,
+                terrain_width - 2);
+        const int last_tile_y = std::clamp(
+                static_cast<int>(
+                        std::floor(maximum_y / VIS_TILE_SIZE)),
+                0,
+                terrain_height - 2);
+        const size_t layer_index =
+                FindOrAddAlphaWorldObjectLayer(
+                        mesh,
+                        texture_path);
+        if (layer_index ==
+            std::numeric_limits<size_t>::max()) {
+            continue;
+        }
+        bool appended = false;
+        for (int tile_y = first_tile_y;
+             tile_y <= last_tile_y;
+             ++tile_y) {
+            for (int tile_x = first_tile_x;
+                 tile_x <= last_tile_x;
+                 ++tile_x) {
+                const float left =
+                        static_cast<float>(tile_x) *
+                        VIS_TILE_SIZE;
+                const float top =
+                        static_cast<float>(tile_y) *
+                        VIS_TILE_SIZE;
+                const float right = left + VIS_TILE_SIZE;
+                const float bottom = top + VIS_TILE_SIZE;
+                const std::array<std::array<SpotVertex, 3>, 2>
+                        triangles{{
+                                {make_vertex(left, top),
+                                 make_vertex(left, bottom),
+                                 make_vertex(right, top)},
+                                {make_vertex(right, top),
+                                 make_vertex(left, bottom),
+                                 make_vertex(right, bottom)}}};
+                for (const std::array<SpotVertex, 3>& triangle :
+                     triangles) {
+                    std::vector<SpotVertex> polygon(
+                            triangle.begin(),
+                            triangle.end());
+                    polygon =
+                            clip_to_spot(std::move(polygon));
+                    if (polygon.size() < 3) {
+                        continue;
+                    }
+                    const uint32_t first_vertex =
+                            static_cast<uint32_t>(
+                                    mesh->vertices.size());
+                    for (const SpotVertex& vertex : polygon) {
+                        mesh->vertices.push_back(TerrainVertex{
+                                vertex.x,
+                                vertex.y,
+                                vertex.z,
+                                vertex.u,
+                                vertex.v,
+                                0xffffffffu});
+                    }
+                    WorldObjectMesh::Layer& layer =
+                            mesh->layers[layer_index];
+                    for (size_t vertex_index = 1;
+                         vertex_index + 1 < polygon.size();
+                         ++vertex_index) {
+                        layer.triangle_indices.push_back(
+                                first_vertex);
+                        layer.triangle_indices.push_back(
+                                first_vertex +
+                                static_cast<uint32_t>(
+                                        vertex_index));
+                        layer.triangle_indices.push_back(
+                                first_vertex +
+                                static_cast<uint32_t>(
+                                        vertex_index + 1));
+                        ++g_terrain_spot_triangle_count;
+                        appended = true;
+                    }
+                }
+            }
+        }
+        if (appended) {
+            g_terrain_spot_texture_paths.insert(texture_path);
+            ++g_terrain_spot_count;
+        }
+    }
+    g_terrain_spot_texture_count =
+            g_terrain_spot_texture_paths.size();
+    std::ostringstream report;
+    report << "terrain_spots="
+           << (g_terrain_spot_count > 0 ? "ready" : "empty")
+           << "; descriptors=" << map->spots.size()
+           << "; rendered=" << g_terrain_spot_count
+           << "; triangles=" << g_terrain_spot_triangle_count
+           << "; textures=" << g_terrain_spot_texture_count;
+    PlatformRuntime::instance().log_info(report.str());
+}
+
 std::string FallbackRiverTexturePath(
         const NDb::SVSODesc* descriptor,
         const char* texture_name) {
@@ -6535,6 +7169,7 @@ void BuildPresentationStaticWorldMesh(
     mesh->vertices.reserve(total * 5);
     mesh->triangle_indices.reserve(total * 18);
     AppendTerrainPrecipices(map, terrain_info, mesh);
+    AppendTerrainPeaks(map, terrain_info, mesh);
     AppendMapObjects(
             map->objects,
             terrain_info,
@@ -6553,6 +7188,7 @@ void BuildPresentationStaticWorldMesh(
             mesh);
     AppendTerrainRivers(map, terrain_info, mesh);
     AppendTerrainRoads(map, terrain_info, mesh);
+    AppendTerrainSpots(map, terrain_info, mesh);
     g_material_alpha_test_layer_count = 0;
     g_material_alpha_test_triangle_count = 0;
     g_material_alpha_blend_layer_count = 0;
@@ -7919,6 +8555,10 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
     size_t river_texture_ready = 0;
     size_t crag_texture_layers = 0;
     size_t crag_texture_ready = 0;
+    size_t peak_texture_layers = 0;
+    size_t peak_texture_ready = 0;
+    size_t terrain_spot_texture_layers = 0;
+    size_t terrain_spot_texture_ready = 0;
     for (WorldObjectMesh::Layer& layer : mesh->layers) {
         layer.texture_handle =
                 ModelTextureHandle(layer.texture_path);
@@ -7933,6 +8573,11 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
         // prefix and the river gate keeps counting only water layers.
         const bool crag_layer =
                 g_crag_texture_paths.count(layer.texture_path) != 0;
+        const bool peak_layer =
+                g_peak_texture_paths.count(layer.texture_path) != 0;
+        const bool terrain_spot_layer =
+                g_terrain_spot_texture_paths.count(
+                        layer.texture_path) != 0;
         if (crag_layer) {
             ++crag_texture_layers;
             if (layer.texture_handle != UINT16_MAX) {
@@ -7942,6 +8587,18 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
             ++river_texture_layers;
             if (layer.texture_handle != UINT16_MAX) {
                 ++river_texture_ready;
+            }
+        }
+        if (peak_layer) {
+            ++peak_texture_layers;
+            if (layer.texture_handle != UINT16_MAX) {
+                ++peak_texture_ready;
+            }
+        }
+        if (terrain_spot_layer) {
+            ++terrain_spot_texture_layers;
+            if (layer.texture_handle != UINT16_MAX) {
+                ++terrain_spot_texture_ready;
             }
         }
         if (layer.alpha_blended &&
@@ -8031,6 +8688,34 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
                    << "; total=" << crag_texture_layers;
             PlatformRuntime::instance().log_info(report.str());
             g_crag_texture_logged = true;
+        }
+    }
+    if (peak_texture_layers > 0) {
+        g_peak_texture_gpu_count = peak_texture_ready;
+        if (!g_peak_texture_logged &&
+            peak_texture_ready == peak_texture_layers) {
+            std::ostringstream report;
+            report << "terrain_peak_textures_gpu=ready"
+                   << "; ready=" << peak_texture_ready
+                   << "; total=" << peak_texture_layers;
+            PlatformRuntime::instance().log_info(report.str());
+            g_peak_texture_logged = true;
+        }
+    }
+    if (terrain_spot_texture_layers > 0) {
+        g_terrain_spot_texture_gpu_count =
+                terrain_spot_texture_ready;
+        if (!g_terrain_spot_texture_logged &&
+            terrain_spot_texture_ready ==
+                    terrain_spot_texture_layers) {
+            std::ostringstream report;
+            report << "terrain_spot_textures_gpu=ready"
+                   << "; ready="
+                   << terrain_spot_texture_ready
+                   << "; total="
+                   << terrain_spot_texture_layers;
+            PlatformRuntime::instance().log_info(report.str());
+            g_terrain_spot_texture_logged = true;
         }
     }
 }
@@ -8602,6 +9287,19 @@ void ShutdownSinglePlayerRuntime() {
     g_crag_texture_gpu_count = 0;
     g_crag_texture_paths.clear();
     g_crag_texture_logged = false;
+    g_peak_count = 0;
+    g_peak_segment_count = 0;
+    g_peak_triangle_count = 0;
+    g_peak_texture_count = 0;
+    g_peak_texture_gpu_count = 0;
+    g_peak_texture_paths.clear();
+    g_peak_texture_logged = false;
+    g_terrain_spot_count = 0;
+    g_terrain_spot_triangle_count = 0;
+    g_terrain_spot_texture_count = 0;
+    g_terrain_spot_texture_gpu_count = 0;
+    g_terrain_spot_texture_paths.clear();
+    g_terrain_spot_texture_logged = false;
     g_converted_geometry_instance_count = 0;
     g_converted_geometry_fallback_count = 0;
     g_animated_geometry_part_count = 0;
@@ -9541,6 +10239,24 @@ std::string SinglePlayerRuntimeReport() {
            << g_crag_texture_count
            << "; terrain_crag_textures_gpu="
            << g_crag_texture_gpu_count
+           << "; terrain_peaks="
+           << g_peak_count
+           << "; terrain_peak_segments="
+           << g_peak_segment_count
+           << "; terrain_peak_triangles="
+           << g_peak_triangle_count
+           << "; terrain_peak_textures="
+           << g_peak_texture_count
+           << "; terrain_peak_textures_gpu="
+           << g_peak_texture_gpu_count
+           << "; terrain_spots="
+           << g_terrain_spot_count
+           << "; terrain_spot_triangles="
+           << g_terrain_spot_triangle_count
+           << "; terrain_spot_textures="
+           << g_terrain_spot_texture_count
+           << "; terrain_spot_textures_gpu="
+           << g_terrain_spot_texture_gpu_count
            << "; texture_gpu="
            << ((g_terrain_layer_texture_count > 0 ||
                 g_terrain_mesh.texture_handle != UINT16_MAX)
