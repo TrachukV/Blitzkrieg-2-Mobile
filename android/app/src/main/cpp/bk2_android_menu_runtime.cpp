@@ -1681,6 +1681,8 @@ std::vector<ChapterTargetState> g_chapter_target_states;
 int g_chapter_selection_campaign = -1;
 int g_chapter_selection_chapter = -1;
 bool g_chapter_runtime_state_allowed = false;
+bool g_chapter_frontline_animation_requested = false;
+int g_chapter_frontline_animation_mission = -1;
 int g_chapter_calls_available = 0;
 int g_chapter_calls_for_selected_mission = 0;
 
@@ -2086,6 +2088,7 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
         reaction == "menu_next" ||
         reaction == "Next") {
         g_chapter_runtime_state_allowed = true;
+        g_chapter_frontline_animation_requested = true;
         return LoadOriginalMenuScreen(
                 "UI/Game/Menu/ChapterMap_WindowScreen.xdb");
     }
@@ -2454,6 +2457,10 @@ void ApplyChapterMapBindingsLocked(const std::string& screen_ref) {
     if (screen_ref != "UI/Game/Menu/ChapterMap_WindowScreen.xdb") {
         return;
     }
+    const bool frontline_animation_requested =
+            g_chapter_frontline_animation_requested;
+    g_chapter_frontline_animation_requested = false;
+    g_chapter_frontline_animation_mission = -1;
     const NDb::SGameRoot* root = NGameX::GetGameRoot();
     const NDb::SChapter* chapter = SelectedChapter();
     if (root == nullptr ||
@@ -2478,6 +2485,11 @@ void ApplyChapterMapBindingsLocked(const std::string& screen_ref) {
             runtime_state.campaign_index == g_selected_campaign &&
             runtime_state.chapter_index == g_selected_chapter &&
             runtime_state.chapter_active;
+    const bool animate_last_win =
+            frontline_animation_requested &&
+            use_runtime_state &&
+            runtime_state.mission_won &&
+            !runtime_state.mission_id.empty();
 
     g_chapter_target_states.assign(
             chapter->missionPath.size(),
@@ -2501,6 +2513,11 @@ void ApplyChapterMapBindingsLocked(const std::string& screen_ref) {
                      mission_id))) {
             g_chapter_target_states[index] =
                     kChapterTargetCompleted;
+            if (animate_last_win &&
+                runtime_state.mission_id == mission_id) {
+                g_chapter_frontline_animation_mission =
+                        static_cast<int>(index);
+            }
         } else if (use_runtime_state &&
                    ContainsResourceId(
                            runtime_state.enabled_mission_ids,
@@ -3402,6 +3419,55 @@ struct ChapterPotentialNode {
     float value = 0.0f;
 };
 
+struct ChapterPotentialAnimationState {
+    int width = 0;
+    int height = 0;
+    int source_width = 0;
+    int source_height = 0;
+    int mission_index = -1;
+    float strike_x = 0.0f;
+    float strike_y = 0.0f;
+    float value_from = 0.0f;
+    float value_to = 0.0f;
+    uint64_t elapsed_millis = 0;
+    uint64_t delay_millis = 50;
+    uint64_t last_tick_millis = 0;
+    uint64_t last_upload_millis = 0;
+    bool started = false;
+    NGfx::SPixel8888 border;
+    std::vector<NGfx::SPixel8888> mask;
+    std::vector<NGfx::SPixel8888> territory_colour;
+    std::vector<ChapterPotentialNode> nodes;
+    std::vector<float> base_potential;
+    std::vector<float> animated_weight;
+};
+
+std::unique_ptr<ChapterPotentialAnimationState>
+        g_chapter_potential_animation;
+
+float ChapterPotentialNodeWeight(
+        const ChapterPotentialNode& node,
+        float x,
+        float y) {
+    float along =
+            node.end_x * (x - node.x) +
+            node.end_y * (y - node.y);
+    const float end_length_squared =
+            node.end_x * node.end_x +
+            node.end_y * node.end_y;
+    if (end_length_squared > 0.0001f) {
+        along = std::clamp(
+                along / end_length_squared,
+                0.0f,
+                1.0f);
+    } else {
+        along = 0.0f;
+    }
+    const float dx = node.x + node.end_x * along - x;
+    const float dy = node.y + node.end_y * along - y;
+    return 1.0f / (1.0f + dx * dx + dy * dy);
+}
+
 std::string ResolveChapterLayerPath(
         const NDb::SChapter* chapter,
         const string& file_ref) {
@@ -3573,10 +3639,402 @@ NGfx::SPixel8888 BlendChapterPixel(
                     255.0f)));
 }
 
+float ChapterPotentialAt(
+        const ChapterPotentialAnimationState& state,
+        int x,
+        int y,
+        float animated_value) {
+    if (x >= 0 && y >= 0 && x < state.width && y < state.height) {
+        const size_t index =
+                static_cast<size_t>(y) * state.width + x;
+        return state.base_potential[index] +
+                (state.mission_index >= 0
+                         ? animated_value *
+                                   state.animated_weight[index]
+                         : 0.0f);
+    }
+
+    float value = 0.0f;
+    if (x >= 0 &&
+        y >= 0 &&
+        x < state.source_width &&
+        y < state.source_height) {
+        const NGfx::SPixel8888& mask_pixel =
+                state.mask[
+                        static_cast<size_t>(y) *
+                                state.source_width +
+                        x];
+        if (mask_pixel.a != 0xff && mask_pixel.a != 0x00) {
+            value =
+                    (static_cast<float>(mask_pixel.a) - 127.0f) *
+                    0.00001f;
+        }
+        const float x_gradient =
+                state.strike_x *
+                (static_cast<float>(
+                         x + x - state.source_width) /
+                 static_cast<float>(state.source_width));
+        const float y_gradient =
+                -state.strike_y *
+                (static_cast<float>(
+                         y + y - state.source_height) /
+                 static_cast<float>(state.source_height));
+        value += (x_gradient + y_gradient) * 0.007f;
+    }
+    for (size_t index = 0; index < state.nodes.size(); ++index) {
+        const ChapterPotentialNode& node = state.nodes[index];
+        const float node_value =
+                static_cast<int>(index) == state.mission_index
+                        ? animated_value
+                        : node.value;
+        value += node_value *
+                ChapterPotentialNodeWeight(
+                        node,
+                        static_cast<float>(x),
+                        static_cast<float>(y));
+    }
+    return value;
+}
+
+void BuildChapterPotentialBase(
+        ChapterPotentialAnimationState* state,
+        float strike_x,
+        float strike_y) {
+    if (state == nullptr) {
+        return;
+    }
+    state->strike_x = strike_x;
+    state->strike_y = strike_y;
+    const size_t pixel_count =
+            static_cast<size_t>(state->width) * state->height;
+    state->base_potential.assign(pixel_count, 0.0f);
+    if (state->mission_index >= 0) {
+        state->animated_weight.assign(pixel_count, 0.0f);
+    } else {
+        state->animated_weight.clear();
+    }
+    for (int y = 0; y < state->height; ++y) {
+        for (int x = 0; x < state->width; ++x) {
+            const size_t pixel_index =
+                    static_cast<size_t>(y) * state->width + x;
+            const NGfx::SPixel8888& mask_pixel =
+                    state->mask[
+                            static_cast<size_t>(y) *
+                                    state->source_width +
+                            x];
+            float value = 0.0f;
+            if (mask_pixel.a != 0xff && mask_pixel.a != 0x00) {
+                value =
+                        (static_cast<float>(mask_pixel.a) - 127.0f) *
+                        0.00001f;
+            }
+            const float x_gradient =
+                    strike_x *
+                    (static_cast<float>(
+                             x + x - state->source_width) /
+                     static_cast<float>(state->source_width));
+            const float y_gradient =
+                    -strike_y *
+                    (static_cast<float>(
+                             y + y - state->source_height) /
+                     static_cast<float>(state->source_height));
+            value += (x_gradient + y_gradient) * 0.007f;
+
+            for (size_t node_index = 0;
+                 node_index < state->nodes.size();
+                 ++node_index) {
+                const float weight = ChapterPotentialNodeWeight(
+                        state->nodes[node_index],
+                        static_cast<float>(x),
+                        static_cast<float>(y));
+                if (static_cast<int>(node_index) ==
+                    state->mission_index) {
+                    state->animated_weight[pixel_index] = weight;
+                } else {
+                    value +=
+                            state->nodes[node_index].value * weight;
+                }
+            }
+            state->base_potential[pixel_index] = value;
+        }
+    }
+}
+
+std::vector<NGfx::SPixel8888> RasterizeChapterPotential(
+        const ChapterPotentialAnimationState& state,
+        float animated_value,
+        size_t* territory_pixels,
+        size_t* border_pixels) {
+    std::vector<NGfx::SPixel8888> overlay(
+            static_cast<size_t>(state.width) * state.height,
+            NGfx::SPixel8888(0, 0, 0, 0));
+    size_t territory_count = 0;
+    for (int y = 0; y < state.height; ++y) {
+        for (int x = 0; x < state.width; ++x) {
+            const size_t source_index =
+                    static_cast<size_t>(y) *
+                            state.source_width +
+                    x;
+            const NGfx::SPixel8888& mask_pixel =
+                    state.mask[source_index];
+            if (mask_pixel.a == 0xff ||
+                ChapterPotentialAt(
+                        state,
+                        x,
+                        y,
+                        animated_value) > 0.0f) {
+                continue;
+            }
+            NGfx::SPixel8888 pixel =
+                    state.territory_colour[source_index];
+            pixel.a = 0xff;
+            overlay[static_cast<size_t>(y) * state.width + x] =
+                    pixel;
+            ++territory_count;
+        }
+    }
+
+    std::vector<NGfx::SPixel8888> lines(
+            static_cast<size_t>(state.width) * state.height,
+            NGfx::SPixel8888(0, 0, 0, 0));
+    constexpr int kGridSize = 10;
+    constexpr float kBorderRadius = 5.0f;
+    constexpr float kBlurPart = 0.3f;
+    const auto draw_circle = [&](int center_x, int center_y) {
+        if (center_x < 0 ||
+            center_y < 0 ||
+            center_x >= state.width ||
+            center_y >= state.height ||
+            state.mask[
+                    static_cast<size_t>(center_y) *
+                            state.source_width +
+                    center_x].a == 0xff) {
+            return;
+        }
+        const int first_x =
+                static_cast<int>(center_x - kBorderRadius);
+        const int last_x =
+                static_cast<int>(center_x + kBorderRadius);
+        const int first_y =
+                static_cast<int>(center_y - kBorderRadius);
+        const int last_y =
+                static_cast<int>(center_y + kBorderRadius);
+        for (int x = first_x; x < last_x; ++x) {
+            for (int y = first_y; y < last_y; ++y) {
+                if (x < 0 ||
+                    y < 0 ||
+                    x >= state.width ||
+                    y >= state.height) {
+                    continue;
+                }
+                const float horizontal =
+                        std::fabs(
+                                static_cast<float>(
+                                        x - center_x));
+                const float vertical =
+                        std::fabs(
+                                static_cast<float>(
+                                        y - center_y));
+                const float distance = std::min(
+                        std::max(horizontal, vertical),
+                        (horizontal + vertical) * 0.666f);
+                if (distance >= kBorderRadius) {
+                    continue;
+                }
+                BYTE alpha = state.border.a;
+                if (distance > kBorderRadius * kBlurPart) {
+                    alpha = static_cast<BYTE>(
+                            static_cast<float>(alpha) *
+                            (kBorderRadius - distance) /
+                            (kBorderRadius *
+                             (1.0f - kBlurPart)));
+                }
+                NGfx::SPixel8888& pixel =
+                        lines[
+                                static_cast<size_t>(y) *
+                                        state.width +
+                                x];
+                const DWORD old_alpha = pixel.a;
+                pixel = state.border;
+                pixel.a =
+                        std::max<DWORD>(old_alpha, alpha);
+            }
+        }
+    };
+    const auto draw_line =
+            [&](float x0, float y0, float x1, float y1) {
+                const float dx = x1 - x0;
+                const float dy = y1 - y0;
+                const int steps = std::max(
+                        1,
+                        static_cast<int>(std::ceil(
+                                std::max(
+                                        std::fabs(dx),
+                                        std::fabs(dy)))));
+                for (int step = 0; step <= steps; ++step) {
+                    const float part =
+                            static_cast<float>(step) /
+                            static_cast<float>(steps);
+                    draw_circle(
+                            static_cast<int>(std::lround(
+                                    x0 + dx * part)),
+                            static_cast<int>(std::lround(
+                                    y0 + dy * part)));
+                }
+            };
+
+    for (int y = 0; y < state.height; y += kGridSize) {
+        for (int x = 0; x < state.width; x += kGridSize) {
+            const float values[4] = {
+                    ChapterPotentialAt(
+                            state,
+                            x + kGridSize,
+                            y + kGridSize,
+                            animated_value),
+                    ChapterPotentialAt(
+                            state,
+                            x + kGridSize,
+                            y,
+                            animated_value),
+                    ChapterPotentialAt(
+                            state,
+                            x,
+                            y,
+                            animated_value),
+                    ChapterPotentialAt(
+                            state,
+                            x,
+                            y + kGridSize,
+                            animated_value),
+            };
+            BYTE type = 0;
+            for (float value : values) {
+                type = static_cast<BYTE>(
+                        (type << 1) |
+                        (value > 0.0f ? 1 : 0));
+            }
+            const auto part = [&](int first, int second) {
+                const float denominator =
+                        values[first] - values[second];
+                if (std::fabs(denominator) <= 0.000001f) {
+                    return kGridSize * 0.5f;
+                }
+                return kGridSize *
+                        std::fabs(
+                                values[first] / denominator);
+            };
+            switch (type) {
+                case 1:
+                case 14:
+                    draw_line(
+                            static_cast<float>(x),
+                            y + part(2, 3),
+                            x + part(3, 0),
+                            static_cast<float>(y + kGridSize));
+                    break;
+                case 2:
+                case 13:
+                    draw_line(
+                            static_cast<float>(x),
+                            y + part(2, 3),
+                            x + part(2, 1),
+                            static_cast<float>(y));
+                    break;
+                case 3:
+                case 12:
+                    draw_line(
+                            x + part(2, 1),
+                            static_cast<float>(y),
+                            x + part(3, 0),
+                            static_cast<float>(y + kGridSize));
+                    break;
+                case 4:
+                case 11:
+                    draw_line(
+                            x + part(2, 1),
+                            static_cast<float>(y),
+                            static_cast<float>(x + kGridSize),
+                            y + part(1, 0));
+                    break;
+                case 5:
+                case 10:
+                    draw_line(
+                            static_cast<float>(x),
+                            y + part(2, 3),
+                            x + part(3, 0),
+                            static_cast<float>(y + kGridSize));
+                    draw_line(
+                            x + part(2, 1),
+                            static_cast<float>(y),
+                            static_cast<float>(x + kGridSize),
+                            y + part(1, 0));
+                    break;
+                case 6:
+                case 9:
+                    draw_line(
+                            static_cast<float>(x),
+                            y + part(2, 3),
+                            static_cast<float>(x + kGridSize),
+                            y + part(1, 0));
+                    break;
+                case 7:
+                case 8:
+                    draw_line(
+                            x + part(3, 0),
+                            static_cast<float>(y + kGridSize),
+                            static_cast<float>(x + kGridSize),
+                            y + part(1, 0));
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    size_t border_count = 0;
+    for (size_t index = 0; index < overlay.size(); ++index) {
+        if (lines[index].a == 0) {
+            continue;
+        }
+        overlay[index] =
+                BlendChapterPixel(lines[index], overlay[index]);
+        ++border_count;
+    }
+    if (territory_pixels != nullptr) {
+        *territory_pixels = territory_count;
+    }
+    if (border_pixels != nullptr) {
+        *border_pixels = border_count;
+    }
+    return overlay;
+}
+
+void UploadChapterPotential(
+        const std::vector<NGfx::SPixel8888>& overlay,
+        int width,
+        int height) {
+    if (!IsValid(g_chapter_potential_texture) ||
+        overlay.size() <
+                static_cast<size_t>(width) * height) {
+        return;
+    }
+    NGfx::CTextureLock<NGfx::SPixel8888> lock(
+            g_chapter_potential_texture,
+            0,
+            NGfx::INPLACE);
+    for (int y = 0; y < height; ++y) {
+        std::copy_n(
+                overlay.data() +
+                        static_cast<size_t>(y) * width,
+                width,
+                lock[y]);
+    }
+}
+
 // CWindowPotentialLines builds two generated layers over the chapter picture:
 // a differently coloured negative-potential territory and its blurred zero
-// contour. Generate the same static state into one Android texture; selected
-// mission arrows and target markers are submitted afterward.
+// contour. Generate the same layers into one Android texture; selected mission
+// arrows and target markers are submitted afterward.
 void AppendChapterMapPotential(
         const NDb::SChapter* chapter,
         const NDb::SMapInfo* details,
@@ -3584,6 +4042,7 @@ void AppendChapterMapPotential(
         float details_scale_x,
         float details_scale_y) {
     g_chapter_potential_texture = nullptr;
+    g_chapter_potential_animation.reset();
     if (chapter == nullptr ||
         details == nullptr ||
         map_window.width <= 1.0f ||
@@ -3624,6 +4083,15 @@ void AppendChapterMapPotential(
         return;
     }
 
+    std::unique_ptr<ChapterPotentialAnimationState> animation_state =
+            std::make_unique<ChapterPotentialAnimationState>();
+    animation_state->width = width;
+    animation_state->height = height;
+    animation_state->source_width =
+            std::min(mask.GetSizeX(), territory_colour.GetSizeX());
+    animation_state->source_height =
+            std::min(mask.GetSizeY(), territory_colour.GetSizeY());
+
     std::vector<ChapterPotentialNode> nodes;
     nodes.reserve(chapter->missionPath.size());
     size_t completed_nodes = 0;
@@ -3654,6 +4122,17 @@ void AppendChapterMapPotential(
         if (completed) {
             ++completed_nodes;
         }
+        if (completed &&
+            static_cast<int>(mission_index) ==
+                    g_chapter_frontline_animation_mission) {
+            animation_state->mission_index =
+                    static_cast<int>(mission_index);
+            animation_state->value_from =
+                    mission.fPotentialIncomplete;
+            animation_state->value_to =
+                    mission.fPotentialComplete;
+            node.value = animation_state->value_from;
+        }
         nodes.push_back(node);
     }
 
@@ -3668,6 +4147,37 @@ void AppendChapterMapPotential(
             strike_y = std::sin(radians) * chapter->fMainStrikePower;
             break;
         }
+    }
+    if (animation_state->mission_index >= 0) {
+        animation_state->mask.resize(
+                static_cast<size_t>(
+                        animation_state->source_width) *
+                animation_state->source_height);
+        animation_state->territory_colour.resize(
+                animation_state->mask.size());
+        for (int y = 0;
+             y < animation_state->source_height;
+             ++y) {
+            for (int x = 0;
+                 x < animation_state->source_width;
+                 ++x) {
+                const size_t index =
+                        static_cast<size_t>(y) *
+                                animation_state->source_width +
+                        x;
+                animation_state->mask[index] = mask[y][x];
+                animation_state->territory_colour[index] =
+                        territory_colour[y][x];
+            }
+        }
+        animation_state->border = NGfx::SPixel8888(
+                static_cast<DWORD>(
+                        chapter->nPositiveColour));
+        animation_state->nodes = nodes;
+        BuildChapterPotentialBase(
+                animation_state.get(),
+                strike_x,
+                strike_y);
     }
 
     const auto potential_at = [&](int x, int y) {
@@ -3948,9 +4458,96 @@ void AppendChapterMapPotential(
            << "; completed=" << completed_nodes
            << "; territory_pixels=" << territory_pixels
            << "; border_pixels=" << border_pixels
+           << "; animation_mission="
+           << animation_state->mission_index
+           << "; animation_from="
+           << animation_state->value_from
+           << "; animation_to="
+           << animation_state->value_to
            << "; mask=" << mask_path
            << "; colour=" << colour_path;
     PlatformRuntime::instance().log_info(report.str());
+
+    if (animation_state->mission_index >= 0 &&
+        std::fabs(
+                animation_state->value_to -
+                animation_state->value_from) > 0.000001f) {
+        animation_state->last_tick_millis =
+                PlatformRuntime::instance().monotonic_millis();
+        g_chapter_potential_animation =
+                std::move(animation_state);
+    }
+}
+
+void UpdateChapterMapPotentialAnimationLocked() {
+    if (!g_chapter_potential_animation ||
+        !IsValid(g_chapter_potential_texture)) {
+        return;
+    }
+    ChapterPotentialAnimationState& state =
+            *g_chapter_potential_animation;
+    const uint64_t now =
+            PlatformRuntime::instance().monotonic_millis();
+    if (PlatformRuntime::instance().lifecycle_state() !=
+        LifecycleState::Focused) {
+        state.last_tick_millis = now;
+        return;
+    }
+    const uint64_t delta = std::min<uint64_t>(
+            now - state.last_tick_millis,
+            100);
+    state.last_tick_millis = now;
+    uint64_t animation_delta = delta;
+    if (state.delay_millis > 0) {
+        const uint64_t consumed =
+                std::min(state.delay_millis, animation_delta);
+        state.delay_millis -= consumed;
+        animation_delta -= consumed;
+        if (state.delay_millis > 0) {
+            return;
+        }
+    }
+    state.elapsed_millis = std::min<uint64_t>(
+            5000,
+            state.elapsed_millis + animation_delta);
+    if (state.elapsed_millis < 5000 &&
+        state.elapsed_millis - state.last_upload_millis < 50) {
+        return;
+    }
+    state.last_upload_millis = state.elapsed_millis;
+    const float progress =
+            static_cast<float>(state.elapsed_millis) / 5000.0f;
+    const float value =
+            state.value_from +
+            (state.value_to - state.value_from) * progress;
+    const std::vector<NGfx::SPixel8888> overlay =
+            RasterizeChapterPotential(
+                    state,
+                    value,
+                    nullptr,
+                    nullptr);
+    UploadChapterPotential(
+            overlay,
+            state.width,
+            state.height);
+    if (!state.started) {
+        state.started = true;
+        std::ostringstream report;
+        report << "original_menu_chapter_frontline_animation=started"
+               << "; mission=" << state.mission_index
+               << "; duration_ms=5000"
+               << "; from=" << state.value_from
+               << "; to=" << state.value_to;
+        PlatformRuntime::instance().log_info(report.str());
+    }
+    if (state.elapsed_millis >= 5000) {
+        PlatformRuntime::instance().log_info(
+                "original_menu_chapter_frontline_animation=completed; "
+                "mission=" +
+                std::to_string(state.mission_index) +
+                "; duration_ms=5000");
+        g_chapter_potential_animation.reset();
+    }
 }
 
 // CWindowPotentialLines::DrawArrows maps every road assigned to the selected
@@ -4697,6 +5294,7 @@ bool RebuildMenuScreenLocked(const std::string& screen_ref) {
     g_textured_quads.clear();
     g_textured_quad_insert_index = static_cast<size_t>(-1);
     g_chapter_potential_texture = nullptr;
+    g_chapter_potential_animation.reset();
     g_texture_paths.clear();
     g_pressed_quads.clear();
     g_pressed_button = -1;
@@ -4786,6 +5384,7 @@ void RenderOriginalMenu(uint32_t screen_width, uint32_t screen_height) {
     if (!g_ready || screen_width == 0 || screen_height == 0) {
         return;
     }
+    UpdateChapterMapPotentialAnimationLocked();
     // UI.cpp VirtualToScreenX/Y scale each axis independently, so the shipped
     // 1024x768 layout stretches to whatever resolution is active.
     const float scale_x =
@@ -5033,6 +5632,7 @@ void ShutdownOriginalMenuRuntime() {
     g_textured_quads.clear();
     g_textured_quad_insert_index = static_cast<size_t>(-1);
     g_chapter_potential_texture = nullptr;
+    g_chapter_potential_animation.reset();
     g_texture_paths.clear();
     g_texture_handles.clear();
     g_pressed_quads.clear();

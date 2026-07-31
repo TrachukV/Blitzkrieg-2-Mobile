@@ -842,9 +842,17 @@ its own blue layer and generated 222,578 territory pixels with a 9,302-pixel
 contour. Both TGA masks aligned with the shipped coastlines and national flags;
 markers and arrows stayed above the generated layer. Selecting Germany mission
 index 2 kept the campaign-state frontline stable while rebuilding its arrows
-from 36 to 44 segments. The desktop's timed `nFrontLineAnim` interpolation
-after a win remains separate work; a returned completed state already renders
-the correct final potential immediately.
+from 36 to 44 segments.
+
+The post-win `nFrontLineAnim` path is also restored. Returning from a successful
+statistics screen identifies the tracker’s last `mission_id`, starts only that
+completed node at `fPotentialIncomplete`, and interpolates it to
+`fPotentialComplete` over the original 5,000 milliseconds. Static potential
+from the mask, gradient, and other nodes is precomputed once; the same dynamic
+texture is updated during the transition and remains in its exact final state.
+The ARM64 visual probe covered USA mission index 2 at the initial, midpoint,
+and completed frames and logged one start and one completion without a process
+failure.
 
 On the ARM64 emulator the main menu screen resolves 28 windows, 16 buttons, 20
 textures, and 17 captions, loads 4 shipped fonts, and submits 158 quads with
@@ -1641,11 +1649,12 @@ linked. The production campaign-selection route, cards, selection state,
 difficulty handoff, selected chapter-map transition, chapter mission
 availability, target-state art, selected-mission panel, reserve counts,
 reinforcement/reward icons, selected-mission road arrows, dependency alpha,
-and locked-mission Play guard are linked. Campaign
+post-win frontline interpolation, and locked-mission Play guard are linked.
+Campaign
 intro playback is still bypassed while most referenced Bink sources are
 unavailable. Touch scrolling for text longer than the authored viewport,
-the animated chapter-map frontline transition and reinforcement detail
-dialogs, and result rank/medal popups remain unfinished. The core Action
+the chapter-map reinforcement digit rollers and detail dialogs, and result
+rank/medal popups remain unfinished. The core Action
 Report and its reward rows are linked. Empty initial
 dynamic-world snapshots are now accepted as valid, and entity removals between
 the snapshot count/copy calls no longer abort mission startup; this fixed

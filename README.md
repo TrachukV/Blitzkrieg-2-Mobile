@@ -99,8 +99,10 @@ from the current campaign tracker. It reads the chapter's sea/noise mask and
 alternate-colour TGA, applies the authored main-strike gradient and each
 mission's incomplete/completed potential at its details-map node, then builds
 the masked territory and ten-pixel zero contour before arrows and markers.
-The final post-win state is correct; only the desktop's short interpolation
-animation between the old and new frontline remains to be ported.
+After a successful mission the last node now starts at its incomplete value
+and follows the desktop controller's five-second interpolation to its completed
+value. The generated texture updates in place and the transition is requested
+only by the successful statistics-to-chapter route.
 The map renderer now includes general `SObjectRPGStats` records in addition to
 buildings, fences, entrenchments, squads, and mechanized units. This restores
 the original mission's vegetation and small props through their converted
