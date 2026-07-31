@@ -187,13 +187,22 @@ struct PresentationProjectile {
     std::vector<AndroidSceneEffect> attached_effects;
     uint64_t effect_created_millis = 0;
 };
+struct PresentationAnimation {
+    int32_t type = -1;
+    uint64_t started_millis = 0;
+};
 std::unordered_map<int32_t, Bk2PresentationEntity>
         g_last_presentation_entities;
+std::unordered_map<int32_t, PresentationAnimation>
+        g_presentation_animations;
 std::unordered_map<int32_t, PresentationCorpse> g_presentation_corpses;
 std::unordered_map<int32_t, PresentationProjectile>
         g_presentation_projectiles;
 uint64_t g_presentation_death_count = 0;
 uint64_t g_presentation_disappear_count = 0;
+uint64_t g_presentation_animation_update_count = 0;
+uint64_t g_presentation_lie_animation_count = 0;
+uint64_t g_presentation_stand_animation_count = 0;
 uint64_t g_projectile_update_count = 0;
 uint64_t g_projectile_created_count = 0;
 uint64_t g_projectile_rejected_count = 0;
@@ -1848,6 +1857,7 @@ void RemovePresentationObject(int32_t object_id, bool show_effects) {
     }
     g_presentation_corpses.erase(corpse);
     g_last_presentation_entities.erase(object_id);
+    g_presentation_animations.erase(object_id);
     g_unit_death_effect_candidates.erase(object_id);
     g_destruction_effects.erase(
             std::remove_if(
@@ -2362,6 +2372,43 @@ void DrainLegacyClientUpdates() {
     g_ai_logic->PrepareUpdates();
     while (CPtr<CObjectBase> update = g_ai_logic->GetUpdate()) {
         ++g_client_update_count;
+        SAIActionUpdate* action =
+                dynamic_cast<SAIActionUpdate*>(update.GetPtr());
+        if (action != nullptr &&
+            action->eUpdateType == ACTION_NOTIFY_ANIMATION_CHANGED) {
+            PresentationAnimation& animation =
+                    g_presentation_animations[action->nObjUniqueID];
+            animation.type = action->nParam;
+            animation.started_millis =
+                    action->nUpdateTime < 0
+                    ? g_timer_millis
+                    : static_cast<uint64_t>(action->nUpdateTime);
+            ++g_presentation_animation_update_count;
+            if (g_presentation_animation_update_count == 1) {
+                PlatformRuntime::instance().log_info(
+                        std::string("presentation_animation_stream=active; id=") +
+                        std::to_string(action->nObjUniqueID) +
+                        "; type=" + std::to_string(animation.type) +
+                        "; started_ms=" +
+                        std::to_string(animation.started_millis));
+            }
+            if (animation.type == NDb::ANIMATION_LIE) {
+                ++g_presentation_lie_animation_count;
+                PlatformRuntime::instance().log_info(
+                        std::string("infantry_lie_animation=") +
+                        std::to_string(action->nObjUniqueID) +
+                        "; started_ms=" +
+                        std::to_string(animation.started_millis));
+            } else if (animation.type == NDb::ANIMATION_STAND) {
+                ++g_presentation_stand_animation_count;
+                PlatformRuntime::instance().log_info(
+                        std::string("infantry_stand_animation=") +
+                        std::to_string(action->nObjUniqueID) +
+                        "; started_ms=" +
+                        std::to_string(animation.started_millis));
+            }
+            continue;
+        }
         SAITreeBrokenUpdate* tree_broken =
                 dynamic_cast<SAITreeBrokenUpdate*>(
                         update.GetPtr());
@@ -3400,6 +3447,20 @@ void PublishPresentationEntities() {
                         : (unit->GetParty() == theDipl.GetMyParty()
                                    ? BK2_PRESENTATION_RELATION_ALLY
                                    : BK2_PRESENTATION_RELATION_ENEMY)};
+        const auto animation =
+                g_presentation_animations.find(entity.id);
+        if (animation == g_presentation_animations.end()) {
+            entity.animation_type = -1;
+            entity.animation_elapsed_seconds = 0.0f;
+        } else {
+            entity.animation_type = animation->second.type;
+            const uint64_t elapsed_millis =
+                    g_timer_millis >= animation->second.started_millis
+                    ? g_timer_millis - animation->second.started_millis
+                    : 0;
+            entity.animation_elapsed_seconds =
+                    static_cast<float>(elapsed_millis) / 1000.0f;
+        }
         entities.push_back(entity);
         if ((entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) != 0) {
             g_last_presentation_entities[entity.id] = entity;
@@ -3648,6 +3709,7 @@ void ResetReportState() {
     g_forwarded_unit_kill_count = 0;
     g_forwarded_unit_kill_error_count = 0;
     g_last_presentation_entities.clear();
+    g_presentation_animations.clear();
     g_presentation_corpses.clear();
     g_presentation_projectiles.clear();
     g_turret_aim.clear();
@@ -3667,6 +3729,9 @@ void ResetReportState() {
     g_unit_ack_logged_paths.clear();
     g_presentation_death_count = 0;
     g_presentation_disappear_count = 0;
+    g_presentation_animation_update_count = 0;
+    g_presentation_lie_animation_count = 0;
+    g_presentation_stand_animation_count = 0;
     g_projectile_update_count = 0;
     g_projectile_created_count = 0;
     g_projectile_rejected_count = 0;
@@ -6034,6 +6099,12 @@ std::string LegacyGameRuntimeReport() {
            << "; active_corpses=" << g_presentation_corpses.size()
            << "; presented_disappearances="
            << g_presentation_disappear_count
+           << "; presentation_animation_updates="
+           << g_presentation_animation_update_count
+           << "; presentation_lie_animations="
+           << g_presentation_lie_animation_count
+           << "; presentation_stand_animations="
+           << g_presentation_stand_animation_count
            << "; projectile_updates=" << g_projectile_update_count
            << "; projectiles_created=" << g_projectile_created_count
            << "; projectiles_rejected=" << g_projectile_rejected_count

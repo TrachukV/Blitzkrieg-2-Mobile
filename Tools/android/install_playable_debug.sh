@@ -60,6 +60,8 @@ if [[ "${BK2_SKIP_GEOMETRY_CONVERSION:-0}" != "1" ]]; then
             --lying-idle-animation "${DATA_SOURCE}/Data/bin/Animations/3968" \
             --lying-move-animation "${DATA_SOURCE}/Data/bin/Animations/3984" \
             --lying-attack-animation "${DATA_SOURCE}/Data/bin/Animations/3970" \
+            --lie-animation "${DATA_SOURCE}/Data/bin/Animations/3965" \
+            --stand-animation "${DATA_SOURCE}/Data/bin/Animations/3988" \
             --skip-unsupported \
             --all
         python3 convert_bridge_death_geometry.py \

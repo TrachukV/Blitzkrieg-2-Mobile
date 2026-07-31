@@ -202,6 +202,8 @@ size_t g_death_animation_instance_count = 0;
 size_t g_lying_idle_animation_instance_count = 0;
 size_t g_lying_move_animation_instance_count = 0;
 size_t g_lying_attack_animation_instance_count = 0;
+size_t g_lie_transition_animation_instance_count = 0;
+size_t g_stand_transition_animation_instance_count = 0;
 size_t g_combat_effect_render_count = 0;
 size_t g_effect_light_render_count = 0;
 size_t g_active_combat_effect_count = 0;
@@ -258,6 +260,8 @@ enum class ConvertedAnimationVariant {
     LyingIdle,
     LyingMove,
     LyingAttack,
+    LieTransition,
+    StandTransition,
 };
 
 struct ConvertedGeometryVertex {
@@ -357,6 +361,11 @@ std::unordered_map<int, ConvertedGeometry> g_lying_move_converted_geometries;
 std::unordered_set<int> g_missing_lying_move_converted_geometries;
 std::unordered_map<int, ConvertedGeometry> g_lying_attack_converted_geometries;
 std::unordered_set<int> g_missing_lying_attack_converted_geometries;
+std::unordered_map<int, ConvertedGeometry> g_lie_transition_converted_geometries;
+std::unordered_set<int> g_missing_lie_transition_converted_geometries;
+std::unordered_map<int, ConvertedGeometry>
+        g_stand_transition_converted_geometries;
+std::unordered_set<int> g_missing_stand_transition_converted_geometries;
 std::unordered_map<int32_t, float> g_death_animation_start_seconds;
 std::unordered_map<uint64_t, GeometryBinding> g_stats_geometry_index;
 std::unordered_map<
@@ -1701,6 +1710,18 @@ const ConvertedGeometry* LoadConvertedGeometry(
         missing_converted_geometries =
                 &g_missing_lying_attack_converted_geometries;
         filename_suffix = ".lying.attack.bk2mesh";
+    } else if (animation_variant ==
+               ConvertedAnimationVariant::LieTransition) {
+        converted_geometries = &g_lie_transition_converted_geometries;
+        missing_converted_geometries =
+                &g_missing_lie_transition_converted_geometries;
+        filename_suffix = ".lie.bk2mesh";
+    } else if (animation_variant ==
+               ConvertedAnimationVariant::StandTransition) {
+        converted_geometries = &g_stand_transition_converted_geometries;
+        missing_converted_geometries =
+                &g_missing_stand_transition_converted_geometries;
+        filename_suffix = ".stand.bk2mesh";
     }
     const auto loaded = converted_geometries->find(record_id);
     if (loaded != converted_geometries->end()) {
@@ -3908,7 +3929,11 @@ size_t ConvertedGeometryFrameIndex(
         return 0;
     }
     const float animation_time =
-            animation_variant == ConvertedAnimationVariant::Death
+            animation_variant == ConvertedAnimationVariant::Death ||
+                    animation_variant ==
+                            ConvertedAnimationVariant::LieTransition ||
+                    animation_variant ==
+                            ConvertedAnimationVariant::StandTransition
             ? std::min(
                       std::max(animation_time_seconds, 0.0f),
                       part.animation_duration_seconds)
@@ -4453,6 +4478,15 @@ bool AppendConvertedGeometry(
                    ConvertedAnimationVariant::LyingAttack) {
             instance_count = &g_lying_attack_animation_instance_count;
             diagnostic = "lying_attack_animation_runtime=active; geometry=";
+        } else if (animation_variant ==
+                   ConvertedAnimationVariant::LieTransition) {
+            instance_count = &g_lie_transition_animation_instance_count;
+            diagnostic = "lie_transition_animation_runtime=active; geometry=";
+        } else if (animation_variant ==
+                   ConvertedAnimationVariant::StandTransition) {
+            instance_count = &g_stand_transition_animation_instance_count;
+            diagnostic =
+                    "stand_transition_animation_runtime=active; geometry=";
         }
         ++*instance_count;
         if (*instance_count == 1) {
@@ -5106,12 +5140,25 @@ void AppendEntityModel(
             entity.rpg_stats_path_hash == 0xe1f6a0043e473508ull;
     ConvertedAnimationVariant animation_variant =
             ConvertedAnimationVariant::Base;
+    float selected_animation_time_seconds = animation_time_seconds;
     if ((entity.flags & BK2_PRESENTATION_ENTITY_BRIDGE) != 0 &&
         (entity.flags & BK2_PRESENTATION_ENTITY_DEAD) != 0) {
         animation_variant = ConvertedAnimationVariant::Death;
     } else if ((entity.flags & BK2_PRESENTATION_ENTITY_INFANTRY) != 0) {
         if ((entity.flags & BK2_PRESENTATION_ENTITY_DEAD) != 0) {
             animation_variant = ConvertedAnimationVariant::Death;
+        } else if (entity.animation_type == 10) {
+            // NDb::ANIMATION_LIE. The presentation API deliberately carries
+            // the legacy numeric value so this renderer stays independent of
+            // the desktop Stats headers.
+            animation_variant = ConvertedAnimationVariant::LieTransition;
+            selected_animation_time_seconds =
+                    entity.animation_elapsed_seconds;
+        } else if (entity.animation_type == 11) {
+            // NDb::ANIMATION_STAND.
+            animation_variant = ConvertedAnimationVariant::StandTransition;
+            selected_animation_time_seconds =
+                    entity.animation_elapsed_seconds;
         } else if ((entity.flags & BK2_PRESENTATION_ENTITY_LYING) != 0 &&
                    (entity.flags & BK2_PRESENTATION_ENTITY_ATTACKING) != 0) {
             animation_variant = ConvertedAnimationVariant::LyingAttack;
@@ -5137,7 +5184,7 @@ void AppendEntityModel(
                 entity.heading_radians,
                 abgr,
                 animation_variant,
-                animation_time_seconds,
+                selected_animation_time_seconds,
                 false,
                 false,
                 true,
@@ -8115,6 +8162,8 @@ void ShutdownSinglePlayerRuntime() {
     g_lying_idle_animation_instance_count = 0;
     g_lying_move_animation_instance_count = 0;
     g_lying_attack_animation_instance_count = 0;
+    g_lie_transition_animation_instance_count = 0;
+    g_stand_transition_animation_instance_count = 0;
     g_combat_effect_render_count = 0;
     g_effect_light_render_count = 0;
     g_active_combat_effect_count = 0;
@@ -8142,6 +8191,10 @@ void ShutdownSinglePlayerRuntime() {
     g_missing_lying_move_converted_geometries.clear();
     g_lying_attack_converted_geometries.clear();
     g_missing_lying_attack_converted_geometries.clear();
+    g_lie_transition_converted_geometries.clear();
+    g_missing_lie_transition_converted_geometries.clear();
+    g_stand_transition_converted_geometries.clear();
+    g_missing_stand_transition_converted_geometries.clear();
     g_death_animation_start_seconds.clear();
     g_projected_shadow_hulls.clear();
     g_stats_geometry_index.clear();
@@ -9076,6 +9129,14 @@ std::string SinglePlayerRuntimeReport() {
            << g_lying_attack_converted_geometries.size()
            << "; missing_lying_attack_geometry="
            << g_missing_lying_attack_converted_geometries.size()
+           << "; lie_transition_geometry_cache="
+           << g_lie_transition_converted_geometries.size()
+           << "; missing_lie_transition_geometry="
+           << g_missing_lie_transition_converted_geometries.size()
+           << "; stand_transition_geometry_cache="
+           << g_stand_transition_converted_geometries.size()
+           << "; missing_stand_transition_geometry="
+           << g_missing_stand_transition_converted_geometries.size()
            << "; stats_geometry_index="
            << g_stats_geometry_index.size()
            << "; model_texture_layers="
@@ -9107,6 +9168,10 @@ std::string SinglePlayerRuntimeReport() {
            << g_lying_move_animation_instance_count
            << "; lying_attack_animation_instances="
            << g_lying_attack_animation_instance_count
+           << "; lie_transition_animation_instances="
+           << g_lie_transition_animation_instance_count
+           << "; stand_transition_animation_instances="
+           << g_stand_transition_animation_instance_count
            << "; combat_effect_renders="
            << g_combat_effect_render_count
            << "; effect_light_renders="

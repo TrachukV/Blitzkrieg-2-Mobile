@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define BK2_PRESENTATION_API_VERSION 4u
+#define BK2_PRESENTATION_API_VERSION 5u
 #define BK2_PRESENTATION_MISSION_ID_CAPACITY 256u
 
 enum Bk2PresentationEntityFlags {
@@ -76,6 +76,11 @@ typedef struct Bk2PresentationEntity {
     float root_tilt_axis_x;
     float root_tilt_axis_y;
     float root_tilt_radians;
+    /* Exact legacy infantry animation type and its elapsed simulation time.
+       A negative type means that no ACTION_NOTIFY_ANIMATION_CHANGED update
+       has reached the Android client yet. */
+    int32_t animation_type;
+    float animation_elapsed_seconds;
 } Bk2PresentationEntity;
 
 typedef struct Bk2PresentationSnapshotInfo {

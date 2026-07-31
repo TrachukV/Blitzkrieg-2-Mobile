@@ -640,9 +640,17 @@ include or expose:
 The first render boundary is no longer the critical path: terrain materials,
 converted static/skinned meshes, action animations, descriptor particles and
 lights, fog of war, original HUD textures, and dynamic water are all proven on
-ARM64. The remaining renderer work is full GPU/runtime skinning, transition
-clips, effect-attached Granny geometry, terrain-conforming shadow maps, more
-complete legacy shader translation, and post effects. The original
+ARM64. Transition clips are no longer part of the remaining renderer list: the
+presentation bridge now consumes
+the original `ACTION_NOTIFY_ANIMATION_CHANGED` stream, forwards its animation
+type and simulation time, and selects non-looping standing-to-prone and
+prone-to-standing caches sampled from the shipped RIFLE resources `3965` and
+`3988`. An incremental conversion covered all 258 compatible infantry
+geometries for each direction, and an ARM64 US1.0 run received the live
+animation stream without a geometry fallback. Remaining renderer work includes
+full GPU/runtime skinning, effect-attached Granny geometry,
+terrain-conforming shadow maps, more complete legacy shader translation, and
+post effects. The original
 `SingleStatistics2` Action Report is now live: it renders the shipped layout,
 participating-player rows and flags, mission/campaign time, rank progress, and
 outcome-specific navigation from the real mission statistics snapshot. It also

@@ -820,8 +820,15 @@ lying-idle, crawl, and lying-shoot clips: the current pass creates 259 files per
 action (32,913,536 bytes each). The presentation bridge marks infantry from the
 original AI movement, attacking, and `CSoldier::IsLying()` states. The renderer
 selects standing or prone action caches from those live states and falls back to
-the base idle cache when a variant is unavailable. Android's headless runtime
-also forwards `CStatistics::UnitDead`
+the base idle cache when a variant is unavailable. It also consumes the
+original `ACTION_NOTIFY_ANIMATION_CHANGED` updates and forwards both the exact
+animation type and its simulation start time. `NDb::ANIMATION_LIE` and
+`NDb::ANIMATION_STAND` select non-looping caches sampled from the shipped RIFLE
+resources `3965` and `3988`; a verified incremental pass converted all 258
+compatible infantry geometries into both variants. The transition frame clamps
+at the clip end until the next legacy state update, so neither direction wraps
+back to its first pose. Android's headless runtime also forwards
+`CStatistics::UnitDead`
 directly because the old desktop world client that consumed
 `SAIDeadUnitUpdate` is not linked. The renderer plays each death clip once,
 clamps on its last frame, keeps the corpse for ten seconds, and falls back to
@@ -1392,13 +1399,16 @@ emulator run consumed
 Multi-mesh Granny models preserve all of their model mesh bindings;
 global `InitialPlacement` is intentionally not reapplied because shipped
 infantry geometry already contains the correct root placement. Standing-to-prone
-and prone-to-standing transition clips, GPU/runtime skinning, original
-effect-attached Granny geometry, complete briefing HUD behavior, the full
-chapter-map availability/highlight rules, and result rank/medal popups remain
-unfinished. The core Action Report, its reward rows, and per-marker chapter-map
-mission launch route are linked. Empty initial dynamic-world snapshots are now
-accepted as valid, and entity removals between the snapshot count/copy calls no
-longer abort mission startup; this fixed campaign-map launch of `US1.2`.
+and prone-to-standing transition clips now follow the exact legacy AI animation
+events. The ARM64 US1.0 runtime received the animation-update stream with no
+geometry fallback after both transition cache sets were installed. GPU/runtime
+skinning, original effect-attached Granny geometry, complete briefing HUD
+behavior, the full chapter-map availability/highlight rules, and result
+rank/medal popups remain unfinished. The core Action Report, its reward rows,
+and per-marker chapter-map mission launch route are linked. Empty initial
+dynamic-world snapshots are now accepted as valid, and entity removals between
+the snapshot count/copy calls no longer abort mission startup; this fixed
+campaign-map launch of `US1.2`.
 
 The video transcode manifest now writes Android-canonical runtime paths. A Bink
 ref such as `Movies\Nival.bik` maps to `DataAndroid/Movies/Nival.mp4`, not to a

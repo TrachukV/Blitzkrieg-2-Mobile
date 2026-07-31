@@ -269,6 +269,9 @@ extern "C" int bk2_presentation_write_json(const char* path) {
                << entity.root_tilt_axis_x << ','
                << entity.root_tilt_axis_y << ']'
                << ",\"root_tilt\":" << entity.root_tilt_radians
+               << ",\"animation_type\":" << entity.animation_type
+               << ",\"animation_elapsed_seconds\":"
+               << entity.animation_elapsed_seconds
                << '}';
     }
     output << "]}";

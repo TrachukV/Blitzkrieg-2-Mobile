@@ -50,6 +50,8 @@ function usage() {
       "[--lying-idle-animation <Data/bin/Animations/resource>] " +
       "[--lying-move-animation <Data/bin/Animations/resource>] " +
       "[--lying-attack-animation <Data/bin/Animations/resource>] " +
+      "[--lie-animation <Data/bin/Animations/resource>] " +
+      "[--stand-animation <Data/bin/Animations/resource>] " +
       "[--animation-frames <count>] " +
       "[--skip-unsupported] " +
       "[--all | <resource-id> ...]\n",
@@ -66,6 +68,8 @@ function parseArguments(argv) {
   let lyingIdleAnimation = "";
   let lyingMoveAnimation = "";
   let lyingAttackAnimation = "";
+  let lieAnimation = "";
+  let standAnimation = "";
   let animationFrames = DEFAULT_ANIMATION_FRAME_COUNT;
   let all = false;
   let skipUnsupported = false;
@@ -90,6 +94,10 @@ function parseArguments(argv) {
       lyingMoveAnimation = argv[++index] ?? "";
     } else if (argument === "--lying-attack-animation") {
       lyingAttackAnimation = argv[++index] ?? "";
+    } else if (argument === "--lie-animation") {
+      lieAnimation = argv[++index] ?? "";
+    } else if (argument === "--stand-animation") {
+      standAnimation = argv[++index] ?? "";
     } else if (argument === "--animation-frames") {
       animationFrames = Number.parseInt(argv[++index] ?? "", 10);
     } else if (argument === "--all") {
@@ -130,6 +138,8 @@ function parseArguments(argv) {
     lyingAttackAnimation: lyingAttackAnimation
       ? resolve(lyingAttackAnimation)
       : "",
+    lieAnimation: lieAnimation ? resolve(lieAnimation) : "",
+    standAnimation: standAnimation ? resolve(standAnimation) : "",
     animationFrames,
     all,
     skipUnsupported,
@@ -1000,6 +1010,8 @@ async function convertOne(
   lyingIdleAnimation,
   lyingMoveAnimation,
   lyingAttackAnimation,
+  lieAnimation,
+  standAnimation,
 ) {
   const source = join(options.input, id);
   const runtimeId = runtimeGeometryId(id);
@@ -1062,6 +1074,18 @@ async function convertOne(
     options.animationFrames,
     join(options.output, `${runtimeId}.lying.attack.bk2mesh`),
   );
+  const lie = await writeAnimationVariant(
+    parsed,
+    lieAnimation,
+    options.animationFrames,
+    join(options.output, `${runtimeId}.lie.bk2mesh`),
+  );
+  const stand = await writeAnimationVariant(
+    parsed,
+    standAnimation,
+    options.animationFrames,
+    join(options.output, `${runtimeId}.stand.bk2mesh`),
+  );
   return {
     id,
     runtimeId,
@@ -1073,6 +1097,8 @@ async function convertOne(
     lyingIdleOutputBytes: lyingIdle.outputBytes,
     lyingMoveOutputBytes: lyingMove.outputBytes,
     lyingAttackOutputBytes: lyingAttack.outputBytes,
+    lieOutputBytes: lie.outputBytes,
+    standOutputBytes: stand.outputBytes,
     meshes: primary.meshes.length,
     vertices: primary.meshes.reduce(
       (sum, mesh) => sum + mesh.vertexCount,
@@ -1089,6 +1115,8 @@ async function convertOne(
     lyingIdleAnimatedMeshes: lyingIdle.animatedMeshes,
     lyingMoveAnimatedMeshes: lyingMove.animatedMeshes,
     lyingAttackAnimatedMeshes: lyingAttack.animatedMeshes,
+    lieAnimatedMeshes: lie.animatedMeshes,
+    standAnimatedMeshes: stand.animatedMeshes,
     procedural: proceduralBuilder !== undefined,
   };
 }
@@ -1162,6 +1190,24 @@ async function main() {
       throw new Error("lying attack animation resource has no animation");
     }
   }
+  let lieAnimation = null;
+  if (options.lieAnimation) {
+    const animationBytes = await readFile(options.lieAnimation);
+    lieAnimation =
+      parseAnimated(toArrayBuffer(animationBytes)).animations[0] ?? null;
+    if (lieAnimation === null) {
+      throw new Error("lie animation resource has no animation");
+    }
+  }
+  let standAnimation = null;
+  if (options.standAnimation) {
+    const animationBytes = await readFile(options.standAnimation);
+    standAnimation =
+      parseAnimated(toArrayBuffer(animationBytes)).animations[0] ?? null;
+    if (standAnimation === null) {
+      throw new Error("stand animation resource has no animation");
+    }
+  }
   const ids = await resourceIds(options);
   let converted = 0;
   let skipped = 0;
@@ -1176,6 +1222,8 @@ async function main() {
   let lyingIdleOutputBytes = 0;
   let lyingMoveOutputBytes = 0;
   let lyingAttackOutputBytes = 0;
+  let lieOutputBytes = 0;
+  let standOutputBytes = 0;
   let animatedMeshes = 0;
   let moveAnimatedMeshes = 0;
   let attackAnimatedMeshes = 0;
@@ -1183,12 +1231,16 @@ async function main() {
   let lyingIdleAnimatedMeshes = 0;
   let lyingMoveAnimatedMeshes = 0;
   let lyingAttackAnimatedMeshes = 0;
+  let lieAnimatedMeshes = 0;
+  let standAnimatedMeshes = 0;
   let moveCacheFiles = 0;
   let attackCacheFiles = 0;
   let deathCacheFiles = 0;
   let lyingIdleCacheFiles = 0;
   let lyingMoveCacheFiles = 0;
   let lyingAttackCacheFiles = 0;
+  let lieCacheFiles = 0;
+  let standCacheFiles = 0;
   for (const id of ids) {
     try {
       const result = await convertOne(
@@ -1201,6 +1253,8 @@ async function main() {
         lyingIdleAnimation,
         lyingMoveAnimation,
         lyingAttackAnimation,
+        lieAnimation,
+        standAnimation,
       );
       ++converted;
       vertices += result.vertices;
@@ -1212,6 +1266,8 @@ async function main() {
       lyingIdleOutputBytes += result.lyingIdleOutputBytes;
       lyingMoveOutputBytes += result.lyingMoveOutputBytes;
       lyingAttackOutputBytes += result.lyingAttackOutputBytes;
+      lieOutputBytes += result.lieOutputBytes;
+      standOutputBytes += result.standOutputBytes;
       animatedMeshes += result.animatedMeshes;
       moveAnimatedMeshes += result.moveAnimatedMeshes;
       attackAnimatedMeshes += result.attackAnimatedMeshes;
@@ -1219,12 +1275,16 @@ async function main() {
       lyingIdleAnimatedMeshes += result.lyingIdleAnimatedMeshes;
       lyingMoveAnimatedMeshes += result.lyingMoveAnimatedMeshes;
       lyingAttackAnimatedMeshes += result.lyingAttackAnimatedMeshes;
+      lieAnimatedMeshes += result.lieAnimatedMeshes;
+      standAnimatedMeshes += result.standAnimatedMeshes;
       moveCacheFiles += result.moveOutputBytes > 0 ? 1 : 0;
       attackCacheFiles += result.attackOutputBytes > 0 ? 1 : 0;
       deathCacheFiles += result.deathOutputBytes > 0 ? 1 : 0;
       lyingIdleCacheFiles += result.lyingIdleOutputBytes > 0 ? 1 : 0;
       lyingMoveCacheFiles += result.lyingMoveOutputBytes > 0 ? 1 : 0;
       lyingAttackCacheFiles += result.lyingAttackOutputBytes > 0 ? 1 : 0;
+      lieCacheFiles += result.lieOutputBytes > 0 ? 1 : 0;
+      standCacheFiles += result.standOutputBytes > 0 ? 1 : 0;
       if (!options.all) {
         process.stdout.write(
           `geometry=${result.id}; runtime_id=${result.runtimeId}; ` +
@@ -1237,6 +1297,8 @@ async function main() {
             `lying_idle_animated_meshes=${result.lyingIdleAnimatedMeshes}; ` +
             `lying_move_animated_meshes=${result.lyingMoveAnimatedMeshes}; ` +
             `lying_attack_animated_meshes=${result.lyingAttackAnimatedMeshes}; ` +
+            `lie_animated_meshes=${result.lieAnimatedMeshes}; ` +
+            `stand_animated_meshes=${result.standAnimatedMeshes}; ` +
             `vertices=${result.vertices}; triangles=${result.triangles}; ` +
             `output=${basename(join(options.output, `${result.runtimeId}.bk2mesh`))}; ` +
             `move_output=${result.moveOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.move.bk2mesh`)) : "<none>"}; ` +
@@ -1244,7 +1306,9 @@ async function main() {
             `death_output=${result.deathOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.death.bk2mesh`)) : "<none>"}; ` +
             `lying_idle_output=${result.lyingIdleOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.lying.bk2mesh`)) : "<none>"}; ` +
             `lying_move_output=${result.lyingMoveOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.lying.move.bk2mesh`)) : "<none>"}; ` +
-            `lying_attack_output=${result.lyingAttackOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.lying.attack.bk2mesh`)) : "<none>"}\n`,
+            `lying_attack_output=${result.lyingAttackOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.lying.attack.bk2mesh`)) : "<none>"}; ` +
+            `lie_output=${result.lieOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.lie.bk2mesh`)) : "<none>"}; ` +
+            `stand_output=${result.standOutputBytes > 0 ? basename(join(options.output, `${result.runtimeId}.stand.bk2mesh`)) : "<none>"}\n`,
         );
       }
     } catch (error) {
@@ -1278,12 +1342,18 @@ async function main() {
       `lying_move_cache_files=${lyingMoveCacheFiles}; ` +
       `lying_attack_animated_meshes=${lyingAttackAnimatedMeshes}; ` +
       `lying_attack_cache_files=${lyingAttackCacheFiles}; ` +
+      `lie_animated_meshes=${lieAnimatedMeshes}; ` +
+      `lie_cache_files=${lieCacheFiles}; ` +
+      `stand_animated_meshes=${standAnimatedMeshes}; ` +
+      `stand_cache_files=${standCacheFiles}; ` +
       `output_bytes=${outputBytes}; move_output_bytes=${moveOutputBytes}; ` +
       `attack_output_bytes=${attackOutputBytes}; ` +
       `death_output_bytes=${deathOutputBytes}; ` +
       `lying_idle_output_bytes=${lyingIdleOutputBytes}; ` +
       `lying_move_output_bytes=${lyingMoveOutputBytes}; ` +
-      `lying_attack_output_bytes=${lyingAttackOutputBytes}\n`,
+      `lying_attack_output_bytes=${lyingAttackOutputBytes}; ` +
+      `lie_output_bytes=${lieOutputBytes}; ` +
+      `stand_output_bytes=${standOutputBytes}\n`,
   );
   if (failed > 0) {
     process.exitCode = 1;
