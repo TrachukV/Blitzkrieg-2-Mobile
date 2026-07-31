@@ -88,6 +88,11 @@ constexpr const char* kProjectedShadowLayer =
         "__android_projected_shadow__";
 constexpr const char* kUnitIndicatorLayer =
         "__android_unit_indicator__";
+// The legacy war fog grid carries its darkening in per-vertex alpha and wants
+// no material, so it is named rather than left blank; an unnamed layer with no
+// material is a real loss and gets reported.
+constexpr const char* kWarFogLayer =
+        "__android_war_fog__";
 // Health bars read as interface, not as scene geometry: the original draws
 // them in screen space, so here they go in a layer that ignores depth and
 // cannot be hidden behind the unit in front.
@@ -436,6 +441,7 @@ bool g_stats_geometry_index_loaded = false;
 std::unordered_map<std::string, CObj<NGfx::CTexture> > g_model_textures;
 size_t g_model_texture_count = 0;
 std::set<std::string> g_missing_model_texture_paths;
+std::set<std::string> g_untextured_layer_paths;
 size_t g_material_alpha_test_layer_count = 0;
 size_t g_material_alpha_test_triangle_count = 0;
 size_t g_material_alpha_blend_layer_count = 0;
@@ -8753,6 +8759,7 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         }
 
         WorldObjectMesh::Layer fog_layer;
+        fog_layer.texture_path = kWarFogLayer;
         fog_layer.alpha_blended = true;
         fog_layer.depth_test_always = true;
         fog_layer.triangle_indices.reserve(
@@ -9447,7 +9454,8 @@ bool LoadTextureImmediately(
 
 uint16_t ModelTextureHandle(const std::string& texture_path) {
     if (texture_path.empty() ||
-        texture_path == kProjectedShadowLayer) {
+        texture_path == kProjectedShadowLayer ||
+        texture_path == kWarFogLayer) {
         return UINT16_MAX;
     }
     auto cached = g_model_textures.find(texture_path);
@@ -9509,6 +9517,29 @@ void RefreshWorldObjectTextureHandles(WorldObjectMesh* mesh) {
     for (WorldObjectMesh::Layer& layer : mesh->layers) {
         layer.texture_handle =
                 ModelTextureHandle(layer.texture_path);
+        // A layer with no material at all leaves ModelTextureHandle before it
+        // can report anything, and the backend falls back to a white texture,
+        // so on screen the geometry is only its vertex colour. Name it once;
+        // the projected-shadow layer is untextured by design.
+        // Before the window exists there is no GPU handle to hand out yet and
+        // every layer looks untextured, so only a mesh built against a ready
+        // backend says anything.
+        if (layer.texture_handle == UINT16_MAX &&
+            layer.texture_path != kProjectedShadowLayer &&
+            layer.texture_path != kWarFogLayer &&
+            RenderBackend().is_ready()) {
+            const std::string key = layer.texture_path.empty()
+                    ? std::string("<none>")
+                    : layer.texture_path;
+            if (g_untextured_layer_paths.insert(key).second) {
+                std::ostringstream report;
+                report << "model_layer_untextured=" << key
+                       << "; triangles="
+                       << layer.triangle_indices.size() / 3
+                       << "; lit=" << (layer.lighting_enabled ? 1 : 0);
+                PlatformRuntime::instance().log_warn(report.str());
+            }
+        }
         if (layer.texture_path.find("Terrain/roads/") == 0) {
             ++road_texture_layers;
             if (layer.texture_handle != UINT16_MAX) {
@@ -10316,6 +10347,7 @@ void ShutdownSinglePlayerRuntime() {
     g_model_textures.clear();
     g_model_texture_count = 0;
     g_missing_model_texture_paths.clear();
+    g_untextured_layer_paths.clear();
     g_material_alpha_test_layer_count = 0;
     g_material_alpha_test_triangle_count = 0;
     g_material_alpha_blend_layer_count = 0;

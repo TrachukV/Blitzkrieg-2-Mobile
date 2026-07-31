@@ -470,11 +470,20 @@ it in `geometry_index.tsv`, and `model_texture_missing` names any material that
 never resolves, so an object that only appears mid-mission no longer slips past
 the startup fallback report.
 
+`model_layer_untextured` closes the last gap in that reporting: a layer can
+carry a material path and still end up with no GPU handle, and the backend
+quietly substitutes a white texture, so the geometry shows as nothing but its
+vertex colour. It reports only against a ready backend, because before the
+window exists no layer has a handle yet, and the two layers that are untextured
+by design — the projected shadow hull and the war fog grid — are named rather
+than left blank so they are not mistaken for a loss.
+
 One open cosmetic artifact: USA `US1.3` draws a solid black box on open ground.
 It is not a fallback proxy — the mission reports zero static and zero dynamic
-geometry fallbacks — and not a missing material, since `model_texture_missing`
-stays empty for the whole mission. The object loads its original geometry and
-its original texture and still renders black.
+geometry fallbacks — not a missing material, since `model_texture_missing`
+stays empty for the whole mission, and not an unresolved layer, since
+`model_layer_untextured` reports none. The object loads its original geometry
+and its original texture and still renders black.
 
 ## Touch Controls
 
