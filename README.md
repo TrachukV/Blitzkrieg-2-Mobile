@@ -37,7 +37,26 @@ Please review the terms of the [license agreement](LICENSE.md) carefully before 
 
 ## Android mobile port status
 
-The Android port is a playable native ARM64 milestone, not a finished
+Measured on an ARM64 GLES3 emulator at 2856x1280, with every campaign mission
+index launched directly through the runtime:
+
+| | |
+| --- | --- |
+| Campaign missions that load and run | **63** of 69 |
+| Missions blocked by data absent from this repository | 6 |
+| Crashes across the sweep | 0 |
+| Frame rate in a running mission | **~59 fps**, 3.9 ms average frame |
+| Object types with no converted geometry | 5, all scenery props |
+| Release APK | 17.7 MB, R8-minified, 16 KB page aligned |
+
+The six blocked missions are the chapter-final targets `USA4.0`, `RUS1.0`,
+`RUS3.0`, `Rus4.0`, `GER3.0`, and `GER4.0`. Their `MapInfo.xdb` is not in the
+published tree at all — every sibling file is there, that one descriptor is
+not — and it carries the mission's player list, diplomacies, and its whole
+object list, so nothing in the port can recover it. See
+[`android/README.md`](android/README.md) for the full breakdown.
+
+The port is a playable native ARM64 milestone, not a finished
 release. It currently runs original single-player campaign data through the
 legacy C++ AI/game simulation, renders original terrain, models, materials, and
 supported infantry animations through bgfx, renders the live legacy fog-of-war

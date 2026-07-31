@@ -470,6 +470,12 @@ it in `geometry_index.tsv`, and `model_texture_missing` names any material that
 never resolves, so an object that only appears mid-mission no longer slips past
 the startup fallback report.
 
+One open cosmetic artifact: USA `US1.3` draws a solid black box on open ground.
+It is not a fallback proxy — the mission reports zero static and zero dynamic
+geometry fallbacks — and not a missing material, since `model_texture_missing`
+stays empty for the whole mission. The object loads its original geometry and
+its original texture and still renders black.
+
 ## Touch Controls
 
 The desktop game expects a mouse and a keyboard. What the port maps onto a
