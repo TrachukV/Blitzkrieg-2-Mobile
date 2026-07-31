@@ -9836,23 +9836,12 @@ bool RefreshRenderResourcesLocked() {
     if (!UploadStaticWorldObjectMeshLocked()) {
         return false;
     }
-    RefreshWorldObjectTextureHandles(&g_world_object_mesh);
-    for (SkinnedWorldObject& object :
-         g_skinned_world_object_mesh.objects) {
-        for (SkinnedWorldObject::Layer& layer : object.layers) {
-            layer.texture_handle =
-                    ModelTextureHandle(layer.texture_path);
-        }
-    }
-    if (!RenderBackend().set_skinned_world_object_mesh(
-                g_skinned_world_object_mesh)) {
-        return false;
-    }
-    if (!g_world_object_mesh.vertices.empty() &&
-        !RenderBackend().set_world_object_mesh(g_world_object_mesh)) {
-        return false;
-    }
-    return true;
+    // This runs after the window came back, which means the backend threw
+    // its GPU buffers away, including the cached bind poses the skinned
+    // snapshot leaves out once a geometry is resident. Rebuilding the dynamic
+    // mesh here rather than re-pushing the old one puts the bind poses back
+    // in, because has_skinned_geometry() now answers false for every key.
+    return RefreshDynamicWorldMeshLocked(true);
 }
 
 // Mission music. The map names its own playlists exactly like the main menu

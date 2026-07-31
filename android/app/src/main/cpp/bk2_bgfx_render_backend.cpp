@@ -386,6 +386,12 @@ public:
         destroy_terrain_buffers();
         destroy_water_buffers();
         destroy_world_object_buffers();
+        // The retained mesh copies outlive the bgfx context, and every
+        // texture index in them belongs to the context being torn down.
+        // bgfx::isValid() only asks whether an index is not the reserved
+        // invalid one, so a stale index passes that guard and asserts inside
+        // setTexture. Drop them; whatever re-attaches re-resolves them.
+        forget_mesh_texture_handles();
         if (bgfx::isValid(white_texture_)) {
             bgfx::destroy(white_texture_);
             white_texture_ = BGFX_INVALID_HANDLE;
@@ -626,6 +632,26 @@ public:
             return true;
         }
         return upload_skinned_world_object_mesh();
+    }
+
+    void forget_mesh_texture_handles() {
+        terrain_mesh_.texture_handle = UINT16_MAX;
+        for (TerrainLayer& layer : terrain_mesh_.layers) {
+            layer.texture_handle = UINT16_MAX;
+        }
+        water_mesh_.texture_handle = UINT16_MAX;
+        for (WorldObjectMesh* mesh :
+             {&world_object_mesh_, &static_world_object_mesh_}) {
+            for (WorldObjectMesh::Layer& layer : mesh->layers) {
+                layer.texture_handle = UINT16_MAX;
+            }
+        }
+        for (SkinnedWorldObject& object :
+             skinned_world_object_mesh_.objects) {
+            for (SkinnedWorldObject::Layer& layer : object.layers) {
+                layer.texture_handle = UINT16_MAX;
+            }
+        }
     }
 
     bool has_skinned_geometry(uint64_t geometry_key) const override {
@@ -1045,8 +1071,11 @@ private:
                 continue;
             }
             if (vertex_count == 0 || index_count == 0) {
-                last_error_ = "invalid skinned world object";
-                return false;
+                // A snapshot built while the key was resident, pushed after
+                // the context was torn down. There is nothing to upload and
+                // nothing to draw; the next rebuild carries the bind pose
+                // again. Dropping this object beats failing the whole push.
+                continue;
             }
             if (found != skinned_geometry_buffers_.end() &&
                 (found->second.vertex_count != vertex_count ||

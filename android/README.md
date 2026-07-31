@@ -519,6 +519,29 @@ with its completed, enabled, and recommended targets intact. Before this the
 autosave was only reachable from the developer mission browser, so closing the
 app left a campaign unreachable from the original interface.
 
+## Lifecycle
+
+A mission survives the app being backgrounded and resumed, which on a phone
+happens on every call and notification. Android tears the window down while
+the app is away, so bgfx is shut down and re-initialised, and everything the
+old context owned has to be treated as gone:
+
+- The backend keeps its mesh copies across the tear-down, and every texture
+  index in them belonged to the old context. `bgfx::isValid()` only asks
+  whether an index is not the reserved invalid one, so a stale index passes
+  that guard and asserts inside `setTexture`. `detach_window()` drops them all;
+  the re-attach re-resolves them.
+- The skinned bind poses a snapshot omits once a geometry is resident are gone
+  with the buffers, so the re-attach rebuilds the dynamic mesh rather than
+  re-pushing the old snapshot, and `has_skinned_geometry()` answering false for
+  every key puts the bind poses back in. An object that still arrives without
+  one is dropped for that push instead of failing it.
+
+Verified on the ARM64 GLES3 emulator: before this, resuming into a running
+mission died on a bgfx `SIGTRAP` every time. It now survives four
+background/resume cycles with the same process id, no crash-buffer entries,
+and 58.9 fps with the mission, HUD, and minimap intact.
+
 ## Frame Rate
 
 The shell paces itself against a 60 Hz budget and sleeps only the part of the
