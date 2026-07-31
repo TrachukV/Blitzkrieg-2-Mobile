@@ -81,6 +81,16 @@ struct AndroidSceneEffect {
     uint32_t lifetime_millis = 0;
 };
 
+struct AndroidAttachedEntityEffect {
+    int32_t entity_id = -1;
+    std::string descriptor_id;
+    std::vector<std::string> locator_names;
+    std::vector<AndroidParticleEmitter> emitters;
+    std::vector<AndroidEffectLight> lights;
+    uint32_t age_millis = 0;
+    uint32_t lifetime_millis = 0;
+};
+
 struct AndroidDestructionEffect {
     int32_t unit_id = -1;
     float x = 0.0f;
@@ -175,6 +185,8 @@ const char* LegacyMissionOutcome();
 LegacyMissionStatisticsSnapshot CopyLegacyMissionStatisticsSnapshot();
 std::vector<AndroidCombatEffect> CopyActiveAndroidCombatEffects();
 std::vector<AndroidSceneEffect> CopyActiveAndroidSceneEffects();
+std::vector<AndroidAttachedEntityEffect>
+CopyActiveAndroidAttachedEntityEffects();
 std::vector<AndroidDestructionEffect> CopyActiveAndroidDestructionEffects();
 AndroidWarFogSnapshot CopyAndroidWarFogSnapshot();
 void ShutdownLegacyGameRuntime();

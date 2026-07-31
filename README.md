@@ -81,7 +81,12 @@ death events also resolve their original `SComplexEffect` XDB descriptors,
 including emitter timing, texture sequences, scale, speed, and alpha/additive
 blend mode. Descriptor light instances add a short original-texture additive
 ground flash; the old fixed fire/smoke recipe is retained only as a fallback
-for content without a usable descriptor. Destructible buildings, bridge spans,
+for content without a usable descriptor. Moving mechanized units now also
+trigger their authored `EffectDiesel` recipe once at the transition into
+movement and place its small exhaust puffs on the exact converted
+`LExhaust*` skeleton locators, matching the desktop
+`CMOUnitMechanical::AIUpdateMovement` lifecycle instead of emitting generic
+smoke from the hull center. Destructible buildings, bridge spans,
 and connected fence sections are published from their live legacy AI objects
 instead of immutable scenery. Their shipped damaged/destroyed models follow
 the original HP or frame state; breaking a fence also switches both connected

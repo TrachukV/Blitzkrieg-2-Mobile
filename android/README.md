@@ -1038,7 +1038,10 @@ infantry member through the original `CStatistics::UnitKilled` and
 smoke-tested together. Keyboard `V` sends the same `local_win` event used by
 mission Lua, allowing campaign autosave and continuation to be tested without
 completing a full battle. Keyboard `L` toggles one live soldier between the
-original standing and prone states for animation validation. Keyboard `M`
+original standing and prone states for animation validation. Keyboard `Y`
+orders every visible movable mechanized unit with an authored diesel recipe
+forward, so movement-state, exact exhaust-locator, and particle-lifetime
+validation does not depend on a campaign script timer. Keyboard `M`
 kills a visible mechanized unit through the same statistics/death path and is
 used to validate the destruction presentation. Keyboard `R` forces one
 original projectile lifecycle, including its model, attached exhaust, hit
@@ -1061,7 +1064,7 @@ injects the reinforcement notification type so descriptor lookup, UTF-16
 decoding, JNI polling, and five-second expiry can be checked independently of
 scenario timing. The original `CScripts::LandReinforcementFromMap` path remains
 active in the linked AI runtime; `GER3.3` has also produced the same notification
-from a real scenario call. All fifteen shortcuts are absent from release
+from a real scenario call. All sixteen shortcuts are absent from release
 builds.
 
 `Data/Weapons` is required runtime DB payload. Without it, mine descriptors keep
@@ -1357,6 +1360,25 @@ explicit projectile explosion selects the same shell hit-effect mapping used
 by the desktop client. Projectile entities do not receive unit health bars or
 player-color tint.
 
+Mechanized movement uses the separate desktop lifecycle from
+`CMOUnitMechanical::AIUpdateMovement`: the transition from rest to movement
+instantiates the unit's `EffectDiesel` recipe once for every authored
+`exhaustPoints` entry. Android resolves each `LExhaust*` name against the
+converted Granny skeleton, transforms its bind-pose pivot through the live
+geometry scale, heading, root tilt, and world placement, then renders the
+descriptor's one-cycle particle payload there. The recipe remains armed while
+the unit moves but is not looped after its declared lifetime; stopping removes
+that state so the next movement transition can emit a new puff. Diesel exhaust
+uses a small semantic scale rather than the larger explosion-smoke scale
+inferred from its shared `Explosion2` texture.
+
+An ARM64 GLES3 check on USA US1.2 commanded visible mechanized units 5147 and
+5142 through the original unit-command path, selected
+`DiselExhaust_ComplexEffect.xdb`, retained both declared exhaust locators, and
+resolved `LExhaust01` on converted geometry 942 before the renderer reported
+the effect active and then cleared it at the descriptor lifetime. No geometry,
+bone, entity, shader, or process failure was reported.
+
 Buildings now leave the immutable scenery batch and become live presentation
 entities backed by their original `CExistingObject` ids. Their visibility,
 placement, heading, HP, and alive/dead state come directly from the AI runtime.
@@ -1496,8 +1518,10 @@ and prone-to-standing transition clips now follow the exact legacy AI animation
 events. The ARM64 US1.0 runtime received the animation-update stream with no
 geometry fallback after both transition cache sets were installed. The
 bind-pose/weight/matrix contract now has a dedicated bgfx GPU path with a
-validated CPU fallback. Original effect-attached Granny geometry, complete
-briefing HUD
+validated CPU fallback. The `SEffect::Models` schema path is not yet rendered,
+but a scan of all 178 shipped `Effect` descriptors found every `Models` list
+empty, so it is dormant schema rather than a missing shipped scene layer.
+Complete briefing HUD
 behavior, the full chapter-map availability/highlight rules, and result
 rank/medal popups remain unfinished. The core Action Report, its reward rows,
 and per-marker chapter-map mission launch route are linked. Empty initial

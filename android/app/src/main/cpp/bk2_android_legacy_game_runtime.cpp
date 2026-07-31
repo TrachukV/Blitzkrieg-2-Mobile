@@ -12,6 +12,7 @@
 #include "AILogic/AIConsts.h"
 #include "AILogic/B2AI.h"
 #include "AILogic/Bridge.h"
+#include "AILogic/Commands.h"
 #include "AILogic/CreateAI.h"
 #include "AILogic/Entrenchment.h"
 #include "AILogic/EntrenchmentCreation.h"
@@ -187,6 +188,10 @@ struct PresentationProjectile {
     std::vector<AndroidSceneEffect> attached_effects;
     uint64_t effect_created_millis = 0;
 };
+struct TimedAttachedEntityEffect {
+    AndroidAttachedEntityEffect effect;
+    uint64_t created_millis = 0;
+};
 struct PresentationAnimation {
     int32_t type = -1;
     uint64_t started_millis = 0;
@@ -198,6 +203,9 @@ std::unordered_map<int32_t, PresentationAnimation>
 std::unordered_map<int32_t, PresentationCorpse> g_presentation_corpses;
 std::unordered_map<int32_t, PresentationProjectile>
         g_presentation_projectiles;
+std::unordered_map<int32_t, TimedAttachedEntityEffect>
+        g_mechanized_exhaust_effects;
+uint64_t g_mechanized_exhaust_start_count = 0;
 uint64_t g_presentation_death_count = 0;
 uint64_t g_presentation_disappear_count = 0;
 uint64_t g_presentation_animation_update_count = 0;
@@ -3303,8 +3311,70 @@ void AppendFallableObjectEntities(
     }
 }
 
+bool UpdateMechanizedExhaustEffect(
+        const Bk2PresentationEntity& entity,
+        const NDb::SUnitBaseRPGStats* stats) {
+    if ((entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) == 0 ||
+        (entity.flags & BK2_PRESENTATION_ENTITY_MECHANIZED) == 0 ||
+        (entity.flags & BK2_PRESENTATION_ENTITY_MOVING) == 0) {
+        return false;
+    }
+    const NDb::SMechUnitRPGStats* mechanized =
+            dynamic_cast<const NDb::SMechUnitRPGStats*>(stats);
+    if (mechanized == nullptr ||
+        mechanized->pEffectDiesel.IsEmpty() ||
+        mechanized->exhaustPoints.empty()) {
+        return false;
+    }
+    const auto active =
+            g_mechanized_exhaust_effects.find(entity.id);
+    if (active != g_mechanized_exhaust_effects.end()) {
+        return true;
+    }
+
+    TimedAttachedEntityEffect timed;
+    timed.effect.entity_id = entity.id;
+    timed.effect.locator_names.reserve(
+            mechanized->exhaustPoints.size());
+    for (const string& locator : mechanized->exhaustPoints) {
+        if (!locator.empty()) {
+            timed.effect.locator_names.emplace_back(locator.c_str());
+        }
+    }
+    timed.effect.lifetime_millis = BuildComplexEffectRecipe(
+            mechanized->pEffectDiesel.GetPtr(),
+            &timed.effect.descriptor_id,
+            &timed.effect.emitters,
+            &timed.effect.lights);
+    if (timed.effect.locator_names.empty() ||
+        timed.effect.lifetime_millis == 0 ||
+        (timed.effect.emitters.empty() &&
+         timed.effect.lights.empty())) {
+        return false;
+    }
+    timed.created_millis = g_timer_millis;
+    g_mechanized_exhaust_effects.emplace(
+            entity.id,
+            std::move(timed));
+    ++g_mechanized_exhaust_start_count;
+    if (g_mechanized_exhaust_start_count <= 4) {
+        const AndroidAttachedEntityEffect& effect =
+                g_mechanized_exhaust_effects.at(entity.id).effect;
+        PlatformRuntime::instance().log_info(
+                std::string("mechanized_exhaust=started; unit=") +
+                std::to_string(entity.id) +
+                "; descriptor=" + effect.descriptor_id +
+                "; locators=" +
+                std::to_string(effect.locator_names.size()) +
+                "; emitters=" +
+                std::to_string(effect.emitters.size()));
+    }
+    return true;
+}
+
 void PublishPresentationEntities() {
     std::vector<Bk2PresentationEntity> entities;
+    std::unordered_set<int32_t> active_exhaust_ids;
     entities.reserve(
             static_cast<size_t>(std::max(g_ai_unit_total_count, 0)) +
             g_presentation_corpses.size());
@@ -3461,9 +3531,21 @@ void PublishPresentationEntities() {
             entity.animation_elapsed_seconds =
                     static_cast<float>(elapsed_millis) / 1000.0f;
         }
+        if (UpdateMechanizedExhaustEffect(entity, stats)) {
+            active_exhaust_ids.insert(entity.id);
+        }
         entities.push_back(entity);
         if ((entity.flags & BK2_PRESENTATION_ENTITY_ALIVE) != 0) {
             g_last_presentation_entities[entity.id] = entity;
+        }
+    }
+    for (auto effect = g_mechanized_exhaust_effects.begin();
+         effect != g_mechanized_exhaust_effects.end();) {
+        if (active_exhaust_ids.find(effect->first) ==
+            active_exhaust_ids.end()) {
+            effect = g_mechanized_exhaust_effects.erase(effect);
+        } else {
+            ++effect;
         }
     }
     for (auto corpse = g_presentation_corpses.begin();
@@ -3712,6 +3794,8 @@ void ResetReportState() {
     g_presentation_animations.clear();
     g_presentation_corpses.clear();
     g_presentation_projectiles.clear();
+    g_mechanized_exhaust_effects.clear();
+    g_mechanized_exhaust_start_count = 0;
     g_turret_aim.clear();
     g_turret_bones.clear();
     g_gun_bones.clear();
@@ -5682,6 +5766,68 @@ void HandleLegacyInputEvent(const char* event_name) {
                     "; lying=" +
                     (soldier->IsLying() ? "true" : "false"));
         }
+    } else if (std::strcmp(event_name, "debug_move_mechanized") == 0) {
+        int commanded = 0;
+        for (CGlobalIter iter(0, ANY_PARTY);
+             !iter.IsFinished();
+             iter.Iterate()) {
+            CAIUnit* candidate = *iter;
+            const NDb::SMechUnitRPGStats* stats =
+                    candidate == nullptr
+                    ? nullptr
+                    : dynamic_cast<const NDb::SMechUnitRPGStats*>(
+                              candidate->GetStats());
+            if (candidate != nullptr &&
+                candidate->IsAlive() &&
+                candidate->IsMech() &&
+                candidate->CanMove() &&
+                candidate->IsVisible(theDipl.GetMyParty()) &&
+                stats != nullptr &&
+                !stats->pEffectDiesel.IsEmpty() &&
+                !stats->exhaustPoints.empty()) {
+                const CVec2 forward =
+                        GetVectorByDirection(candidate->GetDir());
+                const CVec2 destination =
+                        candidate->GetCenterPlain() +
+                        forward * SConsts::TILE_SIZE * 40.0f;
+                SAIUnitCmd command(
+                        ACTION_COMMAND_MOVE_TO,
+                        destination);
+                command.bFromAI = false;
+                candidate->UnitCommand(
+                        new CAICommand(command),
+                        false,
+                        false);
+                if (commanded < 12) {
+                    IUnitState* state = candidate->GetState();
+                    std::ostringstream report;
+                    report
+                            << "debug_move_mechanized="
+                            << candidate->GetUniqueIdQU()
+                            << "; player="
+                            << static_cast<int>(
+                                       candidate->GetPlayer())
+                            << "; formation="
+                            << (candidate->IsFormation()
+                                        ? "true"
+                                        : "false")
+                            << "; state="
+                            << (state == nullptr
+                                        ? -1
+                                        : static_cast<int>(
+                                                  state->GetName()))
+                            << "; target="
+                            << AI2Vis(destination.x)
+                            << "," << AI2Vis(destination.y);
+                    PlatformRuntime::instance().log_info(
+                            report.str());
+                }
+                ++commanded;
+            }
+        }
+        PlatformRuntime::instance().log_info(
+                std::string("debug_move_mechanized_count=") +
+                std::to_string(commanded));
     } else if (std::strcmp(event_name, "debug_kill_mechanized") == 0) {
         CAIUnit* target = nullptr;
         for (CGlobalIter iter(0, ANY_PARTY);
@@ -5928,6 +6074,33 @@ std::vector<AndroidSceneEffect> CopyActiveAndroidSceneEffects() {
     return result;
 }
 
+std::vector<AndroidAttachedEntityEffect>
+CopyActiveAndroidAttachedEntityEffects() {
+    std::vector<AndroidAttachedEntityEffect> result;
+    result.reserve(g_mechanized_exhaust_effects.size());
+    for (const auto& entry : g_mechanized_exhaust_effects) {
+        const TimedAttachedEntityEffect& timed = entry.second;
+        AndroidAttachedEntityEffect effect = timed.effect;
+        const uint64_t elapsed_millis =
+                g_timer_millis >= timed.created_millis
+                ? g_timer_millis - timed.created_millis
+                : 0;
+        // Desktop CMOUnitMechanical attaches the one-cycle diesel effect
+        // only when bMoved changes from false to true. Keep the recipe in the
+        // map while the vehicle is moving so an expired puff is not restarted
+        // every presentation update; stopping removes it and arms the next
+        // movement transition.
+        if (effect.lifetime_millis == 0 ||
+            elapsed_millis >= effect.lifetime_millis) {
+            continue;
+        }
+        effect.age_millis =
+                static_cast<uint32_t>(elapsed_millis);
+        result.push_back(std::move(effect));
+    }
+    return result;
+}
+
 std::vector<AndroidDestructionEffect>
 CopyActiveAndroidDestructionEffects() {
     std::vector<AndroidDestructionEffect> result;
@@ -5984,6 +6157,8 @@ void ShutdownLegacyGameRuntime() {
     g_last_presentation_entities.clear();
     g_presentation_corpses.clear();
     g_presentation_projectiles.clear();
+    g_mechanized_exhaust_effects.clear();
+    g_mechanized_exhaust_start_count = 0;
     g_presentation_death_count = 0;
     g_presentation_disappear_count = 0;
     g_projectile_update_count = 0;
@@ -6112,6 +6287,10 @@ std::string LegacyGameRuntimeReport() {
            << "; projectiles_exploded=" << g_projectile_exploded_count
            << "; active_projectiles="
            << g_presentation_projectiles.size()
+           << "; mechanized_exhaust_starts="
+           << g_mechanized_exhaust_start_count
+           << "; tracked_mechanized_exhaust="
+           << g_mechanized_exhaust_effects.size()
            << "; static_buildings="
            << g_static_building_snapshot_count
            << "; static_building_rpg_updates="

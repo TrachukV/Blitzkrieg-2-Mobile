@@ -244,7 +244,12 @@ size_t g_combat_effect_render_count = 0;
 size_t g_effect_light_render_count = 0;
 size_t g_active_combat_effect_count = 0;
 size_t g_active_scene_effect_count = 0;
+size_t g_active_attached_entity_effect_count = 0;
 size_t g_active_destruction_effect_count = 0;
+size_t g_attached_effect_locator_resolved_count = 0;
+size_t g_attached_effect_locator_missing_count = 0;
+size_t g_attached_effect_entity_missing_count = 0;
+bool g_attached_effect_locator_logged = false;
 size_t g_active_unit_indicator_count = 0;
 size_t g_health_bar_count = 0;
 size_t g_health_bar_skipped = 0;
@@ -7220,7 +7225,8 @@ void AppendDescriptorParticleEffect(
         float origin_z,
         uint32_t age_millis,
         uint32_t lifetime_millis,
-        int32_t seed) {
+        int32_t seed,
+        float visual_scale = 1.0f) {
     if (mesh == nullptr || emitters.empty() ||
         lifetime_millis == 0) {
         return;
@@ -7343,6 +7349,8 @@ void AppendDescriptorParticleEffect(
                 width = std::clamp(width * 2.0f, 1.2f, 14.0f);
                 height = std::clamp(height * 2.0f, 1.2f, 14.0f);
             }
+            width *= visual_scale;
+            height *= visual_scale;
             const float random_seed =
                     static_cast<float>(
                             (seed & 0xffff) +
@@ -7355,11 +7363,12 @@ void AppendDescriptorParticleEffect(
             if (smoke) {
                 const float drift =
                         (0.4f + sprite_phase * 1.8f) *
-                        emitter.scale;
+                        emitter.scale * visual_scale;
                 x += std::sin(random_seed * 0.37f) * drift;
                 y += std::cos(random_seed * 0.29f) * drift;
                 z += sprite_phase *
-                        (2.5f + 5.0f * emitter.scale);
+                        (2.5f + 5.0f * emitter.scale) *
+                        visual_scale;
                 width *= 0.8f + sprite_phase * 0.8f;
                 height *= 0.8f + sprite_phase * 0.8f;
             } else if (fire) {
@@ -7436,6 +7445,171 @@ void AppendSceneEffect(
             effect.age_millis,
             effect.lifetime_millis,
             effect.victim_unit_id);
+}
+
+bool ResolveEntityLocatorWorldPosition(
+        const Bk2PresentationEntity& entity,
+        const std::string& locator_name,
+        float* output_x,
+        float* output_y,
+        float* output_z) {
+    if (locator_name.empty() ||
+        output_x == nullptr ||
+        output_y == nullptr ||
+        output_z == nullptr) {
+        return false;
+    }
+    const GeometryBinding binding = ResolveGeometryBinding(
+            entity.rpg_stats_path_hash,
+            entity.rpg_stats_record_id,
+            entity.geometry_record_id,
+            -1);
+    const ConvertedGeometry* geometry = LoadConvertedGeometry(
+            binding.geometry_record_id,
+            ConvertedAnimationVariant::Base);
+    if (geometry == nullptr) {
+        ++g_attached_effect_locator_missing_count;
+        if (g_attached_effect_locator_missing_count <= 4) {
+            std::ostringstream report;
+            report << "attached_effect_locator=missing"
+                   << "; reason=geometry"
+                   << "; unit=" << entity.id
+                   << "; locator=" << locator_name
+                   << "; stats_hash="
+                   << entity.rpg_stats_path_hash
+                   << "; stats_record="
+                   << entity.rpg_stats_record_id
+                   << "; geometry_record="
+                   << binding.geometry_record_id;
+            PlatformRuntime::instance().log_warn(report.str());
+        }
+        return false;
+    }
+    for (const ConvertedGeometryPart& part : geometry->parts) {
+        const auto bone = std::find_if(
+                part.bones.begin(),
+                part.bones.end(),
+                [&locator_name](const ConvertedGeometryBone& candidate) {
+                    return candidate.name == locator_name;
+                });
+        if (bone == part.bones.end()) {
+            continue;
+        }
+        const float cosine = std::cos(entity.heading_radians);
+        const float sine = std::sin(entity.heading_radians);
+        float world_x = binding.geometry_scale *
+                (cosine * bone->pivot_x - sine * bone->pivot_y);
+        float world_y = binding.geometry_scale *
+                (sine * bone->pivot_x + cosine * bone->pivot_y);
+        float world_z = binding.geometry_scale * bone->pivot_z;
+        ApplyWorldRootTilt(
+                entity.root_tilt_axis_x,
+                entity.root_tilt_axis_y,
+                entity.root_tilt_radians,
+                &world_x,
+                &world_y,
+                &world_z);
+        *output_x = entity.x + world_x;
+        *output_y = entity.y + world_y;
+        *output_z = entity.z + world_z;
+        ++g_attached_effect_locator_resolved_count;
+        if (!g_attached_effect_locator_logged) {
+            std::ostringstream report;
+            report << "attached_effect_locator=resolved"
+                   << "; unit=" << entity.id
+                   << "; locator=" << locator_name
+                   << "; geometry=" << binding.geometry_record_id
+                   << "; local=" << bone->pivot_x << ","
+                   << bone->pivot_y << "," << bone->pivot_z
+                   << "; world=" << *output_x << ","
+                   << *output_y << "," << *output_z;
+            PlatformRuntime::instance().log_info(report.str());
+            g_attached_effect_locator_logged = true;
+        }
+        return true;
+    }
+    ++g_attached_effect_locator_missing_count;
+    if (g_attached_effect_locator_missing_count <= 4) {
+        size_t bone_count = 0;
+        for (const ConvertedGeometryPart& part : geometry->parts) {
+            bone_count += part.bones.size();
+        }
+        std::ostringstream report;
+        report << "attached_effect_locator=missing"
+               << "; reason=bone"
+               << "; unit=" << entity.id
+               << "; locator=" << locator_name
+               << "; geometry=" << binding.geometry_record_id
+               << "; parts=" << geometry->parts.size()
+               << "; bones=" << bone_count;
+        PlatformRuntime::instance().log_warn(report.str());
+    }
+    return false;
+}
+
+void AppendAttachedEntityEffect(
+        WorldObjectMesh* mesh,
+        const AndroidAttachedEntityEffect& effect,
+        const std::vector<Bk2PresentationEntity>& entities) {
+    if (mesh == nullptr || effect.lifetime_millis == 0) {
+        return;
+    }
+    const auto entity = std::find_if(
+            entities.begin(),
+            entities.end(),
+            [&effect](const Bk2PresentationEntity& candidate) {
+                return candidate.id == effect.entity_id;
+            });
+    if (entity == entities.end()) {
+        ++g_attached_effect_entity_missing_count;
+        if (g_attached_effect_entity_missing_count <= 4) {
+            PlatformRuntime::instance().log_warn(
+                    std::string(
+                            "attached_entity_effect=missing_entity; unit=") +
+                    std::to_string(effect.entity_id) +
+                    "; snapshot_entities=" +
+                    std::to_string(entities.size()));
+        }
+        return;
+    }
+    for (size_t locator_index = 0;
+         locator_index < effect.locator_names.size();
+         ++locator_index) {
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        if (!ResolveEntityLocatorWorldPosition(
+                    *entity,
+                    effect.locator_names[locator_index],
+                    &x,
+                    &y,
+                    &z)) {
+            continue;
+        }
+        AppendDescriptorEffectLights(
+                mesh,
+                effect.lights,
+                x,
+                y,
+                z,
+                effect.age_millis,
+                effect.lifetime_millis);
+        AppendDescriptorParticleEffect(
+                mesh,
+                effect.emitters,
+                x,
+                y,
+                z,
+                effect.age_millis,
+                effect.lifetime_millis,
+                effect.entity_id +
+                        static_cast<int32_t>(locator_index * 97),
+                ParticlePathContains(
+                        effect.descriptor_id,
+                        "diselexhaust")
+                        ? 0.28f
+                        : 1.0f);
+    }
 }
 
 void AppendDestructionEffect(
@@ -8203,6 +8377,9 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
             CopyActiveAndroidCombatEffects();
     const std::vector<AndroidSceneEffect> scene_effects =
             CopyActiveAndroidSceneEffects();
+    const std::vector<AndroidAttachedEntityEffect>
+            attached_entity_effects =
+                    CopyActiveAndroidAttachedEntityEffects();
     const std::vector<AndroidDestructionEffect> destruction_effects =
             CopyActiveAndroidDestructionEffects();
     const AndroidWarFogSnapshot war_fog =
@@ -8216,6 +8393,8 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         g_active_combat_effect_count == 0 &&
         scene_effects.empty() &&
         g_active_scene_effect_count == 0 &&
+        attached_entity_effects.empty() &&
+        g_active_attached_entity_effect_count == 0 &&
         destruction_effects.empty() &&
         g_active_destruction_effect_count == 0) {
         return true;
@@ -8400,6 +8579,31 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
             previous_active_scene_effect_count > 0) {
         PlatformRuntime::instance().log_info(
                 "descriptor_scene_effect_render=cleared");
+    }
+    const size_t previous_active_attached_entity_effect_count =
+            g_active_attached_entity_effect_count;
+    for (const AndroidAttachedEntityEffect& effect :
+         attached_entity_effects) {
+        AppendAttachedEntityEffect(&combined, effect, entities);
+    }
+    g_active_attached_entity_effect_count =
+            attached_entity_effects.size();
+    if (g_active_attached_entity_effect_count > 0 &&
+        previous_active_attached_entity_effect_count == 0) {
+        const AndroidAttachedEntityEffect& effect =
+                attached_entity_effects.front();
+        PlatformRuntime::instance().log_info(
+                std::string(
+                        "attached_entity_effect_render=active; id=") +
+                effect.descriptor_id +
+                "; unit=" + std::to_string(effect.entity_id) +
+                "; locators=" +
+                std::to_string(effect.locator_names.size()));
+    } else if (
+            g_active_attached_entity_effect_count == 0 &&
+            previous_active_attached_entity_effect_count > 0) {
+        PlatformRuntime::instance().log_info(
+                "attached_entity_effect_render=cleared");
     }
     const size_t previous_active_destruction_effect_count =
             g_active_destruction_effect_count;
@@ -9973,7 +10177,12 @@ void ShutdownSinglePlayerRuntime() {
     g_effect_light_render_count = 0;
     g_active_combat_effect_count = 0;
     g_active_scene_effect_count = 0;
+    g_active_attached_entity_effect_count = 0;
     g_active_destruction_effect_count = 0;
+    g_attached_effect_locator_resolved_count = 0;
+    g_attached_effect_locator_missing_count = 0;
+    g_attached_effect_entity_missing_count = 0;
+    g_attached_effect_locator_logged = false;
     g_active_unit_indicator_count = 0;
     g_combat_effect_trace_texture_logged = false;
     g_muzzle_flash_texture_logged = false;
@@ -11023,6 +11232,14 @@ std::string SinglePlayerRuntimeReport() {
            << g_active_combat_effect_count
            << "; active_scene_effects_rendered="
            << g_active_scene_effect_count
+           << "; active_attached_entity_effects_rendered="
+           << g_active_attached_entity_effect_count
+           << "; attached_effect_locators_resolved="
+           << g_attached_effect_locator_resolved_count
+           << "; attached_effect_locators_missing="
+           << g_attached_effect_locator_missing_count
+           << "; attached_effect_entities_missing="
+           << g_attached_effect_entity_missing_count
            << "; active_destruction_effects_rendered="
            << g_active_destruction_effect_count
            << "; active_unit_indicators="
