@@ -94,6 +94,13 @@ the original reduced alpha until their prerequisite target is completed. The
 four final arrow DDS files are bundled as a non-destructive fallback because
 their sparse-checkout XDB references are absent; external full-game data still
 takes precedence.
+The chapter map also regenerates the original `CWindowPotentialLines` state
+from the current campaign tracker. It reads the chapter's sea/noise mask and
+alternate-colour TGA, applies the authored main-strike gradient and each
+mission's incomplete/completed potential at its details-map node, then builds
+the masked territory and ten-pixel zero contour before arrows and markers.
+The final post-win state is correct; only the desktop's short interpolation
+animation between the old and new frontline remains to be ported.
 The map renderer now includes general `SObjectRPGStats` records in addition to
 buildings, fences, entrenchments, squads, and mechanized units. This restores
 the original mission's vegetation and small props through their converted

@@ -783,6 +783,16 @@ with `nCMArrowMission2` retain the original `0x40ffffff` dependency alpha until
 that target is completed. The marker quads are submitted afterward and
 therefore remain above the arrows.
 
+The static `CWindowPotentialLines` state is restored as a generated Android
+texture. A bounded 24/32-bit true-colour TGA decoder reads both raw and RLE
+chapter layers directly from the VFS, preserving their authored orientation.
+The generator applies the sea/noise mask, deterministic main-strike gradient,
+details-map mission nodes, `vEndOffset`, and the current incomplete/completed
+potential. It then runs the original ten-pixel marching-squares grid and
+ten-pixel zero-contour brush, composites the alternate-colour territory and
+border, and uploads one RGBA texture. The texture is submitted before road
+arrows and target markers.
+
 The sparse source tree contains the final four arrow DDS files but not every
 descriptor that names them. The APK stages only those exact DDS files under
 `UI/chaptermap/arrows`; `Blitzkrieg2Activity` copies a missing fallback into
@@ -825,6 +835,16 @@ reward state. A clean Germany campaign selection produced its own two-route /
 36-segment chapter map. All four bundled DDS files were present in the APK and
 the writable data root, all referenced textures received valid GPU handles,
 and the native process remained alive.
+
+Static-frontline validation on that emulator generated USA chapter one's gold
+territory as 39,909 pixels with a 2,548-pixel contour. Germany chapter one used
+its own blue layer and generated 222,578 territory pixels with a 9,302-pixel
+contour. Both TGA masks aligned with the shipped coastlines and national flags;
+markers and arrows stayed above the generated layer. Selecting Germany mission
+index 2 kept the campaign-state frontline stable while rebuilding its arrows
+from 36 to 44 segments. The desktop's timed `nFrontLineAnim` interpolation
+after a win remains separate work; a returned completed state already renders
+the correct final potential immediately.
 
 On the ARM64 emulator the main menu screen resolves 28 windows, 16 buttons, 20
 textures, and 17 captions, loads 4 shipped fonts, and submits 158 quads with
@@ -1624,7 +1644,7 @@ reinforcement/reward icons, selected-mission road arrows, dependency alpha,
 and locked-mission Play guard are linked. Campaign
 intro playback is still bypassed while most referenced Bink sources are
 unavailable. Touch scrolling for text longer than the authored viewport,
-chapter-map potential/frontline transition effects and reinforcement detail
+the animated chapter-map frontline transition and reinforcement detail
 dialogs, and result rank/medal popups remain unfinished. The core Action
 Report and its reward rows are linked. Empty initial
 dynamic-world snapshots are now accepted as valid, and entity removals between

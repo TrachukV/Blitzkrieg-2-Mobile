@@ -711,9 +711,13 @@ Germany chapter-one maps, locked-final selection, and an exact USA mission
 index 2 briefing route. Selected-mission road arrows now follow the shipped
 chapter `roads`, full-route UVs, arrow types, and dependency alpha; ARM64 checks
 covered USA mission indices 1 and 2 plus Germany mission index 1. UI work still
-includes chapter-map potential/frontline transition effects, reinforcement
-detail dialogs, rank/medal result popups, and replacement of temporary
-immediate-mode stubs with proper batching and render-target behavior.
+includes the animated chapter-map frontline transition, reinforcement detail
+dialogs, rank/medal result popups, and replacement of temporary immediate-mode
+stubs with proper batching and render-target behavior. The static
+`CWindowPotentialLines` result is now generated from the chapter TGA layers,
+main-strike gradient, mission nodes, current completion state, potential
+values, and the original marching-squares contour. ARM64 validation covered
+the distinct USA gold and Germany blue territory states.
 
 Mission startup also treats an empty initial dynamic-world mesh as valid:
 static scenery is uploaded separately and later presentation generations fill

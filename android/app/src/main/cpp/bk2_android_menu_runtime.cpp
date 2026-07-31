@@ -14,6 +14,7 @@
 #include "UI/DBUserInterface.h"
 #include "UISpecificB2/DBUISpecificB2.h"
 #include "3Dmotor/DBScene.h"
+#include "3Dmotor/GfxBuffers.h"
 // The engine modules alias the saver through their own Specific.h.
 #ifndef CStructureSaver
 #define CStructureSaver IBinSaver
@@ -95,11 +96,13 @@ struct MenuTexturedQuad {
     float v1 = 1.0f;
     uint32_t argb = 0xffffffffu;
     int texture = -1;
+    NGfx::CTexture* direct_texture = nullptr;
 };
 
 std::vector<MenuQuad> g_quads;
 std::vector<MenuTexturedQuad> g_textured_quads;
 size_t g_textured_quad_insert_index = static_cast<size_t>(-1);
+CObj<NGfx::CTexture> g_chapter_potential_texture;
 std::vector<MenuQuad> g_pressed_quads;
 int g_pressed_button = -1;
 std::vector<std::string> g_texture_paths;
@@ -3391,6 +3394,565 @@ void PopulateOptionsScreenLocked() {
     }
 }
 
+struct ChapterPotentialNode {
+    float x = 0.0f;
+    float y = 0.0f;
+    float end_x = 0.0f;
+    float end_y = 0.0f;
+    float value = 0.0f;
+};
+
+std::string ResolveChapterLayerPath(
+        const NDb::SChapter* chapter,
+        const string& file_ref) {
+    if (chapter == nullptr || file_ref.empty()) {
+        return std::string();
+    }
+    const std::string raw = ToStdString(file_ref);
+    const bool root_relative =
+            !raw.empty() && (raw.front() == '/' || raw.front() == '\\');
+    const std::string normalized = NormalizeResourcePath(raw);
+    if (root_relative || normalized.empty()) {
+        return normalized;
+    }
+    std::string folder = NormalizeResourcePath(ToStdString(
+            NDb::GetFolderName(chapter->GetDBID())));
+    while (!folder.empty() && folder.back() == '/') {
+        folder.pop_back();
+    }
+    if (!folder.empty() &&
+        normalized.size() > folder.size() &&
+        normalized.compare(0, folder.size(), folder) == 0 &&
+        normalized[folder.size()] == '/') {
+        return normalized;
+    }
+    return folder.empty() ? normalized : folder + "/" + normalized;
+}
+
+bool LoadChapterTga(
+        const std::string& path,
+        CArray2D<NGfx::SPixel8888>* pixels) {
+    if (path.empty() ||
+        pixels == nullptr ||
+        NVFS::GetMainVFS() == nullptr) {
+        return false;
+    }
+    CFileStream stream(NVFS::GetMainVFS(), string(path.c_str()));
+    const int byte_count = stream.GetSize();
+    const BYTE* bytes = stream.GetBuffer();
+    if (!stream.IsOk() || byte_count < 18 || bytes == nullptr) {
+        return false;
+    }
+    const int id_length = bytes[0];
+    const int color_map_type = bytes[1];
+    const int image_type = bytes[2];
+    const int width = bytes[12] | (bytes[13] << 8);
+    const int height = bytes[14] | (bytes[15] << 8);
+    const int pixel_depth = bytes[16];
+    const int descriptor = bytes[17];
+    if (color_map_type != 0 ||
+        (image_type != 2 && image_type != 10) ||
+        (pixel_depth != 24 && pixel_depth != 32) ||
+        width <= 0 ||
+        height <= 0) {
+        return false;
+    }
+    const int bytes_per_pixel = pixel_depth / 8;
+    size_t offset = static_cast<size_t>(18 + id_length);
+    const size_t total_pixels =
+            static_cast<size_t>(width) * height;
+    pixels->SetSizes(width, height);
+    size_t decoded_pixels = 0;
+    const auto decode_pixel = [&](const BYTE* source) {
+        const size_t file_y =
+                decoded_pixels / static_cast<size_t>(width);
+        const size_t file_x =
+                decoded_pixels % static_cast<size_t>(width);
+        const int output_x = (descriptor & 0x10) != 0
+                ? width - 1 - static_cast<int>(file_x)
+                : static_cast<int>(file_x);
+        const int output_y = (descriptor & 0x20) != 0
+                ? static_cast<int>(file_y)
+                : height - 1 - static_cast<int>(file_y);
+        (*pixels)[output_y][output_x] = NGfx::SPixel8888(
+                source[2],
+                source[1],
+                source[0],
+                bytes_per_pixel == 4 ? source[3] : 0xff);
+        ++decoded_pixels;
+    };
+    if (image_type == 2) {
+        const size_t required =
+                total_pixels * static_cast<size_t>(bytes_per_pixel);
+        if (offset > static_cast<size_t>(byte_count) ||
+            required > static_cast<size_t>(byte_count) - offset) {
+            pixels->Clear();
+            return false;
+        }
+        while (decoded_pixels < total_pixels) {
+            decode_pixel(bytes + offset);
+            offset += static_cast<size_t>(bytes_per_pixel);
+        }
+        return true;
+    }
+
+    while (decoded_pixels < total_pixels &&
+           offset < static_cast<size_t>(byte_count)) {
+        const BYTE packet = bytes[offset++];
+        const size_t count =
+                static_cast<size_t>((packet & 0x7f) + 1);
+        if (count > total_pixels - decoded_pixels) {
+            pixels->Clear();
+            return false;
+        }
+        if ((packet & 0x80) != 0) {
+            if (offset + static_cast<size_t>(bytes_per_pixel) >
+                static_cast<size_t>(byte_count)) {
+                pixels->Clear();
+                return false;
+            }
+            const BYTE* source = bytes + offset;
+            offset += static_cast<size_t>(bytes_per_pixel);
+            for (size_t index = 0; index < count; ++index) {
+                decode_pixel(source);
+            }
+        } else {
+            const size_t packet_bytes =
+                    count * static_cast<size_t>(bytes_per_pixel);
+            if (offset + packet_bytes >
+                static_cast<size_t>(byte_count)) {
+                pixels->Clear();
+                return false;
+            }
+            for (size_t index = 0; index < count; ++index) {
+                decode_pixel(
+                        bytes + offset +
+                        index * static_cast<size_t>(bytes_per_pixel));
+            }
+            offset += packet_bytes;
+        }
+    }
+    if (decoded_pixels != total_pixels) {
+        pixels->Clear();
+        return false;
+    }
+    return true;
+}
+
+NGfx::SPixel8888 BlendChapterPixel(
+        const NGfx::SPixel8888& source,
+        const NGfx::SPixel8888& destination) {
+    const float source_alpha =
+            static_cast<float>(source.a) / 255.0f;
+    const float destination_alpha =
+            static_cast<float>(destination.a) / 255.0f;
+    const float output_alpha =
+            source_alpha +
+            destination_alpha * (1.0f - source_alpha);
+    if (output_alpha <= 0.0001f) {
+        return NGfx::SPixel8888(0, 0, 0, 0);
+    }
+    const auto channel = [&](BYTE source_value, BYTE destination_value) {
+        const float premultiplied =
+                static_cast<float>(source_value) * source_alpha +
+                static_cast<float>(destination_value) *
+                        destination_alpha *
+                        (1.0f - source_alpha);
+        return static_cast<BYTE>(std::clamp(
+                premultiplied / output_alpha,
+                0.0f,
+                255.0f));
+    };
+    return NGfx::SPixel8888(
+            channel(source.r, destination.r),
+            channel(source.g, destination.g),
+            channel(source.b, destination.b),
+            static_cast<BYTE>(std::clamp(
+                    output_alpha * 255.0f,
+                    0.0f,
+                    255.0f)));
+}
+
+// CWindowPotentialLines builds two generated layers over the chapter picture:
+// a differently coloured negative-potential territory and its blurred zero
+// contour. Generate the same static state into one Android texture; selected
+// mission arrows and target markers are submitted afterward.
+void AppendChapterMapPotential(
+        const NDb::SChapter* chapter,
+        const NDb::SMapInfo* details,
+        const MenuTemplate& map_window,
+        float details_scale_x,
+        float details_scale_y) {
+    g_chapter_potential_texture = nullptr;
+    if (chapter == nullptr ||
+        details == nullptr ||
+        map_window.width <= 1.0f ||
+        map_window.height <= 1.0f ||
+        details_scale_x <= 0.0f ||
+        details_scale_y <= 0.0f) {
+        return;
+    }
+
+    const std::string mask_path = ResolveChapterLayerPath(
+            chapter,
+            chapter->szSeaNoiseMask);
+    const std::string colour_path = ResolveChapterLayerPath(
+            chapter,
+            chapter->szDifferentColourMap);
+    CArray2D<NGfx::SPixel8888> mask;
+    CArray2D<NGfx::SPixel8888> territory_colour;
+    if (!LoadChapterTga(mask_path, &mask) ||
+        !LoadChapterTga(colour_path, &territory_colour)) {
+        PlatformRuntime::instance().log_info(
+                "original_menu_chapter_frontline=not_ready; "
+                "error=layer_tga_unreadable; mask=" +
+                mask_path + "; colour=" + colour_path);
+        return;
+    }
+
+    const int width = std::max(
+            1,
+            std::min(
+                    static_cast<int>(std::lround(map_window.width)),
+                    std::min(mask.GetSizeX(), territory_colour.GetSizeX())));
+    const int height = std::max(
+            1,
+            std::min(
+                    static_cast<int>(std::lround(map_window.height)),
+                    std::min(mask.GetSizeY(), territory_colour.GetSizeY())));
+    if (width <= 1 || height <= 1) {
+        return;
+    }
+
+    std::vector<ChapterPotentialNode> nodes;
+    nodes.reserve(chapter->missionPath.size());
+    size_t completed_nodes = 0;
+    for (size_t mission_index = 0;
+         mission_index < chapter->missionPath.size();
+         ++mission_index) {
+        const NDb::SMissionEnableInfo& mission =
+                chapter->missionPath[mission_index];
+        ChapterPotentialNode node;
+        node.x = mission.vPlaceOnChapterMap.x;
+        node.y = mission.vPlaceOnChapterMap.y;
+        for (const NDb::SMapObjectInfo& object : details->objects) {
+            if (object.nPlayer == static_cast<int>(mission_index)) {
+                node.x = object.vPos.y * details_scale_x;
+                node.y = object.vPos.x * details_scale_y;
+                break;
+            }
+        }
+        node.end_x = mission.vEndOffset.x;
+        node.end_y = mission.vEndOffset.y;
+        const bool completed =
+                mission_index < g_chapter_target_states.size() &&
+                g_chapter_target_states[mission_index] ==
+                        kChapterTargetCompleted;
+        node.value = completed
+                ? mission.fPotentialComplete
+                : mission.fPotentialIncomplete;
+        if (completed) {
+            ++completed_nodes;
+        }
+        nodes.push_back(node);
+    }
+
+    float strike_x = 0.0f;
+    float strike_y = 0.0f;
+    for (const NDb::SMapObjectInfo& object : details->objects) {
+        if (object.nPlayer == 0) {
+            const float radians =
+                    chapter->fMainStrikeAngle *
+                    3.14159265358979323846f / 180.0f;
+            strike_x = std::cos(radians) * chapter->fMainStrikePower;
+            strike_y = std::sin(radians) * chapter->fMainStrikePower;
+            break;
+        }
+    }
+
+    const auto potential_at = [&](int x, int y) {
+        float value = 0.0f;
+        if (x >= 0 &&
+            y >= 0 &&
+            x < mask.GetSizeX() &&
+            y < mask.GetSizeY()) {
+            const NGfx::SPixel8888& mask_pixel = mask[y][x];
+            if (mask_pixel.a != 0xff && mask_pixel.a != 0x00) {
+                value =
+                        (static_cast<float>(mask_pixel.a) - 127.0f) *
+                        0.00001f;
+            }
+            const float x_gradient =
+                    strike_x *
+                    (static_cast<float>(x + x - mask.GetSizeX()) /
+                     static_cast<float>(mask.GetSizeX()));
+            const float y_gradient =
+                    -strike_y *
+                    (static_cast<float>(y + y - mask.GetSizeY()) /
+                     static_cast<float>(mask.GetSizeY()));
+            value += (x_gradient + y_gradient) * 0.007f;
+        }
+        for (const ChapterPotentialNode& node : nodes) {
+            float along =
+                    node.end_x * (static_cast<float>(x) - node.x) +
+                    node.end_y * (static_cast<float>(y) - node.y);
+            const float end_length_squared =
+                    node.end_x * node.end_x +
+                    node.end_y * node.end_y;
+            if (end_length_squared > 0.0001f) {
+                along = std::clamp(
+                        along / end_length_squared,
+                        0.0f,
+                        1.0f);
+            } else {
+                along = 0.0f;
+            }
+            const float dx =
+                    node.x + node.end_x * along -
+                    static_cast<float>(x);
+            const float dy =
+                    node.y + node.end_y * along -
+                    static_cast<float>(y);
+            value += node.value / (1.0f + dx * dx + dy * dy);
+        }
+        return value;
+    };
+
+    std::vector<NGfx::SPixel8888> overlay(
+            static_cast<size_t>(width) * height,
+            NGfx::SPixel8888(0, 0, 0, 0));
+    size_t territory_pixels = 0;
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const NGfx::SPixel8888& mask_pixel = mask[y][x];
+            if (mask_pixel.a == 0xff || potential_at(x, y) > 0.0f) {
+                continue;
+            }
+            NGfx::SPixel8888 pixel = territory_colour[y][x];
+            pixel.a = 0xff;
+            overlay[static_cast<size_t>(y) * width + x] = pixel;
+            ++territory_pixels;
+        }
+    }
+
+    std::vector<NGfx::SPixel8888> lines(
+            static_cast<size_t>(width) * height,
+            NGfx::SPixel8888(0, 0, 0, 0));
+    const NGfx::SPixel8888 border(
+            static_cast<DWORD>(chapter->nPositiveColour));
+    constexpr int kGridSize = 10;
+    constexpr float kBorderRadius = 5.0f;
+    constexpr float kBlurPart = 0.3f;
+    const auto draw_circle = [&](int center_x, int center_y) {
+        if (center_x < 0 ||
+            center_y < 0 ||
+            center_x >= width ||
+            center_y >= height ||
+            mask[center_y][center_x].a == 0xff) {
+            return;
+        }
+        const int first_x =
+                static_cast<int>(center_x - kBorderRadius);
+        const int last_x =
+                static_cast<int>(center_x + kBorderRadius);
+        const int first_y =
+                static_cast<int>(center_y - kBorderRadius);
+        const int last_y =
+                static_cast<int>(center_y + kBorderRadius);
+        for (int x = first_x; x < last_x; ++x) {
+            for (int y = first_y; y < last_y; ++y) {
+                if (x < 0 || y < 0 || x >= width || y >= height) {
+                    continue;
+                }
+                const float horizontal =
+                        std::fabs(static_cast<float>(x - center_x));
+                const float vertical =
+                        std::fabs(static_cast<float>(y - center_y));
+                const float distance = std::min(
+                        std::max(horizontal, vertical),
+                        (horizontal + vertical) * 0.666f);
+                if (distance >= kBorderRadius) {
+                    continue;
+                }
+                BYTE alpha = border.a;
+                if (distance > kBorderRadius * kBlurPart) {
+                    alpha = static_cast<BYTE>(
+                            static_cast<float>(alpha) *
+                            (kBorderRadius - distance) /
+                            (kBorderRadius * (1.0f - kBlurPart)));
+                }
+                NGfx::SPixel8888& pixel =
+                        lines[static_cast<size_t>(y) * width + x];
+                const DWORD old_alpha = pixel.a;
+                pixel = border;
+                pixel.a = std::max<DWORD>(old_alpha, alpha);
+            }
+        }
+    };
+    const auto draw_line =
+            [&](float x0, float y0, float x1, float y1) {
+                const float dx = x1 - x0;
+                const float dy = y1 - y0;
+                const int steps = std::max(
+                        1,
+                        static_cast<int>(std::ceil(
+                                std::max(std::fabs(dx), std::fabs(dy)))));
+                for (int step = 0; step <= steps; ++step) {
+                    const float part =
+                            static_cast<float>(step) /
+                            static_cast<float>(steps);
+                    draw_circle(
+                            static_cast<int>(std::lround(x0 + dx * part)),
+                            static_cast<int>(std::lround(y0 + dy * part)));
+                }
+            };
+
+    for (int y = 0; y < height; y += kGridSize) {
+        for (int x = 0; x < width; x += kGridSize) {
+            const float values[4] = {
+                    potential_at(x + kGridSize, y + kGridSize),
+                    potential_at(x + kGridSize, y),
+                    potential_at(x, y),
+                    potential_at(x, y + kGridSize),
+            };
+            BYTE type = 0;
+            for (float value : values) {
+                type = static_cast<BYTE>((type << 1) |
+                        (value > 0.0f ? 1 : 0));
+            }
+            const auto part = [&](int first, int second) {
+                const float denominator =
+                        values[first] - values[second];
+                if (std::fabs(denominator) <= 0.000001f) {
+                    return kGridSize * 0.5f;
+                }
+                return kGridSize *
+                        std::fabs(values[first] / denominator);
+            };
+            switch (type) {
+                case 1:
+                case 14:
+                    draw_line(
+                            static_cast<float>(x),
+                            y + part(2, 3),
+                            x + part(3, 0),
+                            static_cast<float>(y + kGridSize));
+                    break;
+                case 2:
+                case 13:
+                    draw_line(
+                            static_cast<float>(x),
+                            y + part(2, 3),
+                            x + part(2, 1),
+                            static_cast<float>(y));
+                    break;
+                case 3:
+                case 12:
+                    draw_line(
+                            x + part(2, 1),
+                            static_cast<float>(y),
+                            x + part(3, 0),
+                            static_cast<float>(y + kGridSize));
+                    break;
+                case 4:
+                case 11:
+                    draw_line(
+                            x + part(2, 1),
+                            static_cast<float>(y),
+                            static_cast<float>(x + kGridSize),
+                            y + part(1, 0));
+                    break;
+                case 5:
+                case 10:
+                    draw_line(
+                            static_cast<float>(x),
+                            y + part(2, 3),
+                            x + part(3, 0),
+                            static_cast<float>(y + kGridSize));
+                    draw_line(
+                            x + part(2, 1),
+                            static_cast<float>(y),
+                            static_cast<float>(x + kGridSize),
+                            y + part(1, 0));
+                    break;
+                case 6:
+                case 9:
+                    draw_line(
+                            static_cast<float>(x),
+                            y + part(2, 3),
+                            static_cast<float>(x + kGridSize),
+                            y + part(1, 0));
+                    break;
+                case 7:
+                case 8:
+                    draw_line(
+                            x + part(3, 0),
+                            static_cast<float>(y + kGridSize),
+                            static_cast<float>(x + kGridSize),
+                            y + part(1, 0));
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    size_t border_pixels = 0;
+    for (size_t index = 0; index < overlay.size(); ++index) {
+        if (lines[index].a == 0) {
+            continue;
+        }
+        overlay[index] = BlendChapterPixel(lines[index], overlay[index]);
+        ++border_pixels;
+    }
+
+    g_chapter_potential_texture = NGfx::MakeTexture(
+            width,
+            height,
+            1,
+            NGfx::SPixel8888::ID,
+            NGfx::DYNAMIC_TEXTURE,
+            NGfx::CLAMP);
+    if (!IsValid(g_chapter_potential_texture)) {
+        return;
+    }
+    {
+        NGfx::CTextureLock<NGfx::SPixel8888> lock(
+                g_chapter_potential_texture,
+                0,
+                NGfx::INPLACE);
+        for (int y = 0; y < height; ++y) {
+            std::copy_n(
+                    overlay.data() + static_cast<size_t>(y) * width,
+                    width,
+                    lock[y]);
+        }
+    }
+
+    MenuTexturedQuad quad;
+    quad.x0 = map_window.x;
+    quad.y0 = map_window.y;
+    quad.x1 = map_window.x;
+    quad.y1 = map_window.y + map_window.height;
+    quad.x2 = map_window.x + map_window.width;
+    quad.y2 = map_window.y + map_window.height;
+    quad.x3 = map_window.x + map_window.width;
+    quad.y3 = map_window.y;
+    quad.direct_texture = g_chapter_potential_texture.GetPtr();
+    g_textured_quads.push_back(quad);
+
+    std::ostringstream report;
+    report << "original_menu_chapter_frontline=ready"
+           << "; size=" << width << "x" << height
+           << "; nodes=" << nodes.size()
+           << "; completed=" << completed_nodes
+           << "; territory_pixels=" << territory_pixels
+           << "; border_pixels=" << border_pixels
+           << "; mask=" << mask_path
+           << "; colour=" << colour_path;
+    PlatformRuntime::instance().log_info(report.str());
+}
+
 // CWindowPotentialLines::DrawArrows maps every road assigned to the selected
 // mission into a strip of rotated quads. The arrow texture is consumed exactly
 // once along the complete polyline, preserving its authored head and tail.
@@ -3631,6 +4193,12 @@ void PopulateChapterMapLocked() {
                         AI_TILES_IN_PATCH);
     }
     g_textured_quad_insert_index = g_quads.size();
+    AppendChapterMapPotential(
+            chapter,
+            details,
+            map_window->second,
+            details_scale_x,
+            details_scale_y);
     AppendChapterMapArrows(
             chapter,
             details,
@@ -4128,6 +4696,7 @@ bool RebuildMenuScreenLocked(const std::string& screen_ref) {
     g_quads.clear();
     g_textured_quads.clear();
     g_textured_quad_insert_index = static_cast<size_t>(-1);
+    g_chapter_potential_texture = nullptr;
     g_texture_paths.clear();
     g_pressed_quads.clear();
     g_pressed_button = -1;
@@ -4286,12 +4855,18 @@ void RenderOriginalMenu(uint32_t screen_width, uint32_t screen_height) {
     }
     const auto submit_textured_quads = [&]() {
         for (const MenuTexturedQuad& quad : g_textured_quads) {
-            if (quad.texture < 0 ||
-                static_cast<size_t>(quad.texture) >=
-                        g_texture_handles.size()) {
-                continue;
+            uint16_t handle = UINT16_MAX;
+            if (quad.direct_texture != nullptr) {
+                EnsureLegacyTextureMipChainUploaded(quad.direct_texture);
+                handle = LegacyTextureHandleIndex(quad.direct_texture);
+            } else {
+                if (quad.texture < 0 ||
+                    static_cast<size_t>(quad.texture) >=
+                            g_texture_handles.size()) {
+                    continue;
+                }
+                handle = g_texture_handles[quad.texture];
             }
-            const uint16_t handle = g_texture_handles[quad.texture];
             if (handle == UINT16_MAX) {
                 continue;
             }
@@ -4457,6 +5032,7 @@ void ShutdownOriginalMenuRuntime() {
     g_quads.clear();
     g_textured_quads.clear();
     g_textured_quad_insert_index = static_cast<size_t>(-1);
+    g_chapter_potential_texture = nullptr;
     g_texture_paths.clear();
     g_texture_handles.clear();
     g_pressed_quads.clear();
