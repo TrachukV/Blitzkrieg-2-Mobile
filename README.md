@@ -92,7 +92,17 @@ respecting fog-delayed appearance. Static objects and live
 units now cast
 translucent projected silhouettes
 derived from their actual converted Granny vertices; animated infantry shadows
-follow the current frame instead of using fixed circles. The battlefield camera
+follow the current frame instead of using fixed circles.
+
+Terrain and converted Granny geometry now also carry their original normals
+into bgfx instead of being submitted as unlit texture cards. Terrain follows
+the desktop `SPreLight` calculation, including its separate light/shade
+ambient values and always-on 4x whitening scale, while static, CPU-posed, and
+GPU-skinned models use each map's `SAmbientLight` direction and colors. The
+Daylight setup on USA US1.0 and the differently directed Summer Sunset setup
+on US1.2 have both been exercised on the ARM64 GLES3 emulator.
+
+The battlefield camera
 and terrain projection use the render-surface height minus the actual 112dp
 mission HUD inset, so units remain visible and touch picking stays aligned in
 the playable area above the original bottom panel. The battlefield camera

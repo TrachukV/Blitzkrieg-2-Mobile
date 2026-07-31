@@ -1177,6 +1177,28 @@ projection to pitch `50`, yaw `215`, vector
 `-0.976227,0.683562`; it rendered 3,204 terrain-clipped opaque triangles and
 199,194 masked triangles without a process or renderer failure.
 
+The textured terrain and converted models now retain normals all the way into
+the bgfx vertex buffers. Terrain normals are rebuilt after river carving and
+oriented upward exactly as `TerraHeight.h` does, then evaluated with the
+map's separate `SPreLight`: its positive and negative ambient colors, post-load
+light/shade differences, prelight pitch, main-light yaw, and the original
+always-on 4x whitening scale from `TerraGFXConnector.cpp` are preserved.
+Converted static models receive the map's `SAmbientLight` per-vertex
+directional colors. CPU-posed wheels, guns, turrets, root tilt, and animation
+frames rotate normals with positions; the GPU infantry path skins normals with
+the same bone palette before applying the world transform. Alpha-tested model
+materials use a lit alpha-test program, while UI, effects, water, indicators,
+roads, and projected-shadow layers remain on their intended unlit passes.
+Precompiled GLES3 and SPIR-V variants are checked in.
+
+An ARM64 GLES3 run on US1.0 resolved scene direction
+`-0.347777,-0.291819,0.891007` from the Summer Daylight descriptor and terrain
+prelight direction `-0.765578,-0.642396,0.0348994`; all 37,249 terrain vertices
+received normals with no fallback. US1.2 independently resolved Summer Sunset
+scene direction `0.627507,0.439385,0.642788` and reversed the terrain's
+horizontal prelight direction. Both missions reached a ready bgfx renderer,
+kept GPU-skinned infantry visible, and produced no shader or process failure.
+
 The F10 menu
 now owns an explicit native user-pause state rather than merely
 covering a still-running battle. It resets pending touch-command mode, pauses

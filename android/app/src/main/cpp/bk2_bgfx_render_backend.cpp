@@ -24,6 +24,8 @@
 #include "shaders/generated/fs_bk2_alpha_masked_shadow_spv.bin.h"
 #include "shaders/generated/fs_bk2_alpha_test_essl.bin.h"
 #include "shaders/generated/fs_bk2_alpha_test_spv.bin.h"
+#include "shaders/generated/vs_bk2_lit_essl.bin.h"
+#include "shaders/generated/vs_bk2_lit_spv.bin.h"
 #include "shaders/generated/vs_bk2_skinning_essl.bin.h"
 #include "shaders/generated/vs_bk2_skinning_spv.bin.h"
 
@@ -51,6 +53,10 @@ const bgfx::EmbeddedShader kAlphaMaskedShadowShaders[] = {
 
 const bgfx::EmbeddedShader kSkinningShaders[] = {
         BGFX_EMBEDDED_SHADER(vs_bk2_skinning),
+        BGFX_EMBEDDED_SHADER_END()};
+
+const bgfx::EmbeddedShader kLitShaders[] = {
+        BGFX_EMBEDDED_SHADER(vs_bk2_lit),
         BGFX_EMBEDDED_SHADER_END()};
 
 const float kIdentityMatrix[16] = {
@@ -113,12 +119,24 @@ bgfx::VertexLayout BuildTexturedRectVertexLayout() {
     return layout;
 }
 
+bgfx::VertexLayout BuildWorldVertexLayout() {
+    bgfx::VertexLayout layout;
+    layout.begin()
+            .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
+            .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
+            .end();
+    return layout;
+}
+
 bgfx::VertexLayout BuildSkinnedVertexLayout() {
     bgfx::VertexLayout layout;
     layout.begin()
             .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
             .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
             .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
+            .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
             .add(bgfx::Attrib::Indices, 4, bgfx::AttribType::Uint8)
             .add(bgfx::Attrib::Weight, 4, bgfx::AttribType::Float)
             .end();
@@ -132,11 +150,17 @@ struct SkinnedGeometryBuffers {
     uint32_t index_count = 0;
 };
 
-static_assert(sizeof(SkinnedVertex) == 44);
+static_assert(sizeof(TerrainVertex) == 36);
+static_assert(offsetof(TerrainVertex, u) == 12);
+static_assert(offsetof(TerrainVertex, abgr) == 20);
+static_assert(offsetof(TerrainVertex, nx) == 24);
+
+static_assert(sizeof(SkinnedVertex) == 56);
 static_assert(offsetof(SkinnedVertex, u) == 12);
 static_assert(offsetof(SkinnedVertex, abgr) == 20);
-static_assert(offsetof(SkinnedVertex, bone_indices) == 24);
-static_assert(offsetof(SkinnedVertex, bone_weights) == 28);
+static_assert(offsetof(SkinnedVertex, nx) == 24);
+static_assert(offsetof(SkinnedVertex, bone_indices) == 36);
+static_assert(offsetof(SkinnedVertex, bone_weights) == 40);
 
 uint32_t ArgbToAbgr(uint32_t argb) {
     return (argb & 0xff00ff00u) |
@@ -216,12 +240,16 @@ public:
         last_error_.clear();
         rect_layout_ = BuildRectVertexLayout();
         textured_rect_layout_ = BuildTexturedRectVertexLayout();
-        terrain_layout_ = BuildTexturedRectVertexLayout();
+        terrain_layout_ = BuildWorldVertexLayout();
         skinned_layout_ = BuildSkinnedVertexLayout();
         rect_uniform_ =
                 bgfx::createUniform("u_params", bgfx::UniformType::Vec4, 4);
         texture_sampler_ =
                 bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
+        legacy_light_uniform_ = bgfx::createUniform(
+                "u_legacyLight",
+                bgfx::UniformType::Vec4,
+                5);
         skinning_bones_uniform_ = bgfx::createUniform(
                 "u_bones",
                 bgfx::UniformType::Mat4,
@@ -246,11 +274,31 @@ public:
                         bgfx::getRendererType(),
                         "fs_debugdraw_fill_texture"),
                 true);
+        lit_textured_program_ = bgfx::createProgram(
+                bgfx::createEmbeddedShader(
+                        kLitShaders,
+                        bgfx::getRendererType(),
+                        "vs_bk2_lit"),
+                bgfx::createEmbeddedShader(
+                        kRectShaders,
+                        bgfx::getRendererType(),
+                        "fs_debugdraw_fill_texture"),
+                true);
         alpha_test_program_ = bgfx::createProgram(
                 bgfx::createEmbeddedShader(
                         kRectShaders,
                         bgfx::getRendererType(),
                         "vs_debugdraw_fill_texture"),
+                bgfx::createEmbeddedShader(
+                        kAlphaTestShaders,
+                        bgfx::getRendererType(),
+                        "fs_bk2_alpha_test"),
+                true);
+        lit_alpha_test_program_ = bgfx::createProgram(
+                bgfx::createEmbeddedShader(
+                        kLitShaders,
+                        bgfx::getRendererType(),
+                        "vs_bk2_lit"),
                 bgfx::createEmbeddedShader(
                         kAlphaTestShaders,
                         bgfx::getRendererType(),
@@ -288,12 +336,15 @@ public:
                 true);
         if (!bgfx::isValid(rect_program_) ||
             !bgfx::isValid(textured_rect_program_) ||
+            !bgfx::isValid(lit_textured_program_) ||
             !bgfx::isValid(alpha_test_program_) ||
+            !bgfx::isValid(lit_alpha_test_program_) ||
             !bgfx::isValid(alpha_masked_shadow_program_) ||
             !bgfx::isValid(skinned_textured_program_) ||
             !bgfx::isValid(skinned_alpha_test_program_) ||
             !bgfx::isValid(rect_uniform_) ||
             !bgfx::isValid(texture_sampler_) ||
+            !bgfx::isValid(legacy_light_uniform_) ||
             !bgfx::isValid(skinning_bones_uniform_)) {
             last_error_ = "bgfx primitive shader initialization failed";
             detach_window();
@@ -339,9 +390,17 @@ public:
             bgfx::destroy(textured_rect_program_);
             textured_rect_program_ = BGFX_INVALID_HANDLE;
         }
+        if (bgfx::isValid(lit_textured_program_)) {
+            bgfx::destroy(lit_textured_program_);
+            lit_textured_program_ = BGFX_INVALID_HANDLE;
+        }
         if (bgfx::isValid(alpha_test_program_)) {
             bgfx::destroy(alpha_test_program_);
             alpha_test_program_ = BGFX_INVALID_HANDLE;
+        }
+        if (bgfx::isValid(lit_alpha_test_program_)) {
+            bgfx::destroy(lit_alpha_test_program_);
+            lit_alpha_test_program_ = BGFX_INVALID_HANDLE;
         }
         if (bgfx::isValid(alpha_masked_shadow_program_)) {
             bgfx::destroy(alpha_masked_shadow_program_);
@@ -366,6 +425,10 @@ public:
         if (bgfx::isValid(rect_uniform_)) {
             bgfx::destroy(rect_uniform_);
             rect_uniform_ = BGFX_INVALID_HANDLE;
+        }
+        if (bgfx::isValid(legacy_light_uniform_)) {
+            bgfx::destroy(legacy_light_uniform_);
+            legacy_light_uniform_ = BGFX_INVALID_HANDLE;
         }
         if (bgfx::isValid(skinning_bones_uniform_)) {
             bgfx::destroy(skinning_bones_uniform_);
@@ -529,6 +592,16 @@ public:
         destroy_world_object_buffers();
     }
 
+    void set_legacy_directional_light(
+            const LegacyDirectionalLight& light) override {
+        legacy_directional_light_ = light;
+    }
+
+    void set_legacy_terrain_light(
+            const LegacyDirectionalLight& light) override {
+        legacy_terrain_light_ = light;
+    }
+
     void set_terrain_camera(const TerrainCamera& camera) override {
         terrain_camera_ = camera;
     }
@@ -592,6 +665,46 @@ public:
     }
 
 private:
+    void set_legacy_light_uniform(
+            const LegacyDirectionalLight& light) {
+        if (!bgfx::isValid(legacy_light_uniform_)) {
+            return;
+        }
+        const std::array<float, 3> white{1.0f, 1.0f, 1.0f};
+        const std::array<float, 3>& ambient =
+                light.enabled ? light.ambient_color : white;
+        const std::array<float, 3>& negative_ambient =
+                light.enabled
+                ? light.negative_ambient_color
+                : white;
+        const std::array<float, 3>& lit =
+                light.enabled ? light.light_color : white;
+        const std::array<float, 3>& shade =
+                light.enabled ? light.shade_color : white;
+        const float values[20] = {
+                light.direction[0],
+                light.direction[1],
+                light.direction[2],
+                0.0f,
+                ambient[0],
+                ambient[1],
+                ambient[2],
+                1.0f,
+                lit[0],
+                lit[1],
+                lit[2],
+                1.0f,
+                shade[0],
+                shade[1],
+                shade[2],
+                1.0f,
+                negative_ambient[0],
+                negative_ambient[1],
+                negative_ambient[2],
+                1.0f};
+        bgfx::setUniform(legacy_light_uniform_, values, 5);
+    }
+
     uint32_t clamped_requested_bottom_inset() const {
         return std::min(
                 requested_bottom_inset_.load(
@@ -1061,12 +1174,13 @@ private:
                         layer.texture_handle};
                 if (layer.texture_handle != UINT16_MAX &&
                     bgfx::isValid(texture) &&
-                    bgfx::isValid(textured_rect_program_) &&
+                    bgfx::isValid(lit_textured_program_) &&
                     bgfx::isValid(texture_sampler_)) {
                     bgfx::setTexture(0, texture_sampler_, texture);
+                    set_legacy_light_uniform(legacy_terrain_light_);
                     bgfx::submit(
                             kTerrainView,
-                            textured_rect_program_);
+                            lit_textured_program_);
                 } else {
                     set_fill_color(layer.fallback_argb);
                     bgfx::submit(kTerrainView, rect_program_);
@@ -1079,14 +1193,15 @@ private:
             bgfx::setIndexBuffer(terrain_index_buffer_);
             bgfx::setState(terrain_state);
             if (terrain_mesh_.texture_handle != UINT16_MAX &&
-                bgfx::isValid(textured_rect_program_) &&
+                bgfx::isValid(lit_textured_program_) &&
                 bgfx::isValid(texture_sampler_)) {
                 const bgfx::TextureHandle texture = {
                         terrain_mesh_.texture_handle};
                 bgfx::setTexture(0, texture_sampler_, texture);
+                set_legacy_light_uniform(legacy_terrain_light_);
                 bgfx::submit(
                         kTerrainView,
-                        textured_rect_program_);
+                        lit_textured_program_);
             } else {
                 set_fill_color(0xff61764fu);
                 bgfx::submit(kTerrainView, rect_program_);
@@ -1130,6 +1245,7 @@ private:
         if (!bgfx::isValid(skinned_textured_program_) ||
             !bgfx::isValid(skinned_alpha_test_program_) ||
             !bgfx::isValid(skinning_bones_uniform_) ||
+            !bgfx::isValid(legacy_light_uniform_) ||
             !bgfx::isValid(texture_sampler_) ||
             !bgfx::isValid(white_texture_)) {
             return;
@@ -1195,6 +1311,7 @@ private:
                     state |= BGFX_STATE_ALPHA_REF(120);
                 }
                 bgfx::setState(state);
+                set_legacy_light_uniform(legacy_directional_light_);
                 bgfx::submit(
                         kTerrainView,
                         alpha_tested
@@ -1282,16 +1399,24 @@ private:
                 layer_state &= ~BGFX_STATE_WRITE_Z;
                 layer_state |= BGFX_STATE_BLEND_ALPHA;
             }
-            const bgfx::ProgramHandle program =
-                    layer.alpha_masked_shadow
-                    ? alpha_masked_shadow_program_
-                    : layer.alpha_tested
-                            ? alpha_test_program_
-                            : textured_rect_program_;
+            bgfx::ProgramHandle program = textured_rect_program_;
+            if (layer.alpha_masked_shadow) {
+                program = alpha_masked_shadow_program_;
+            } else if (layer.lighting_enabled) {
+                program = layer.alpha_tested
+                        ? lit_alpha_test_program_
+                        : lit_textured_program_;
+            } else if (layer.alpha_tested) {
+                program = alpha_test_program_;
+            }
             if (layer.alpha_tested || layer.alpha_masked_shadow) {
                 layer_state |= BGFX_STATE_ALPHA_REF(120);
             }
             bgfx::setState(layer_state);
+            if (layer.lighting_enabled &&
+                !layer.alpha_masked_shadow) {
+                set_legacy_light_uniform(legacy_directional_light_);
+            }
             bgfx::submit(kTerrainView, program);
             ++submitted_primitives_;
         }
@@ -1472,7 +1597,9 @@ private:
     bgfx::VertexLayout skinned_layout_;
     bgfx::ProgramHandle rect_program_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle textured_rect_program_ = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle lit_textured_program_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle alpha_test_program_ = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle lit_alpha_test_program_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle alpha_masked_shadow_program_ =
             BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle skinned_textured_program_ =
@@ -1481,6 +1608,7 @@ private:
             BGFX_INVALID_HANDLE;
     bgfx::UniformHandle rect_uniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle texture_sampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle legacy_light_uniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle skinning_bones_uniform_ =
             BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle terrain_vertex_buffer_ = BGFX_INVALID_HANDLE;
@@ -1514,6 +1642,8 @@ private:
     WaterMesh water_mesh_;
     WorldObjectMesh world_object_mesh_;
     SkinnedWorldObjectMesh skinned_world_object_mesh_;
+    LegacyDirectionalLight legacy_directional_light_;
+    LegacyDirectionalLight legacy_terrain_light_;
     TerrainCamera terrain_camera_;
     std::vector<SolidRect> rect_queue_;
     std::vector<TexturedRect> textured_rect_queue_;

@@ -17,6 +17,9 @@ struct TerrainVertex {
     float u = 0.0f;
     float v = 0.0f;
     uint32_t abgr = 0xffffffffu;
+    float nx = 0.0f;
+    float ny = 0.0f;
+    float nz = 1.0f;
 };
 
 struct TerrainLayer {
@@ -49,6 +52,7 @@ struct WorldObjectMesh {
         bool alpha_tested = false;
         bool alpha_masked_shadow = false;
         bool depth_test_always = false;
+        bool lighting_enabled = false;
         float texture_v_scroll_speed = 0.0f;
     };
 
@@ -66,6 +70,9 @@ struct SkinnedVertex {
     float u = 0.0f;
     float v = 0.0f;
     uint32_t abgr = 0xffffffffu;
+    float nx = 0.0f;
+    float ny = 0.0f;
+    float nz = -1.0f;
     std::array<uint8_t, 4> bone_indices{};
     std::array<float, 4> bone_weights{};
 };
@@ -117,6 +124,15 @@ struct TerrainCamera {
     float horizontal_fov_degrees = 26.0f;
 };
 
+struct LegacyDirectionalLight {
+    std::array<float, 3> direction{0.70710677f, 0.0f, -0.70710677f};
+    std::array<float, 3> ambient_color{0.25f, 0.25f, 0.25f};
+    std::array<float, 3> negative_ambient_color{0.25f, 0.25f, 0.25f};
+    std::array<float, 3> light_color{0.5f, 0.5f, 0.5f};
+    std::array<float, 3> shade_color{0.25f, 0.25f, 0.25f};
+    bool enabled = false;
+};
+
 class IRenderBackend {
 public:
     virtual ~IRenderBackend() = default;
@@ -155,6 +171,10 @@ public:
     virtual bool set_skinned_world_object_mesh(
             const SkinnedWorldObjectMesh& mesh) = 0;
     virtual void clear_world_object_mesh() = 0;
+    virtual void set_legacy_directional_light(
+            const LegacyDirectionalLight& light) = 0;
+    virtual void set_legacy_terrain_light(
+            const LegacyDirectionalLight& light) = 0;
     virtual void set_terrain_camera(const TerrainCamera& camera) = 0;
     virtual void set_bottom_inset(uint32_t pixels) = 0;
     virtual void render_frame() = 0;

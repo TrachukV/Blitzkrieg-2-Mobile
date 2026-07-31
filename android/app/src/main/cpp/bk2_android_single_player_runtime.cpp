@@ -15,6 +15,7 @@
 #include "SceneB2/stdafx.h"
 #include "3Dmotor/DBScene.h"
 #include "3Dmotor/GTexture.h"
+#include "B2_M1_Terrain/DBPreLight.h"
 #include "B2_M1_Terrain/DBWater.h"
 #include "GameX/GetConsts.h"
 #include "SceneB2/TerrainInfo.h"
@@ -61,6 +62,7 @@ constexpr float kDefaultCameraPitchDegrees = 45.0f;
 constexpr float kDefaultCameraYawDegrees = 45.0f;
 constexpr float kDefaultCameraHorizontalFovDegrees = 26.0f;
 constexpr float kLegacyWaterHeight = 0.1f;
+constexpr float kLegacyLightScaling = 4.0f;
 constexpr float kWaterAnimationStepSeconds = 1.0f / 20.0f;
 constexpr float kWaterWaveHeightScale = 0.08f;
 constexpr uint32_t kWaterVertexColor = 0xd8ffffffu;
@@ -993,6 +995,79 @@ void CarveTerrainRivers(
     PlatformRuntime::instance().log_info(report.str());
 }
 
+void RecalculateTerrainNormals(TerrainMesh* mesh) {
+    if (mesh == nullptr || mesh->vertices.empty()) {
+        return;
+    }
+    for (TerrainVertex& vertex : mesh->vertices) {
+        vertex.nx = 0.0f;
+        vertex.ny = 0.0f;
+        vertex.nz = 0.0f;
+    }
+    size_t face_count = 0;
+    for (size_t index = 0;
+         index + 2 < mesh->triangle_indices.size();
+         index += 3) {
+        const uint32_t ia = mesh->triangle_indices[index];
+        const uint32_t ib = mesh->triangle_indices[index + 1];
+        const uint32_t ic = mesh->triangle_indices[index + 2];
+        if (ia >= mesh->vertices.size() ||
+            ib >= mesh->vertices.size() ||
+            ic >= mesh->vertices.size()) {
+            continue;
+        }
+        const TerrainVertex& a = mesh->vertices[ia];
+        const TerrainVertex& b = mesh->vertices[ib];
+        const TerrainVertex& c = mesh->vertices[ic];
+        const float ab_x = b.x - a.x;
+        const float ab_y = b.y - a.y;
+        const float ab_z = b.z - a.z;
+        const float ac_x = c.x - a.x;
+        const float ac_y = c.y - a.y;
+        const float ac_z = c.z - a.z;
+        const float nx = ab_y * ac_z - ab_z * ac_y;
+        const float ny = ab_z * ac_x - ab_x * ac_z;
+        const float nz = ab_x * ac_y - ab_y * ac_x;
+        mesh->vertices[ia].nx += nx;
+        mesh->vertices[ia].ny += ny;
+        mesh->vertices[ia].nz += nz;
+        mesh->vertices[ib].nx += nx;
+        mesh->vertices[ib].ny += ny;
+        mesh->vertices[ib].nz += nz;
+        mesh->vertices[ic].nx += nx;
+        mesh->vertices[ic].ny += ny;
+        mesh->vertices[ic].nz += nz;
+        ++face_count;
+    }
+    size_t fallback_count = 0;
+    for (TerrainVertex& vertex : mesh->vertices) {
+        const float length = std::sqrt(
+                vertex.nx * vertex.nx +
+                vertex.ny * vertex.ny +
+                vertex.nz * vertex.nz);
+        if (length <= 0.00000001f || !std::isfinite(length)) {
+            vertex.nx = 0.0f;
+            vertex.ny = 0.0f;
+            vertex.nz = 1.0f;
+            ++fallback_count;
+            continue;
+        }
+        // The terrain generator explicitly turns every source triangle
+        // normal upward before averaging it (TerraHeight.h).
+        const float inverse_length =
+                (vertex.nz < 0.0f ? -1.0f : 1.0f) / length;
+        vertex.nx *= inverse_length;
+        vertex.ny *= inverse_length;
+        vertex.nz *= inverse_length;
+    }
+    std::ostringstream report;
+    report << "terrain_normals=ready"
+           << "; vertices=" << mesh->vertices.size()
+           << "; faces=" << face_count
+           << "; fallback=" << fallback_count;
+    PlatformRuntime::instance().log_info(report.str());
+}
+
 uint8_t WaterMaskAt(const STerrainInfo& info, int x, int y) {
     if (!info.seaMask.IsEmpty() &&
         x >= 0 &&
@@ -1631,6 +1706,197 @@ void ConfigureShadowProjection(
            << "; terrain="
            << g_shadow_terrain_width << "x"
            << g_shadow_terrain_height;
+    PlatformRuntime::instance().log_info(report.str());
+}
+
+void ConfigureLegacyDirectionalLighting(const NDb::SMapInfo* map) {
+    LegacyDirectionalLight runtime_light;
+    const NDb::SAmbientLight* descriptor =
+            map != nullptr && map->pLight
+            ? map->pLight.GetPtr()
+            : nullptr;
+    const auto finite_color = [](const CVec3& color) {
+        return std::isfinite(color.x) &&
+                std::isfinite(color.y) &&
+                std::isfinite(color.z);
+    };
+    if (descriptor != nullptr &&
+        std::isfinite(descriptor->fPitch) &&
+        std::isfinite(descriptor->fYaw) &&
+        finite_color(descriptor->vAmbientColor) &&
+        finite_color(descriptor->vLightColor) &&
+        finite_color(descriptor->vShadeColor)) {
+        const float pitch =
+                descriptor->fPitch * kPi / 180.0f;
+        const float yaw =
+                descriptor->fYaw * kPi / 180.0f;
+        const float horizontal = std::sin(pitch);
+        // CDirectionalLight::AddToState passes -vLightDir to the legacy
+        // per-vertex lighting path.
+        runtime_light.direction = {
+                -horizontal * std::cos(yaw),
+                -horizontal * std::sin(yaw),
+                std::cos(pitch)};
+        runtime_light.ambient_color = {
+                descriptor->vAmbientColor.x * kLegacyLightScaling,
+                descriptor->vAmbientColor.y * kLegacyLightScaling,
+                descriptor->vAmbientColor.z * kLegacyLightScaling};
+        runtime_light.negative_ambient_color =
+                runtime_light.ambient_color;
+        runtime_light.light_color = {
+                descriptor->vLightColor.x * kLegacyLightScaling,
+                descriptor->vLightColor.y * kLegacyLightScaling,
+                descriptor->vLightColor.z * kLegacyLightScaling};
+        runtime_light.shade_color = {
+                descriptor->vShadeColor.x * kLegacyLightScaling,
+                descriptor->vShadeColor.y * kLegacyLightScaling,
+                descriptor->vShadeColor.z * kLegacyLightScaling};
+        runtime_light.enabled = true;
+    }
+    RenderBackend().set_legacy_directional_light(runtime_light);
+
+    std::ostringstream report;
+    report << "legacy_directional_lighting="
+           << (runtime_light.enabled ? "descriptor" : "disabled")
+           << "; direction="
+           << runtime_light.direction[0] << ","
+           << runtime_light.direction[1] << ","
+           << runtime_light.direction[2]
+           << "; ambient="
+           << runtime_light.ambient_color[0] << ","
+           << runtime_light.ambient_color[1] << ","
+           << runtime_light.ambient_color[2]
+           << "; light="
+           << runtime_light.light_color[0] << ","
+           << runtime_light.light_color[1] << ","
+           << runtime_light.light_color[2]
+           << "; shade="
+           << runtime_light.shade_color[0] << ","
+           << runtime_light.shade_color[1] << ","
+           << runtime_light.shade_color[2]
+           << "; scale=" << kLegacyLightScaling;
+    if (descriptor != nullptr) {
+        report << "; pitch=" << descriptor->fPitch
+               << "; yaw=" << descriptor->fYaw
+               << "; whitening="
+               << (descriptor->bWhitening ? "true" : "false");
+    }
+    PlatformRuntime::instance().log_info(report.str());
+}
+
+void ConfigureLegacyTerrainLighting(const NDb::SMapInfo* map) {
+    LegacyDirectionalLight runtime_light;
+    const NDb::SPreLight* prelight =
+            map != nullptr && map->pPreLight
+            ? map->pPreLight.GetPtr()
+            : nullptr;
+    const NDb::SAmbientLight* scene_light =
+            map != nullptr && map->pLight
+            ? map->pLight.GetPtr()
+            : nullptr;
+    const auto finite_color = [](const CVec3& color) {
+        return std::isfinite(color.x) &&
+                std::isfinite(color.y) &&
+                std::isfinite(color.z);
+    };
+    if (prelight != nullptr &&
+        scene_light != nullptr &&
+        std::isfinite(prelight->fPitch) &&
+        std::isfinite(scene_light->fYaw) &&
+        finite_color(prelight->vLightColor) &&
+        finite_color(prelight->vAmbientColor) &&
+        finite_color(prelight->vShadeColor) &&
+        finite_color(prelight->vShadeAmbientColor)) {
+        const float pitch =
+                prelight->fPitch * kPi / 180.0f;
+        const float yaw =
+                scene_light->fYaw * kPi / 180.0f;
+        const float horizontal = std::sin(pitch);
+        // GetPreLightColor uses normal dot (-vPreLightDir), while the
+        // generic shader takes normal dot direction.
+        runtime_light.direction = {
+                -horizontal * std::cos(yaw),
+                -horizontal * std::sin(yaw),
+                std::cos(pitch)};
+        runtime_light.ambient_color = {
+                prelight->vAmbientColor.x * kLegacyLightScaling,
+                prelight->vAmbientColor.y * kLegacyLightScaling,
+                prelight->vAmbientColor.z * kLegacyLightScaling};
+        runtime_light.negative_ambient_color = {
+                (prelight->vShadeColor.x +
+                 prelight->vShadeAmbientColor.x) *
+                        kLegacyLightScaling,
+                (prelight->vShadeColor.y +
+                 prelight->vShadeAmbientColor.y) *
+                        kLegacyLightScaling,
+                (prelight->vShadeColor.z +
+                 prelight->vShadeAmbientColor.z) *
+                        kLegacyLightScaling};
+        runtime_light.light_color = {
+                (prelight->vAmbientColor.x -
+                 prelight->vLightColor.x) *
+                        kLegacyLightScaling,
+                (prelight->vAmbientColor.y -
+                 prelight->vLightColor.y) *
+                        kLegacyLightScaling,
+                (prelight->vAmbientColor.z -
+                 prelight->vLightColor.z) *
+                        kLegacyLightScaling};
+        runtime_light.shade_color = {
+                (prelight->vShadeColor.x * 2.0f +
+                 prelight->vShadeAmbientColor.x) *
+                        kLegacyLightScaling,
+                (prelight->vShadeColor.y * 2.0f +
+                 prelight->vShadeAmbientColor.y) *
+                        kLegacyLightScaling,
+                (prelight->vShadeColor.z * 2.0f +
+                 prelight->vShadeAmbientColor.z) *
+                        kLegacyLightScaling};
+        runtime_light.enabled = true;
+    }
+    RenderBackend().set_legacy_terrain_light(runtime_light);
+
+    std::ostringstream report;
+    report << "legacy_terrain_lighting="
+           << (runtime_light.enabled ? "descriptor" : "disabled")
+           << "; direction="
+           << runtime_light.direction[0] << ","
+           << runtime_light.direction[1] << ","
+           << runtime_light.direction[2]
+           << "; ambient="
+           << runtime_light.ambient_color[0] << ","
+           << runtime_light.ambient_color[1] << ","
+           << runtime_light.ambient_color[2]
+           << "; negative_ambient="
+           << runtime_light.negative_ambient_color[0] << ","
+           << runtime_light.negative_ambient_color[1] << ","
+           << runtime_light.negative_ambient_color[2]
+           << "; light="
+           << runtime_light.light_color[0] << ","
+           << runtime_light.light_color[1] << ","
+           << runtime_light.light_color[2]
+           << "; shade="
+           << runtime_light.shade_color[0] << ","
+           << runtime_light.shade_color[1] << ","
+           << runtime_light.shade_color[2]
+           << "; scale=" << kLegacyLightScaling;
+    if (prelight != nullptr) {
+        report << "; light_difference="
+               << prelight->vLightColor.x << ","
+               << prelight->vLightColor.y << ","
+               << prelight->vLightColor.z
+               << "; shade_difference="
+               << prelight->vShadeColor.x << ","
+               << prelight->vShadeColor.y << ","
+               << prelight->vShadeColor.z
+               << "; pitch=" << prelight->fPitch
+               << "; yaw="
+               << (scene_light == nullptr
+                           ? 0.0f
+                           : scene_light->fYaw)
+               << "; whitening="
+               << (prelight->bWhitening ? "true" : "false");
+    }
     PlatformRuntime::instance().log_info(report.str());
 }
 
@@ -2311,7 +2577,8 @@ WorldObjectMesh::Layer* FindOrAddWorldObjectLayer(
     }
     for (WorldObjectMesh::Layer& layer : mesh->layers) {
         if (layer.texture_path == texture_path &&
-            layer.alpha_masked_shadow == alpha_masked_shadow) {
+            layer.alpha_masked_shadow == alpha_masked_shadow &&
+            !layer.lighting_enabled) {
             return &layer;
         }
     }
@@ -2336,6 +2603,7 @@ size_t FindOrAddAlphaWorldObjectLayer(
             !layer.alpha_tested &&
             !layer.alpha_masked_shadow &&
             !layer.depth_test_always &&
+            !layer.lighting_enabled &&
             layer.texture_v_scroll_speed ==
                     texture_v_scroll_speed) {
             return index;
@@ -2363,6 +2631,7 @@ size_t FindOrAddOpaqueWorldObjectLayer(
             !layer.alpha_tested &&
             !layer.alpha_masked_shadow &&
             !layer.depth_test_always &&
+            !layer.lighting_enabled &&
             layer.texture_v_scroll_speed == 0.0f) {
             return index;
         }
@@ -2377,7 +2646,7 @@ WorldObjectMesh::Layer* FindOrAddMaterialWorldObjectLayer(
         const std::string& texture_path,
         bool alpha_blended,
         bool alpha_tested) {
-    if (mesh == nullptr || texture_path.empty()) {
+    if (mesh == nullptr) {
         return nullptr;
     }
     for (WorldObjectMesh::Layer& layer : mesh->layers) {
@@ -2387,6 +2656,7 @@ WorldObjectMesh::Layer* FindOrAddMaterialWorldObjectLayer(
             !layer.additive_blended &&
             !layer.alpha_masked_shadow &&
             !layer.depth_test_always &&
+            layer.lighting_enabled &&
             layer.texture_v_scroll_speed == 0.0f) {
             return &layer;
         }
@@ -2396,6 +2666,7 @@ WorldObjectMesh::Layer* FindOrAddMaterialWorldObjectLayer(
     layer.texture_path = texture_path;
     layer.alpha_blended = alpha_blended;
     layer.alpha_tested = alpha_tested;
+    layer.lighting_enabled = true;
     return &layer;
 }
 
@@ -5820,6 +6091,9 @@ bool AppendConvertedGeometry(
                     output.v = vertex.v;
                     output.abgr =
                             has_textures ? 0xffffffffu : abgr;
+                    output.nx = vertex.nx;
+                    output.ny = vertex.ny;
+                    output.nz = vertex.nz;
                     for (size_t influence = 0;
                          influence < kMaxSkinInfluences;
                          ++influence) {
@@ -6058,6 +6332,9 @@ bool AppendConvertedGeometry(
             float local_x = vertex.x;
             float local_y = vertex.y;
             float local_z = vertex.z;
+            float local_nx = vertex.nx;
+            float local_ny = vertex.ny;
+            float local_nz = vertex.nz;
             if (roll_wheel) {
                 const float offset_y = local_y - part.wheel_pivot_y;
                 const float offset_z = local_z - part.wheel_pivot_z;
@@ -6065,6 +6342,12 @@ bool AppendConvertedGeometry(
                         wheel_cosine * offset_y - wheel_sine * offset_z;
                 local_z = part.wheel_pivot_z +
                         wheel_sine * offset_y + wheel_cosine * offset_z;
+                const float old_ny = local_ny;
+                const float old_nz = local_nz;
+                local_ny =
+                        wheel_cosine * old_ny - wheel_sine * old_nz;
+                local_nz =
+                        wheel_sine * old_ny + wheel_cosine * old_nz;
             }
             if (pose_gun) {
                 const uint32_t bone = part.vertex_bones[vertex_index];
@@ -6075,6 +6358,12 @@ bool AppendConvertedGeometry(
                             gun_cosine * offset_y - gun_sine * offset_z;
                     local_z = gun_pivot_z +
                             gun_sine * offset_y + gun_cosine * offset_z;
+                    const float old_ny = local_ny;
+                    const float old_nz = local_nz;
+                    local_ny =
+                            gun_cosine * old_ny - gun_sine * old_nz;
+                    local_nz =
+                            gun_sine * old_ny + gun_cosine * old_nz;
                 }
             }
             if (pose_turret) {
@@ -6088,6 +6377,14 @@ bool AppendConvertedGeometry(
                     local_y = pivot_y +
                             turret_sine * offset_x +
                             turret_cosine * offset_y;
+                    const float old_nx = local_nx;
+                    const float old_ny = local_ny;
+                    local_nx =
+                            turret_cosine * old_nx -
+                            turret_sine * old_ny;
+                    local_ny =
+                            turret_sine * old_nx +
+                            turret_cosine * old_ny;
                 }
             }
             float world_x =
@@ -6097,6 +6394,9 @@ bool AppendConvertedGeometry(
                     binding.geometry_scale *
                     (sine * local_x + cosine * local_y);
             float world_z = binding.geometry_scale * local_z;
+            float world_nx = cosine * local_nx - sine * local_ny;
+            float world_ny = sine * local_nx + cosine * local_ny;
+            float world_nz = local_nz;
             ApplyWorldRootTilt(
                     root_tilt_axis_x,
                     root_tilt_axis_y,
@@ -6104,13 +6404,38 @@ bool AppendConvertedGeometry(
                     &world_x,
                     &world_y,
                     &world_z);
+            ApplyWorldRootTilt(
+                    root_tilt_axis_x,
+                    root_tilt_axis_y,
+                    root_tilt_radians,
+                    &world_nx,
+                    &world_ny,
+                    &world_nz);
+            const float world_normal_length = std::sqrt(
+                    world_nx * world_nx +
+                    world_ny * world_ny +
+                    world_nz * world_nz);
+            if (world_normal_length > 0.00000001f) {
+                const float inverse_normal =
+                        1.0f / world_normal_length;
+                world_nx *= inverse_normal;
+                world_ny *= inverse_normal;
+                world_nz *= inverse_normal;
+            } else {
+                world_nx = 0.0f;
+                world_ny = 0.0f;
+                world_nz = -1.0f;
+            }
             mesh->vertices.push_back(TerrainVertex{
                     x + world_x,
                     y + world_y,
                     z + world_z + 0.05f,
                     vertex.u,
                     vertex.v - track_offset,
-                    has_textures ? 0xffffffffu : abgr});
+                    has_textures ? 0xffffffffu : abgr,
+                    world_nx,
+                    world_ny,
+                    world_nz});
         }
 
         if (binding.material_quantities.empty()) {
@@ -7728,6 +8053,7 @@ void SplitAnimatedStaticLayersLocked() {
         moved.alpha_tested = layer.alpha_tested;
         moved.alpha_masked_shadow = layer.alpha_masked_shadow;
         moved.depth_test_always = layer.depth_test_always;
+        moved.lighting_enabled = layer.lighting_enabled;
         moved.texture_v_scroll_speed = layer.texture_v_scroll_speed;
         moved.triangle_indices.reserve(layer.triangle_indices.size());
         for (uint32_t vertex_index : layer.triangle_indices) {
@@ -9417,11 +9743,14 @@ bool InitializeSinglePlayerRuntime() {
         return false;
     }
     CarveTerrainRivers(map, &mesh);
+    RecalculateTerrainNormals(&mesh);
     BuildTerrainLayers(map, terrain_info, &mesh);
     WaterMesh water_mesh;
     BuildWaterMesh(map, terrain_info, &water_mesh);
     WorldObjectMesh presentation_world_mesh;
     ConfigureShadowProjection(map, terrain_info);
+    ConfigureLegacyDirectionalLighting(map);
+    ConfigureLegacyTerrainLighting(map);
     // Scene object shadows are baked into the static mesh, so the option has
     // to be read before it is built, not just before the first frame.
     g_shadows_disabled = ReadShadowsDisabledOption();
