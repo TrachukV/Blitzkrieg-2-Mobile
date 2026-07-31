@@ -74,6 +74,17 @@ Its three production panels are populated from the real USA, Germany, and USSR
 campaign records with the original names, descriptions, DDS artwork, selected
 state, and four-level difficulty mapping before opening the selected campaign's
 chapter map.
+The chapter map now follows the original `CInterfaceChapterMapMenu` state
+flow instead of treating every map location as a direct launch button. It
+builds enabled, locked, completed, recommended, and selected target states from
+the campaign tracker, renders the matching shipped marker state, selects the
+lowest-order recommended mission, and blocks Play for locked targets. The
+right panel updates the localized mission name, chapter/mission reserve
+counters, available reinforcement branches, reward icons, final-mission panel,
+and enabled light for the selected target. Completed progress is consumed from
+the Android mission-runtime checkpoint when returning from an Action Report;
+a newly selected campaign starts from the chapter descriptor's original
+availability rules.
 The map renderer now includes general `SObjectRPGStats` records in addition to
 buildings, fences, entrenchments, squads, and mechanized units. This restores
 the original mission's vegetation and small props through their converted

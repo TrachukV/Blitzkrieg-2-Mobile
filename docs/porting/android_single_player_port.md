@@ -689,8 +689,8 @@ validated CPU fallback. An installed ARM64 US1.0 run reported
 `gpu_skinning=active` for idle geometry 1791 (217 vertices, 21 bones, 16
 frames), then entered attack, lying-attack, and death variants with the models
 and original HUD still visible and no shader/GL/native-process error. Remaining
-renderer work includes effect-attached Granny geometry, terrain-conforming
-shadow maps, more complete legacy shader translation, and post effects. The
+renderer work includes effect-attached Granny geometry, more complete legacy
+shader translation, and post effects. The
 original
 `SingleStatistics2` Action Report is now live: it renders the shipped layout,
 participating-player rows and flags, mission/campaign time, rank progress, and
@@ -700,10 +700,17 @@ localized new-branch/upgrade rows with the shipped reinforcement icons. ARM64
 validation covered victory, Surrender defeat, same-mission Restart, Next to the
 shipped chapter map, and direct selection of `US1.2` from its generated map
 marker. That mission produced the expected Main Infantry upgrade and Bombers
-branch rows. The chapter targets now preserve their mission index instead of
-all launching path index 0. UI work still includes the complete briefing flow,
-chapter-map availability/highlight rules, rank/medal result popups, and
-replacement of temporary immediate-mode stubs with proper batching and
+branch rows. The chapter targets now preserve their mission index and run the
+original availability/selection flow instead of all launching path index 0.
+The Android controller consumes enabled/completed/won mission IDs from
+`MissionRuntimeState` after an Action Report, derives a new campaign's initial
+state from `SMissionEnableInfo`, renders the shipped seven-state regular and
+final markers, binds the mission/reinforcement/reward panel, and prevents a
+locked target from emitting Play. ARM64 checks covered the five-target USA and
+Germany chapter-one maps, locked-final selection, and an exact USA mission
+index 2 briefing route. UI work still includes chapter-map frontline arrows and
+transition effects, reinforcement detail dialogs, rank/medal result popups,
+and replacement of temporary immediate-mode stubs with proper batching and
 render-target behavior.
 
 Mission startup also treats an empty initial dynamic-world mesh as valid:

@@ -752,6 +752,27 @@ Launching GER1.0 then wrote `campaign=1`, `chapter=0`, `mission=0`, and the
 correct remapped `difficulty=1`; the single-player runtime initialized
 `Scenario/Campaigns/GER/Chapter1/GER1.0/MapInfo.xdb`.
 
+The chapter-map runtime now mirrors the core
+`CInterfaceChapterMapMenu::InitMissions`, `SelectTarget`, and
+`MakeMissionInfo` flow. A newly selected campaign derives its initial
+availability from each `SMissionEnableInfo::nMissionsToEnable`; returning from
+an Action Report consumes matching enabled/completed/won mission IDs,
+reinforcement inventory, and chapter calls from `MissionRuntimeState`.
+The lowest `nRecommendedOrder` among enabled non-final missions becomes the
+recommended target. Each dynamic map button renders the matching shipped
+logical state (enabled, selected, forbidden, forbidden-selected, completed,
+recommended, or recommended-selected), and completed targets are not
+interactive.
+
+Selecting a target rebuilds the authored right panel with the chapter and
+mission names, three-digit chapter reserve count, two-digit recommended mission
+reserve count, enabled light, available reinforcement icons, and up to four
+mission reward icons. The final mission swaps the reward grid for the
+campaign's chapter-finish panel. Locked missions remain selectable for their
+information state, but their Play button renders disabled and cannot emit a
+mission route. An enabled target opens the briefing for its exact
+`missionPath` index.
+
 Chapter-map mission targets now enter the shipped
 `MissionBriefing_WindowScreen.xdb` instead of writing a launch request
 immediately. Its runtime binding follows `CInterfaceMissionBriefing`: the
@@ -769,6 +790,16 @@ bytes of objective text, and `us1_1_6x6_minimap_texture.dds`. Back returned to
 the chapter map, its Play button reopened US1.1 rather than the default
 mission, and briefing Play initialized
 `Scenario/Campaigns/USA/Chapter1/US1.1/MapInfo.xdb` successfully.
+
+The controller gate was also exercised from clean campaign selection on USA
+and Germany chapter one. Both maps built five targets with mission 1
+recommended; USA reported `target0=disabled`, `target1=recommended`, and
+`target2..4=enabled` with `28` total calls / `4` recommended, while Germany
+reported the same availability shape with `35` / `5`. Selecting USA's locked
+final target changed it to the red forbidden-selected art, hid the enabled
+light, showed a disabled Play button, and produced no Play reaction. Selecting
+USA mission index 2 updated the name and two reward icons, then Play loaded
+`Scenario/Campaigns/USA/Chapter1/US1.2/MapInfo.xdb`.
 
 On the ARM64 emulator the main menu screen resolves 28 windows, 16 buttons, 20
 textures, and 17 captions, loads 4 shipped fonts, and submits 158 quads with
@@ -1562,12 +1593,14 @@ but a scan of all 178 shipped `Effect` descriptors found every `Models` list
 empty, so it is dormant schema rather than a missing shipped scene layer.
 The mission briefing route, text binding, minimap, Back, and Play behavior are
 linked. The production campaign-selection route, cards, selection state,
-difficulty handoff, and selected chapter-map transition are linked; campaign
+difficulty handoff, selected chapter-map transition, chapter mission
+availability, target-state art, selected-mission panel, reserve counts,
+reinforcement/reward icons, and locked-mission Play guard are linked. Campaign
 intro playback is still bypassed while most referenced Bink sources are
-unavailable. Touch scrolling for text longer than the authored viewport, the
-full chapter-map availability/highlight rules, and result rank/medal popups
-remain unfinished. The core Action Report, its reward rows, and per-marker
-chapter-map mission route are linked. Empty initial
+unavailable. Touch scrolling for text longer than the authored viewport,
+chapter-map frontline arrows/transition effects and reinforcement detail
+dialogs, and result rank/medal popups remain unfinished. The core Action
+Report and its reward rows are linked. Empty initial
 dynamic-world snapshots are now accepted as valid, and entity removals between
 the snapshot count/copy calls no longer abort mission startup; this fixed
 campaign-map launch of `US1.2`.

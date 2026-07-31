@@ -3,6 +3,7 @@
 #include "bk2_android_audio_backend.h"
 #include "bk2_android_audio_decode.h"
 #include "bk2_android_legacy_game_runtime.h"
+#include "bk2_android_mission_runtime.h"
 #include "bk2_android_vorbis_stream.h"
 #include "bk2_android_platform.h"
 #include "bk2_legacy_texture_probe.h"
@@ -24,6 +25,7 @@
 #include "GameX/DBGameRoot.h"
 #include "GameX/DBScenario.h"
 #include "Stats_B2_M1/DBMapInfo.h"
+#include "Stats_B2_M1/RPGStats.h"
 #include "Stats_B2_M1/Vis2AI.h"
 #include "GameX/dbgameoptions.h"
 #include "System/GlobalVars.h"
@@ -100,6 +102,8 @@ std::map<std::string, bool> g_visibility_overrides;
 // Runtime-built screens can contain duplicate child names in separate
 // branches, so controller state also needs the full window path.
 std::map<std::string, bool> g_path_visibility_overrides;
+std::map<std::string, bool> g_path_enabled_overrides;
+std::map<std::string, size_t> g_path_button_state_overrides;
 std::map<std::string, std::string> g_caption_overrides;
 std::map<std::string, float> g_progress_overrides;
 // IWindow::SetTexture equivalents: a controller swaps a window's art at
@@ -1295,6 +1299,11 @@ void CollectWindow(
     const bool visible = parent_visible && window_visible;
     node.visible = visible;
     node.enabled = window->bEnabled;
+    const std::map<std::string, bool>::const_iterator enabled_override =
+            g_path_enabled_overrides.find(node.path);
+    if (enabled_override != g_path_enabled_overrides.end()) {
+        node.enabled = enabled_override->second;
+    }
     node.depth = depth;
     ResolveWindowText(window, &node.caption, &node.text_format);
     if (shared != nullptr) {
@@ -1431,8 +1440,24 @@ void CollectWindow(
                     dynamic_cast<const NDb::SWindowMSButtonShared*>(shared);
             if (button_shared != nullptr &&
                 !button_shared->visualStates.empty()) {
+                size_t visual_state_index = 0;
+                const std::map<std::string, size_t>::const_iterator
+                        visual_state_override =
+                                g_path_button_state_overrides.find(node.path);
+                if (visual_state_override !=
+                    g_path_button_state_overrides.end()) {
+                    visual_state_index = std::min(
+                            visual_state_override->second,
+                            static_cast<size_t>(
+                                    button_shared->visualStates.size() -
+                                    1));
+                }
+                const NDb::SButtonVisualState& visual_state =
+                        button_shared->visualStates[visual_state_index];
                 const NDb::SButtonVisualSubState& normal =
-                        button_shared->visualStates[0].normal;
+                        node.enabled
+                                ? visual_state.normal
+                                : visual_state.disabled;
                 AppendBackgroundQuads(
                         normal.pBackground.GetPtr(), x, y, width, height);
                 // A state draws its background and then its foreground, and
@@ -1460,17 +1485,31 @@ void CollectWindow(
             !button_shared->visualStates.empty()) {
             // Build the pushed presentation once so a press can swap to it
             // without re-walking the descriptor graph.
+            size_t visual_state_index = 0;
+            const std::map<std::string, size_t>::const_iterator
+                    visual_state_override =
+                            g_path_button_state_overrides.find(node.path);
+            if (visual_state_override !=
+                g_path_button_state_overrides.end()) {
+                visual_state_index = std::min(
+                        visual_state_override->second,
+                        static_cast<size_t>(
+                                button_shared->visualStates.size() -
+                                1));
+            }
+            const NDb::SButtonVisualState& visual_state =
+                    button_shared->visualStates[visual_state_index];
             const size_t normal_end = g_quads.size();
             AppendBackgroundQuads(
                     shared->pBackground.GetPtr(), x, y, width, height);
             AppendBackgroundQuads(
-                    button_shared->visualStates[0].pushed.pBackground.GetPtr(),
+                    visual_state.pushed.pBackground.GetPtr(),
                     x,
                     y,
                     width,
                     height);
             AppendBackgroundQuads(
-                    button_shared->visualStates[0].pushed.pForeground.GetPtr(),
+                    visual_state.pushed.pForeground.GetPtr(),
                     x,
                     y,
                     width,
@@ -1604,6 +1643,20 @@ int g_selected_mission = 0;
 // stores the four matching descriptors as [Normal, Hard, Very Hard, Easy],
 // and StartCampaign remaps the visible index before starting the tracker.
 int g_selected_difficulty = 1;
+
+enum ChapterTargetState {
+    kChapterTargetDisabled = 0,
+    kChapterTargetEnabled = 1,
+    kChapterTargetRecommended = 2,
+    kChapterTargetCompleted = 3,
+};
+
+std::vector<ChapterTargetState> g_chapter_target_states;
+int g_chapter_selection_campaign = -1;
+int g_chapter_selection_chapter = -1;
+bool g_chapter_runtime_state_allowed = false;
+int g_chapter_calls_available = 0;
+int g_chapter_calls_for_selected_mission = 0;
 
 constexpr const char* kCampaignSelectionScreenRef =
         "UI/Game/Menu/CampaignSelection2/"
@@ -1851,6 +1904,7 @@ bool CycleOptionValue(const std::string& program_name) {
 
 }  // namespace
 
+const NDb::SChapter* SelectedChapter();
 bool LoadOriginalMissionBriefingScreen(int mission_index);
 
 bool ConsumeMenuMissionLaunchRequest() {
@@ -1873,6 +1927,9 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
             g_selected_campaign = index;
             g_selected_chapter = 0;
             g_selected_mission = 0;
+            g_chapter_selection_campaign = -1;
+            g_chapter_selection_chapter = -1;
+            g_chapter_runtime_state_allowed = false;
             std::ostringstream report;
             report << "original_menu_campaign=" << index;
             PlatformRuntime::instance().log_info(report.str());
@@ -1932,11 +1989,43 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
     // instead of dropping the Play reaction.
     if ((reaction == "Play" || reaction == "menu_play") &&
         current_screen == kCampaignSelectionScreenRef) {
+        g_chapter_selection_campaign = -1;
+        g_chapter_selection_chapter = -1;
+        g_chapter_runtime_state_allowed = false;
         return RunOriginalMenuReaction("chapter_map");
+    }
+    if (reaction.compare(0, 15, "select_mission_") == 0) {
+        const int mission_index =
+                std::atoi(reaction.c_str() + 15);
+        const NDb::SChapter* chapter = SelectedChapter();
+        if (chapter == nullptr ||
+            mission_index < 0 ||
+            static_cast<size_t>(mission_index) >=
+                    chapter->missionPath.size() ||
+            static_cast<size_t>(mission_index) >=
+                    g_chapter_target_states.size() ||
+            g_chapter_target_states[
+                    static_cast<size_t>(mission_index)] ==
+                    kChapterTargetCompleted) {
+            return false;
+        }
+        g_selected_mission = mission_index;
+        return LoadOriginalMenuScreen(current_screen);
     }
     // The chapter map is a screen of its own between picking a campaign and
     // the mission.
     if (reaction == "play") {
+        if (g_selected_mission < 0 ||
+            static_cast<size_t>(g_selected_mission) >=
+                    g_chapter_target_states.size() ||
+            (g_chapter_target_states[
+                     static_cast<size_t>(g_selected_mission)] !=
+                     kChapterTargetEnabled &&
+             g_chapter_target_states[
+                     static_cast<size_t>(g_selected_mission)] !=
+                     kChapterTargetRecommended)) {
+            return false;
+        }
         return LoadOriginalMissionBriefingScreen(
                 g_selected_mission);
     }
@@ -1944,6 +2033,16 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
         const int mission_index =
                 std::atoi(reaction.c_str() + 13);
         if (mission_index < 0) {
+            return false;
+        }
+        if (static_cast<size_t>(mission_index) >=
+                    g_chapter_target_states.size() ||
+            (g_chapter_target_states[
+                     static_cast<size_t>(mission_index)] !=
+                     kChapterTargetEnabled &&
+             g_chapter_target_states[
+                     static_cast<size_t>(mission_index)] !=
+                     kChapterTargetRecommended)) {
             return false;
         }
         return LoadOriginalMissionBriefingScreen(mission_index);
@@ -1960,6 +2059,7 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
         reaction == "ExitToChapter" ||
         reaction == "menu_next" ||
         reaction == "Next") {
+        g_chapter_runtime_state_allowed = true;
         return LoadOriginalMenuScreen(
                 "UI/Game/Menu/ChapterMap_WindowScreen.xdb");
     }
@@ -2181,6 +2281,412 @@ const NDb::SMapInfo* SelectedMission() {
             static_cast<size_t>(g_selected_mission)].pMap.GetPtr();
 }
 
+bool ContainsResourceId(
+        const std::vector<std::string>& resource_ids,
+        const std::string& resource_id) {
+    return std::find(
+                   resource_ids.begin(),
+                   resource_ids.end(),
+                   resource_id) != resource_ids.end();
+}
+
+std::vector<int> InitialChapterReinforcementTypes(
+        const NDb::SChapter* chapter) {
+    std::vector<int> types;
+    if (chapter == nullptr ||
+        chapter->basePlayerReinforcements.empty()) {
+        return types;
+    }
+    for (const CDBPtr<NDb::SReinforcement>& reinforcement_ptr :
+         chapter->basePlayerReinforcements[0].reinforcements) {
+        const NDb::SReinforcement* reinforcement =
+                reinforcement_ptr.GetPtr();
+        if (reinforcement != nullptr &&
+            std::find(
+                    types.begin(),
+                    types.end(),
+                    static_cast<int>(reinforcement->eType)) ==
+                    types.end()) {
+            types.push_back(static_cast<int>(reinforcement->eType));
+        }
+    }
+    return types;
+}
+
+bool InitialMissionReinforcementsSatisfied(
+        const NDb::SChapter* chapter,
+        const NDb::SMapInfo* mission,
+        const std::vector<int>& reinforcement_types) {
+    if (chapter == nullptr ||
+        mission == nullptr ||
+        chapter->bUseMapReinforcements ||
+        mission->players.empty() ||
+        mission->players[0].reinforcementTypes.empty()) {
+        return true;
+    }
+    for (const CDBPtr<NDb::SReinforcement>& reinforcement_ptr :
+         mission->players[0].reinforcementTypes) {
+        const NDb::SReinforcement* reinforcement =
+                reinforcement_ptr.GetPtr();
+        if (reinforcement != nullptr &&
+            std::find(
+                    reinforcement_types.begin(),
+                    reinforcement_types.end(),
+                    static_cast<int>(reinforcement->eType)) !=
+                    reinforcement_types.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+const NDb::SReinfButton* ReinfButtonForType(int reinforcement_type) {
+    const NDb::SUIConstsB2* ui_consts = NGameX::GetUIConsts();
+    if (ui_consts == nullptr) {
+        return nullptr;
+    }
+    for (const NDb::SReinfButton& button : ui_consts->reinfButtons) {
+        if (static_cast<int>(button.eType) == reinforcement_type) {
+            return &button;
+        }
+    }
+    return nullptr;
+}
+
+std::string ReinfButtonName(const NDb::SReinfButton* button) {
+    return button != nullptr && button->pButton
+            ? ToStdString(button->pButton->szName)
+            : std::string();
+}
+
+const NDb::STexture* ReinfIconTexture(
+        const NDb::SReinforcement* reinforcement,
+        const NDb::SReinfButton* button,
+        bool disabled) {
+    if (reinforcement != nullptr &&
+        reinforcement->pIconTexture &&
+        !disabled) {
+        return reinforcement->pIconTexture.GetPtr();
+    }
+    if (button == nullptr) {
+        return nullptr;
+    }
+    if (disabled && button->pTextureDisabled) {
+        return button->pTextureDisabled.GetPtr();
+    }
+    return button->pTexture.GetPtr();
+}
+
+void HideReinfButtonDetails(const std::string& button_path) {
+    g_path_visibility_overrides[button_path + "/Icon"] = false;
+    g_path_visibility_overrides[button_path + "/IconDisabled"] = false;
+    g_path_visibility_overrides[button_path + "/UnitNumber"] = false;
+    g_path_visibility_overrides[button_path + "/Unknown"] = false;
+    g_path_visibility_overrides[button_path + "/Icon/XPLevel"] = false;
+    g_path_visibility_overrides[button_path + "/Icon/XPBar"] = false;
+    g_path_visibility_overrides[button_path + "/Icon/XPBarBg"] = false;
+    g_path_visibility_overrides[button_path + "/Icon/BadWeather"] = false;
+}
+
+void BindChapterReinforcement(
+        int reinforcement_type,
+        const NDb::SReinforcement* reinforcement,
+        int state) {
+    const NDb::SReinfButton* button =
+            ReinfButtonForType(reinforcement_type);
+    const std::string button_name = ReinfButtonName(button);
+    if (button_name.empty()) {
+        return;
+    }
+    const std::string button_path =
+            "ChapterMapMain/ChapterMapRight/ReinforcementGrid/" +
+            button_name;
+    HideReinfButtonDetails(button_path);
+    if (state == 2) {
+        g_path_button_state_overrides[button_path] = 0;
+        g_path_visibility_overrides[button_path + "/Icon"] = true;
+        const NDb::STexture* texture =
+                ReinfIconTexture(reinforcement, button, false);
+        if (texture != nullptr) {
+            g_path_texture_overrides[button_path + "/Icon"] = texture;
+        }
+    } else if (state == 1) {
+        g_path_button_state_overrides[button_path] = 1;
+        g_path_visibility_overrides[button_path + "/Icon"] = true;
+        g_path_visibility_overrides[button_path + "/Unknown"] = true;
+        const NDb::STexture* texture =
+                ReinfIconTexture(nullptr, button, true);
+        if (texture != nullptr) {
+            g_path_texture_overrides[button_path + "/Icon"] = texture;
+        }
+    } else {
+        g_path_button_state_overrides[button_path] = 2;
+    }
+}
+
+void ApplyChapterMapBindingsLocked(const std::string& screen_ref) {
+    if (screen_ref != "UI/Game/Menu/ChapterMap_WindowScreen.xdb") {
+        return;
+    }
+    const NDb::SGameRoot* root = NGameX::GetGameRoot();
+    const NDb::SChapter* chapter = SelectedChapter();
+    if (root == nullptr ||
+        chapter == nullptr ||
+        chapter->missionPath.empty() ||
+        g_selected_campaign < 0 ||
+        static_cast<size_t>(g_selected_campaign) >= root->campaigns.size()) {
+        g_chapter_target_states.clear();
+        return;
+    }
+    const NDb::SCampaign* campaign =
+            root->campaigns[static_cast<size_t>(g_selected_campaign)]
+                    .GetPtr();
+    if (campaign == nullptr) {
+        g_chapter_target_states.clear();
+        return;
+    }
+
+    const MissionRuntimeState runtime_state = GetMissionRuntimeState();
+    const bool use_runtime_state =
+            g_chapter_runtime_state_allowed &&
+            runtime_state.campaign_index == g_selected_campaign &&
+            runtime_state.chapter_index == g_selected_chapter &&
+            runtime_state.chapter_active;
+
+    g_chapter_target_states.assign(
+            chapter->missionPath.size(),
+            kChapterTargetDisabled);
+    const std::vector<int> initial_reinforcement_types =
+            InitialChapterReinforcementTypes(chapter);
+    for (size_t index = 0; index < chapter->missionPath.size(); ++index) {
+        const NDb::SMapInfo* mission =
+                chapter->missionPath[index].pMap.GetPtr();
+        if (mission == nullptr) {
+            continue;
+        }
+        const std::string mission_id =
+                ToStdString(mission->GetDBID().ToString());
+        if (use_runtime_state &&
+            (ContainsResourceId(
+                     runtime_state.completed_mission_ids,
+                     mission_id) ||
+             ContainsResourceId(
+                     runtime_state.won_mission_ids,
+                     mission_id))) {
+            g_chapter_target_states[index] =
+                    kChapterTargetCompleted;
+        } else if (use_runtime_state &&
+                   ContainsResourceId(
+                           runtime_state.enabled_mission_ids,
+                           mission_id)) {
+            g_chapter_target_states[index] =
+                    kChapterTargetEnabled;
+        } else if (!use_runtime_state &&
+                   chapter->missionPath[index].nMissionsToEnable <= 0 &&
+                   InitialMissionReinforcementsSatisfied(
+                           chapter,
+                           mission,
+                           initial_reinforcement_types)) {
+            g_chapter_target_states[index] =
+                    kChapterTargetEnabled;
+        }
+    }
+
+    int recommended_target = -1;
+    int recommended_order = 0;
+    for (size_t index = 1; index < chapter->missionPath.size(); ++index) {
+        if (g_chapter_target_states[index] !=
+            kChapterTargetEnabled) {
+            continue;
+        }
+        const int order = chapter->missionPath[index].nRecommendedOrder;
+        if (recommended_target < 0 || order < recommended_order) {
+            recommended_target = static_cast<int>(index);
+            recommended_order = order;
+        }
+    }
+    if (recommended_target < 0) {
+        for (size_t index = 0; index < g_chapter_target_states.size();
+             ++index) {
+            if (g_chapter_target_states[index] ==
+                kChapterTargetEnabled) {
+                recommended_target = static_cast<int>(index);
+                break;
+            }
+        }
+    }
+    if (recommended_target >= 0) {
+        g_chapter_target_states[
+                static_cast<size_t>(recommended_target)] =
+                kChapterTargetRecommended;
+    }
+
+    const bool chapter_changed =
+            g_chapter_selection_campaign != g_selected_campaign ||
+            g_chapter_selection_chapter != g_selected_chapter;
+    const bool selected_invalid =
+            g_selected_mission < 0 ||
+            static_cast<size_t>(g_selected_mission) >=
+                    g_chapter_target_states.size() ||
+            g_chapter_target_states[
+                    static_cast<size_t>(g_selected_mission)] ==
+                    kChapterTargetCompleted;
+    if (chapter_changed || selected_invalid) {
+        g_selected_mission =
+                recommended_target >= 0 ? recommended_target : 0;
+    }
+    g_chapter_selection_campaign = g_selected_campaign;
+    g_chapter_selection_chapter = g_selected_chapter;
+
+    g_caption_overrides[
+            "ChapterMapMain/ChapterMapLeft/ChapterName"] =
+            LoadUtf16Text(NormalizeResourcePath(
+                    ToStdString(chapter->szLocalizedNameFileRef)));
+
+    const NDb::SMissionEnableInfo& selected =
+            chapter->missionPath[
+                    static_cast<size_t>(g_selected_mission)];
+    const NDb::SMapInfo* selected_map = selected.pMap.GetPtr();
+    g_caption_overrides[
+            "ChapterMapMain/ChapterMapRight/MissionName"] =
+            selected_map == nullptr
+                    ? std::string()
+                    : LoadUtf16Text(NormalizeResourcePath(
+                              ToStdString(
+                                      selected_map
+                                              ->szLocalizedNameFileRef)));
+
+    const ChapterTargetState selected_state =
+            g_chapter_target_states[
+                    static_cast<size_t>(g_selected_mission)];
+    const bool mission_playable =
+            selected_state == kChapterTargetEnabled ||
+            selected_state == kChapterTargetRecommended;
+    g_path_visibility_overrides[
+            "ChapterMapMain/ChapterMapRight/MissionEnabledLight"] =
+            mission_playable;
+    g_path_enabled_overrides["ChapterMapMain/PlayButton"] =
+            mission_playable;
+
+    const bool final_mission = g_selected_mission == 0;
+    g_path_visibility_overrides[
+            "ChapterMapMain/ChapterMapRight/FinalBonus"] =
+            final_mission;
+    g_path_visibility_overrides[
+            "ChapterMapMain/ChapterMapRight/BonusGrid"] =
+            !final_mission;
+    if (final_mission && campaign->pTextureChapterFinishBonus) {
+        g_path_texture_overrides[
+                "ChapterMapMain/ChapterMapRight/FinalBonus"] =
+                campaign->pTextureChapterFinishBonus.GetPtr();
+    }
+
+    const NDb::SUIConstsB2* ui_consts = NGameX::GetUIConsts();
+    if (ui_consts != nullptr) {
+        for (const NDb::SReinfButton& button :
+             ui_consts->reinfButtons) {
+            const std::string button_name = ReinfButtonName(&button);
+            if (button_name.empty()) {
+                continue;
+            }
+            const std::string button_path =
+                    "ChapterMapMain/ChapterMapRight/"
+                    "ReinforcementGrid/" +
+                    button_name;
+            HideReinfButtonDetails(button_path);
+            g_path_button_state_overrides[button_path] = 2;
+        }
+    }
+
+    if (use_runtime_state) {
+        for (const MissionReinforcementState& reinforcement_state :
+             runtime_state.chapter_reinforcements) {
+            const NDb::SReinforcement* reinforcement =
+                    reinforcement_state.dbid.empty()
+                            ? nullptr
+                            : NDb::Get<NDb::SReinforcement>(
+                                      CDBID(reinforcement_state.dbid.c_str()));
+            BindChapterReinforcement(
+                    reinforcement_state.type,
+                    reinforcement,
+                    reinforcement_state.state);
+        }
+        g_chapter_calls_available = std::max(
+                0,
+                runtime_state.chapter_reinforcement_calls_left);
+    } else {
+        if (!chapter->basePlayerReinforcements.empty()) {
+            for (const CDBPtr<NDb::SReinforcement>& reinforcement_ptr :
+                 chapter->basePlayerReinforcements[0].reinforcements) {
+                const NDb::SReinforcement* reinforcement =
+                        reinforcement_ptr.GetPtr();
+                if (reinforcement == nullptr) {
+                    continue;
+                }
+                BindChapterReinforcement(
+                        static_cast<int>(reinforcement->eType),
+                        reinforcement,
+                        2);
+            }
+        }
+        g_chapter_calls_available =
+                std::max(0, chapter->nReinforcementCalls);
+    }
+    g_chapter_calls_for_selected_mission = std::min(
+            std::max(0, selected.nRecommendedCalls),
+            g_chapter_calls_available);
+
+    for (size_t slot = 0; slot < 4; ++slot) {
+        const std::string button_path =
+                "ChapterMapMain/ChapterMapRight/BonusGrid/"
+                "ButtonBonus0" +
+                std::to_string(slot + 1);
+        HideReinfButtonDetails(button_path);
+        g_path_button_state_overrides[button_path] = 2;
+        if (final_mission || slot >= selected.reward.size()) {
+            continue;
+        }
+        const NDb::SChapterBonus* bonus =
+                selected.reward[slot].GetPtr();
+        if (bonus == nullptr ||
+            bonus->eBonusType != NDb::CBT_REINF_CHANGE ||
+            bonus->bApplyToEnemy ||
+            !bonus->pReinforcementSet) {
+            continue;
+        }
+        const NDb::SReinforcement* reinforcement =
+                bonus->pReinforcementSet.GetPtr();
+        const NDb::SReinfButton* button =
+                ReinfButtonForType(
+                        static_cast<int>(reinforcement->eType));
+        const NDb::STexture* texture =
+                ReinfIconTexture(reinforcement, button, false);
+        g_path_button_state_overrides[button_path] = 0;
+        g_path_visibility_overrides[button_path + "/Icon"] = true;
+        if (texture != nullptr) {
+            g_path_texture_overrides[button_path + "/Icon"] = texture;
+        }
+    }
+
+    std::ostringstream report;
+    report << "original_menu_chapter_state="
+           << (use_runtime_state ? "tracker" : "new_campaign")
+           << "; campaign=" << g_selected_campaign
+           << "; chapter=" << g_selected_chapter
+           << "; selected=" << g_selected_mission
+           << "; recommended=" << recommended_target
+           << "; calls=" << g_chapter_calls_available
+           << "; mission_calls="
+           << g_chapter_calls_for_selected_mission;
+    for (size_t index = 0;
+         index < g_chapter_target_states.size();
+         ++index) {
+        report << "; target" << index << "="
+               << static_cast<int>(g_chapter_target_states[index]);
+    }
+    PlatformRuntime::instance().log_info(report.str());
+}
+
 // CInterfaceChapterMapMenu sets the map artwork on the window it looks up as
 // "ChapterMap"; the descriptor ships that window with no texture of its own.
 // CInterfaceMissionBackground sits behind every menu screen. It shows a live
@@ -2260,6 +2766,8 @@ bool LoadOriginalMissionBriefingScreen(int mission_index) {
     g_selected_mission = mission_index;
     g_visibility_overrides.clear();
     g_path_visibility_overrides.clear();
+    g_path_enabled_overrides.clear();
+    g_path_button_state_overrides.clear();
     g_caption_overrides.clear();
     g_progress_overrides.clear();
     g_texture_overrides.clear();
@@ -2293,6 +2801,8 @@ bool LoadOriginalMenuScreen(const std::string& screen_ref) {
     std::lock_guard<std::mutex> guard(g_menu_mutex);
     g_visibility_overrides.clear();
     g_path_visibility_overrides.clear();
+    g_path_enabled_overrides.clear();
+    g_path_button_state_overrides.clear();
     g_caption_overrides.clear();
     g_progress_overrides.clear();
     g_texture_overrides.clear();
@@ -2300,6 +2810,7 @@ bool LoadOriginalMenuScreen(const std::string& screen_ref) {
     ApplyScreenInitVisibilityLocked(screen_ref);
     ApplyScreenInitTexturesLocked(screen_ref);
     ApplyCampaignSelectionBindingsLocked(screen_ref);
+    ApplyChapterMapBindingsLocked(screen_ref);
     ResolveMenuBackgroundLocked();
     g_options_category = 0;
     return RebuildMenuScreenLocked(screen_ref);
@@ -2335,6 +2846,8 @@ bool LoadOriginalMissionStatisticsScreen() {
     std::lock_guard<std::mutex> guard(g_menu_mutex);
     g_visibility_overrides.clear();
     g_path_visibility_overrides.clear();
+    g_path_enabled_overrides.clear();
+    g_path_button_state_overrides.clear();
     g_caption_overrides.clear();
     g_progress_overrides.clear();
     g_texture_overrides.clear();
@@ -2929,22 +3442,139 @@ void PopulateChapterMapLocked() {
         node.width = marker.width;
         node.height = marker.height;
         node.visible = true;
-        node.enabled = true;
+        const ChapterTargetState target_state =
+                index < g_chapter_target_states.size()
+                        ? g_chapter_target_states[index]
+                        : kChapterTargetDisabled;
+        const bool selected =
+                static_cast<int>(index) == g_selected_mission;
+        node.enabled = target_state != kChapterTargetCompleted;
         node.button = true;
         node.action =
-                "play_mission_" + std::to_string(index);
+                "select_mission_" + std::to_string(index);
         node.pressed_quad_begin = static_cast<int>(g_pressed_quads.size());
         node.pressed_quad_end = node.pressed_quad_begin;
-        AppendBackgroundQuads(
-                marker.shared->pBackground.GetPtr(),
-                x,
-                y,
-                marker.width,
-                marker.height);
+        const NDb::SWindowMSButtonShared* marker_shared =
+                dynamic_cast<const NDb::SWindowMSButtonShared*>(
+                        marker.shared);
+        size_t visual_state_index = 0;
+        if (target_state == kChapterTargetCompleted) {
+            visual_state_index = 4;
+        } else if (target_state == kChapterTargetDisabled) {
+            visual_state_index = selected ? 3 : 2;
+        } else if (target_state == kChapterTargetRecommended) {
+            visual_state_index = selected ? 6 : 5;
+        } else {
+            visual_state_index = selected ? 1 : 0;
+        }
+        if (marker_shared != nullptr &&
+            visual_state_index < marker_shared->visualStates.size()) {
+            const NDb::SButtonVisualState& visual_state =
+                    marker_shared->visualStates[visual_state_index];
+            AppendBackgroundQuads(
+                    marker.shared->pBackground.GetPtr(),
+                    x,
+                    y,
+                    marker.width,
+                    marker.height);
+            AppendBackgroundQuads(
+                    visual_state.normal.pBackground.GetPtr(),
+                    x,
+                    y,
+                    marker.width,
+                    marker.height);
+            AppendBackgroundQuads(
+                    visual_state.normal.pForeground.GetPtr(),
+                    x,
+                    y,
+                    marker.width,
+                    marker.height);
+            if (node.enabled) {
+                const size_t pressed_begin = g_quads.size();
+                AppendBackgroundQuads(
+                        marker.shared->pBackground.GetPtr(),
+                        x,
+                        y,
+                        marker.width,
+                        marker.height);
+                AppendBackgroundQuads(
+                        visual_state.pushed.pBackground.GetPtr(),
+                        x,
+                        y,
+                        marker.width,
+                        marker.height);
+                AppendBackgroundQuads(
+                        visual_state.pushed.pForeground.GetPtr(),
+                        x,
+                        y,
+                        marker.width,
+                        marker.height);
+                node.pressed_quad_begin =
+                        static_cast<int>(g_pressed_quads.size());
+                g_pressed_quads.insert(
+                        g_pressed_quads.end(),
+                        g_quads.begin() + pressed_begin,
+                        g_quads.end());
+                node.pressed_quad_end =
+                        static_cast<int>(g_pressed_quads.size());
+                g_quads.resize(pressed_begin);
+            }
+        }
         ++g_button_count;
         g_nodes.push_back(node);
         ++placed;
     }
+
+    const int chapter_calls = std::max(
+            0,
+            g_chapter_calls_available -
+                    g_chapter_calls_for_selected_mission);
+    const int chapter_digits[3] = {
+            (chapter_calls / 100) % 10,
+            (chapter_calls / 10) % 10,
+            chapter_calls % 10,
+    };
+    const char* const chapter_digit_windows[3] = {
+            "ReinfQty3", "ReinfQty2", "ReinfQty1"};
+    for (size_t index = 0; index < 3; ++index) {
+        const std::map<std::string, MenuTemplate>::const_iterator digit =
+                g_templates.find(chapter_digit_windows[index]);
+        if (digit == g_templates.end()) {
+            continue;
+        }
+        AppendTextQuads(
+                std::to_string(chapter_digits[index]),
+                "<center>",
+                digit->second.x,
+                digit->second.y,
+                digit->second.width,
+                digit->second.height,
+                "numeric");
+    }
+    const int mission_calls =
+            std::max(0, g_chapter_calls_for_selected_mission);
+    const int mission_digits[2] = {
+            (mission_calls / 10) % 10,
+            mission_calls % 10,
+    };
+    const char* const mission_digit_windows[2] = {
+            "ReinfMission1", "ReinfMission2"};
+    for (size_t index = 0; index < 2; ++index) {
+        const std::map<std::string, MenuTemplate>::const_iterator digit =
+                g_templates.find(mission_digit_windows[index]);
+        if (digit == g_templates.end()) {
+            continue;
+        }
+        AppendTextQuads(
+                std::to_string(mission_digits[index]),
+                "<center>",
+                digit->second.x,
+                digit->second.y,
+                digit->second.width,
+                digit->second.height,
+                "numeric");
+    }
+
     std::ostringstream report;
     report << "original_menu_chapter_targets=" << placed
            << "; details_map=" << (details != nullptr ? "yes" : "no")
@@ -2957,7 +3587,20 @@ void PopulateChapterMapLocked() {
         }
         report << "; " << node.name << "="
                << node.x << "," << node.y << "+"
-               << node.width << "x" << node.height;
+               << node.width << "x" << node.height
+               << " state="
+               << static_cast<int>(
+                          g_chapter_target_states[
+                                  static_cast<size_t>(
+                                          std::atoi(
+                                                  node.name.c_str() +
+                                                  6))])
+               << (node.name ==
+                                   "Target" +
+                                           std::to_string(
+                                                   g_selected_mission)
+                           ? " selected"
+                           : "");
     }
     PlatformRuntime::instance().log_info(report.str());
 }
@@ -3545,6 +4188,8 @@ void ShutdownOriginalMenuRuntime() {
     g_text_cache.clear();
     g_visibility_overrides.clear();
     g_path_visibility_overrides.clear();
+    g_path_enabled_overrides.clear();
+    g_path_button_state_overrides.clear();
     g_caption_overrides.clear();
     g_progress_overrides.clear();
     g_texture_overrides.clear();
