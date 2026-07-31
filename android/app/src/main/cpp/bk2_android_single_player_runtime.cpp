@@ -45,6 +45,7 @@
 #include <jni.h>
 #include <limits>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -434,6 +435,7 @@ std::unordered_map<
 bool g_stats_geometry_index_loaded = false;
 std::unordered_map<std::string, CObj<NGfx::CTexture> > g_model_textures;
 size_t g_model_texture_count = 0;
+std::set<std::string> g_missing_model_texture_paths;
 size_t g_material_alpha_test_layer_count = 0;
 size_t g_material_alpha_test_triangle_count = 0;
 size_t g_material_alpha_blend_layer_count = 0;
@@ -6915,7 +6917,21 @@ void AppendEntityModel(
         return;
     }
     ++g_converted_geometry_fallback_count;
-    ++g_dynamic_fallback_stats_hashes[entity.rpg_stats_path_hash];
+    // A unit with no converted geometry is drawn as a plain oriented box, so
+    // an entity type that only appears mid-mission -- a reinforcement, a
+    // scripted plane -- shows up on screen long after the startup fallback
+    // report was written. Name each type once, with the ids that identify it
+    // in geometry_index.tsv.
+    if (g_dynamic_fallback_stats_hashes[entity.rpg_stats_path_hash]++ == 0) {
+        std::ostringstream fallback;
+        fallback << "dynamic_geometry_fallback=box"
+                 << "; stats_hash=" << std::hex
+                 << entity.rpg_stats_path_hash << std::dec
+                 << "; stats_record=" << entity.rpg_stats_record_id
+                 << "; geometry_record=" << entity.geometry_record_id
+                 << "; flags=" << std::hex << entity.flags << std::dec;
+        PlatformRuntime::instance().log_warn(fallback.str());
+    }
     // Selection in the original is a separate terrain patch. It does not
     // enlarge the unit if its real converted mesh is unavailable.
     const float scale = 1.0f;
@@ -9450,6 +9466,13 @@ uint16_t ModelTextureHandle(const std::string& texture_path) {
             g_model_textures.emplace(
                     texture_path,
                     CObj<NGfx::CTexture>());
+            // A model whose material never resolves still draws, untextured,
+            // so the loss is silent on screen. Name it in the report.
+            if (g_missing_model_texture_paths.insert(texture_path).second) {
+                PlatformRuntime::instance().log_warn(
+                        std::string("model_texture_missing=") +
+                        texture_path);
+            }
             return UINT16_MAX;
         }
         cached = g_model_textures.emplace(
@@ -10292,6 +10315,7 @@ void ShutdownSinglePlayerRuntime() {
     g_stats_geometry_index_loaded = false;
     g_model_textures.clear();
     g_model_texture_count = 0;
+    g_missing_model_texture_paths.clear();
     g_material_alpha_test_layer_count = 0;
     g_material_alpha_test_triangle_count = 0;
     g_material_alpha_blend_layer_count = 0;
@@ -11259,6 +11283,8 @@ std::string SinglePlayerRuntimeReport() {
            << "; model_texture_layers="
            << g_world_object_mesh.layers.size()
            << "; model_textures=" << g_model_texture_count
+           << "; model_textures_missing="
+           << g_missing_model_texture_paths.size()
            << "; material_alpha_test_layers="
            << g_material_alpha_test_layer_count
            << "; material_alpha_test_triangles="

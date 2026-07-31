@@ -430,6 +430,46 @@ From `android/`:
 ./gradlew :app:assembleDebug
 ```
 
+## Campaign Coverage
+
+Every campaign mission index was launched directly through the runtime's
+launch file on the ARM64 GLES3 emulator and left running for 26 seconds.
+
+| | |
+| --- | --- |
+| Missions that loaded and ran | **63** |
+| Missions blocked by absent data | 6 |
+| Crashes | 0 |
+| Missions with any geometry fallback | 8 |
+| Distinct object types without converted geometry | 5 |
+
+The six blocked missions are `USA4.0`, `RUS1.0`, `RUS3.0`, `Rus4.0`,
+`GER3.0`, and `GER4.0` — each the `missionPath[0]` chapter-final target of its
+chapter. Their `MapInfo.xdb` is not in the repository at all: not sparse-checked
+out, not a Git LFS pointer, absent from `git ls-tree` on the published tree,
+while every sibling file (`map.b2m`, `Script.lua`, objectives, minimap,
+reinforcements) is present. Nothing in the port can recover them; a mission's
+player list, diplomacies, terrain set, and its whole `SObjectRPGStats` object
+list live in that descriptor. The runtime reports
+`mission_map_db_resource_missing` and the chapter map still builds and renders
+its remaining targets — USSR chapter one, whose missing mission is its final
+target, opens and plays normally.
+
+The five object types with no converted geometry are `pointer` (US2.5),
+`Ju87_destroyed` (GER3.1, GER4.2, GER4.6, RUS2.1), `Flagstaff/Red` (RUS1.4),
+`He111_destroyed` (RUS3.4), and one dynamic type on USA3.4 — a signpost, a
+flagstaff, and two destroyed-aircraft props, one instance each. All of them are
+scenery; no unit type falls back. Their Granny streams use compression format 2
+(Oodle1), which the open converter cannot decode without the proprietary Granny
+runtime. 263 of the 2,817 shipped geometries are in that state, but the
+campaign only reaches these five. They draw as the port's proxy box, the same
+treatment the German assault boat had before it was reconstructed by hand.
+
+`dynamic_geometry_fallback` now names each type once with the ids that identify
+it in `geometry_index.tsv`, and `model_texture_missing` names any material that
+never resolves, so an object that only appears mid-mission no longer slips past
+the startup fallback report.
+
 ## Touch Controls
 
 The desktop game expects a mouse and a keyboard. What the port maps onto a
