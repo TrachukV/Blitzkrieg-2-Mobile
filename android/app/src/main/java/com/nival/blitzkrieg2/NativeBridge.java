@@ -40,6 +40,8 @@ final class NativeBridge {
             float normalizedX,
             float normalizedY);
     static native void forfeitMission();
+    /** Pops the pushed menu screen; false when there was none to pop. */
+    static native boolean runMenuBack();
 
     static void attachActivity(Blitzkrieg2Activity activity) {
         activityRef = new WeakReference<>(activity);

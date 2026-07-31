@@ -21,6 +21,8 @@ import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import androidx.activity.OnBackPressedCallback;
+
 import com.google.androidgamesdk.GameActivity;
 
 import java.io.File;
@@ -165,6 +167,7 @@ public final class Blitzkrieg2Activity extends GameActivity {
                 externalFilesDir);
         super.onCreate(savedInstanceState);
         enterImmersiveMode();
+        installBackHandler();
         if (menuMode) {
             // No mission HUD over the menu screen; the whole surface belongs
             // to the original interface. The menu can hand control to a
@@ -181,6 +184,34 @@ public final class Blitzkrieg2Activity extends GameActivity {
                         ViewGroup.LayoutParams.MATCH_PARENT));
         outcomePolling = true;
         outcomeHandler.post(outcomePoll);
+    }
+
+    /**
+     * The system Back gesture used to drop straight out of a running mission,
+     * abandoning it with no warning and nothing saved. Back is the phone's Esc
+     * key: in a mission it opens the same menu the shipped Esc button does, on
+     * a pushed menu screen it goes back one screen, and only the top-level
+     * menu leaves the game.
+     */
+    private void installBackHandler() {
+        getOnBackPressedDispatcher().addCallback(
+                this,
+                new OnBackPressedCallback(true) {
+                    @Override
+                    public void handleOnBackPressed() {
+                        if (!menuMode && missionMenu != null) {
+                            setMissionMenuVisible(
+                                    missionMenu.getVisibility()
+                                            != View.VISIBLE);
+                            return;
+                        }
+                        if (menuMode && NativeBridge.runMenuBack()) {
+                            return;
+                        }
+                        setEnabled(false);
+                        getOnBackPressedDispatcher().onBackPressed();
+                    }
+                });
     }
 
     private File resolveDataRoot(String externalFilesDir) {

@@ -4,6 +4,7 @@
 #include "bk2_android_audio_output.h"
 #include "bk2_android_database.h"
 #include "bk2_android_legacy_game_runtime.h"
+#include "bk2_android_menu_runtime.h"
 #include "bk2_android_mission_runtime.h"
 #include "bk2_android_platform.h"
 #include "bk2_android_vorbis_stream.h"
@@ -11936,6 +11937,13 @@ Java_com_nival_blitzkrieg2_NativeBridge_isMissionPaused(
         JNIEnv*,
         jclass) {
     return bk2::android::IsSinglePlayerPaused() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nival_blitzkrieg2_NativeBridge_runMenuBack(
+        JNIEnv*,
+        jclass) {
+    return bk2::android::RunOriginalMenuBack() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jint JNICALL

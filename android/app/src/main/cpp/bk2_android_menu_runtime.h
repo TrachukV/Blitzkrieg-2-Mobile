@@ -79,6 +79,11 @@ std::string ReleaseOriginalMenu(
 // what the shipped main_menu_init / single_player_submenu reactions do.
 bool ShowOriginalMenuPanel(const std::string& panel_name);
 
+// Unwinds one step of the menu for the phone's Back gesture: a modal, then a
+// sub-panel of the current screen, then a pushed screen. False means there was
+// nothing left to unwind.
+bool RunOriginalMenuBack();
+
 // Runs a button reaction: either an in-screen panel swap, a push to another
 // shipped screen, or a pop back to the previous one. Returns true when the
 // reaction was handled.

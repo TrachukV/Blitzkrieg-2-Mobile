@@ -499,7 +499,7 @@ touch screen:
 | Two-finger drag | pan | — |
 | Two-finger pinch | zoom, clamped to the mission's own distance limits | — |
 | Two-finger twist | turn the battlefield, the rotation the desktop game keeps on Q/E | — |
-| System Back | — | pop the screen stack, like the shipped Back buttons |
+| System Back | open the in-mission menu, and close it again | close a modal, then a sub-panel, then a pushed screen; only the top-level menu leaves the game |
 
 The twist has a 0.12 rad deadzone so a plain pinch does not drift the camera;
 once the twist is deliberate it stays engaged for the rest of the gesture.

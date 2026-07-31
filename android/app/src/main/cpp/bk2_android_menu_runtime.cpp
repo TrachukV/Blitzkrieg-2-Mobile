@@ -2473,6 +2473,40 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
     return false;
 }
 
+// What the phone's Back gesture means on whatever the menu is currently
+// showing, in the order the player would expect to unwind it: a modal first,
+// then a sub-panel of the current screen, then a pushed screen. False means
+// there was nothing left to go back to and Back belongs to Android.
+bool RunOriginalMenuBack() {
+    {
+        std::lock_guard<std::mutex> guard(g_menu_mutex);
+        if (!g_ready) {
+            return false;
+        }
+        if (g_chapter_reinf_dialog_mode != ChapterReinfDialogMode::kNone) {
+            g_chapter_reinf_dialog_mode = ChapterReinfDialogMode::kNone;
+            const std::string screen_ref = g_screen_ref;
+            return RebuildMenuScreenLocked(screen_ref);
+        }
+    }
+    bool sub_panel_open = false;
+    {
+        std::lock_guard<std::mutex> guard(g_menu_mutex);
+        const std::map<std::string, bool>::const_iterator single_player =
+                g_visibility_overrides.find("SinglePlayerMenu");
+        sub_panel_open = single_player != g_visibility_overrides.end() &&
+                single_player->second;
+    }
+    if (sub_panel_open) {
+        return ShowOriginalMenuPanel("MainMenu");
+    }
+    if (g_screen_stack.empty()) {
+        // The top of the shipped menu. Back belongs to Android from here.
+        return false;
+    }
+    return RunOriginalMenuReaction("back");
+}
+
 bool ShowOriginalMenuPanel(const std::string& panel_name) {
     std::lock_guard<std::mutex> guard(g_menu_mutex);
     if (!g_ready) {

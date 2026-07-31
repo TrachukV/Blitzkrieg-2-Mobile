@@ -325,7 +325,7 @@ void PollMenuInput(android_input_buffer* input_buffer) {
         const GameActivityKeyEvent& event = input_buffer->keyEvents[i];
         if (event.action == AKEY_EVENT_ACTION_UP &&
             event.keyCode == AKEYCODE_BACK) {
-            bk2::android::RunOriginalMenuReaction("back");
+            bk2::android::RunOriginalMenuBack();
         }
     }
     android_app_clear_key_events(input_buffer);
