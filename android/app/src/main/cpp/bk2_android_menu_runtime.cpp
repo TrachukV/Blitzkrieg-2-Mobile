@@ -6667,6 +6667,12 @@ void ReleaseOriginalMenuGpuResources() {
     std::lock_guard<std::mutex> guard(g_menu_mutex);
     g_menu_textures.clear();
     g_texture_handles.clear();
+    // The background is held as a raw handle rather than through
+    // g_texture_handles, and it is only re-resolved while unset, so it has to
+    // be dropped too. Everything else re-resolves on the next frame; the font
+    // atlas indices point into g_texture_paths, not at the context, and stay
+    // valid.
+    g_menu_background_texture = UINT16_MAX;
     g_render_logged = false;
 }
 

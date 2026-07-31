@@ -537,10 +537,17 @@ old context owned has to be treated as gone:
   every key puts the bind poses back in. An object that still arrives without
   one is dropped for that push instead of failing it.
 
-Verified on the ARM64 GLES3 emulator: before this, resuming into a running
-mission died on a bgfx `SIGTRAP` every time. It now survives four
-background/resume cycles with the same process id, no crash-buffer entries,
-and 58.9 fps with the mission, HUD, and minimap intact.
+- The menu keeps its own GPU handles, including a background handle held
+  outside `g_texture_handles` that is only re-resolved while unset.
+  `ReleaseOriginalMenuGpuResources()` existed for this and was never called;
+  the shell now calls it on `APP_CMD_TERM_WINDOW`, while the backend can still
+  release them.
+
+Verified on the ARM64 GLES3 emulator: before this, resuming died on a bgfx
+`SIGTRAP` every time, in a mission and in the menu alike. A mission now
+survives four background/resume cycles and the main menu two, in both cases
+with the same process id, no crash-buffer entries, and 58.9 fps with the
+mission, HUD, and minimap intact.
 
 ## Frame Rate
 

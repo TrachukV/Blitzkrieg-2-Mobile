@@ -35,6 +35,11 @@ void HandleAppCommand(android_app* app, int32_t command) {
             }
             break;
         case APP_CMD_TERM_WINDOW:
+            // The menu caches its own GPU handles, and they belong to the
+            // context about to be destroyed. Drop them while the backend can
+            // still release them, or the first frame after the app comes back
+            // hands bgfx a handle from the dead context.
+            bk2::android::ReleaseOriginalMenuGpuResources();
             bk2::android::ShutdownLegacyGfx();
             platform.set_lifecycle_state(bk2::android::LifecycleState::Started);
             platform.log_info("Android window terminated.");
