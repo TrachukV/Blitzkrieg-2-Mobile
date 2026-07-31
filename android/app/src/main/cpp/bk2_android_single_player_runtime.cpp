@@ -204,6 +204,8 @@ size_t g_lying_move_animation_instance_count = 0;
 size_t g_lying_attack_animation_instance_count = 0;
 size_t g_lie_transition_animation_instance_count = 0;
 size_t g_stand_transition_animation_instance_count = 0;
+size_t g_runtime_skinned_vertex_count = 0;
+bool g_runtime_skinning_logged = false;
 size_t g_combat_effect_render_count = 0;
 size_t g_effect_light_render_count = 0;
 size_t g_active_combat_effect_count = 0;
@@ -291,9 +293,28 @@ struct ConvertedGeometryGroup {
     uint32_t index_count = 0;
 };
 
+constexpr size_t kMaxSkinInfluences = 4;
+constexpr size_t kSkinningMatrixFloatCount = 16;
+
+struct ConvertedGeometrySkinWeights {
+    std::array<uint16_t, kMaxSkinInfluences> bones{
+            UINT16_MAX,
+            UINT16_MAX,
+            UINT16_MAX,
+            UINT16_MAX};
+    std::array<float, kMaxSkinInfluences> weights{};
+};
+
 struct ConvertedGeometryPart {
     std::vector<ConvertedGeometryVertex> vertices;
+    // Versions 1-4 carry pre-skinned vertex copies for every sampled frame.
     std::vector<std::vector<ConvertedGeometryVertex> > animation_frames;
+    // Version 5 keeps one bind-pose vertex stream and samples only the compact
+    // Granny skin matrices. This is the same pose data as the old baked cache,
+    // but vertices are transformed at runtime instead of being repeated on
+    // disk for every clip frame.
+    std::vector<ConvertedGeometrySkinWeights> skin_weights;
+    std::vector<std::vector<float> > skinning_frames;
     float animation_duration_seconds = 0.0f;
     std::vector<uint32_t> triangle_indices;
     std::vector<ConvertedGeometryGroup> groups;
@@ -1747,7 +1768,7 @@ const ConvertedGeometry* LoadConvertedGeometry(
         std::memcmp(magic, expected_magic, sizeof(magic)) != 0 ||
         !ReadExact(&input, &version, sizeof(version)) ||
         !ReadExact(&input, &mesh_count, sizeof(mesh_count)) ||
-        (version < 1 || version > 4) ||
+        (version < 1 || version > 5) ||
         mesh_count == 0 ||
         mesh_count > 128) {
         missing_converted_geometries->insert(record_id);
@@ -1762,6 +1783,7 @@ const ConvertedGeometry* LoadConvertedGeometry(
         uint32_t group_count = 1;
         uint32_t animation_frame_count = 1;
         float animation_duration_seconds = 0.0f;
+        uint32_t skinning_mode = 0;
         if (!ReadExact(&input, &vertex_count, sizeof(vertex_count)) ||
             !ReadExact(&input, &index_count, sizeof(index_count)) ||
             (version >= 2 &&
@@ -1775,6 +1797,11 @@ const ConvertedGeometry* LoadConvertedGeometry(
                       &input,
                       &animation_duration_seconds,
                       sizeof(animation_duration_seconds)))) ||
+            (version >= 5 &&
+             !ReadExact(
+                     &input,
+                     &skinning_mode,
+                     sizeof(skinning_mode))) ||
             vertex_count == 0 ||
             vertex_count > 5000000 ||
             index_count < 3 ||
@@ -1785,29 +1812,45 @@ const ConvertedGeometry* LoadConvertedGeometry(
             animation_frame_count == 0 ||
             animation_frame_count > 120 ||
             !std::isfinite(animation_duration_seconds) ||
-            animation_duration_seconds < 0.0f) {
+            animation_duration_seconds < 0.0f ||
+            skinning_mode > 1 ||
+            (skinning_mode == 1 &&
+             (animation_frame_count <= 1 ||
+              animation_duration_seconds <= 0.0f))) {
             missing_converted_geometries->insert(record_id);
             return nullptr;
         }
         ConvertedGeometryPart part;
         part.animation_duration_seconds = animation_duration_seconds;
-        part.animation_frames.resize(animation_frame_count);
         if (animation_frame_count > 1) {
             ++animated_parts;
         }
-        for (std::vector<ConvertedGeometryVertex>& frame :
-             part.animation_frames) {
-            frame.resize(vertex_count);
+        if (version >= 5) {
+            part.vertices.resize(vertex_count);
             if (!ReadExact(
                         &input,
-                        frame.data(),
+                        part.vertices.data(),
                         static_cast<size_t>(vertex_count) *
                                 sizeof(ConvertedGeometryVertex))) {
                 missing_converted_geometries->insert(record_id);
                 return nullptr;
             }
+        } else {
+            part.animation_frames.resize(animation_frame_count);
+            for (std::vector<ConvertedGeometryVertex>& frame :
+                 part.animation_frames) {
+                frame.resize(vertex_count);
+                if (!ReadExact(
+                            &input,
+                            frame.data(),
+                            static_cast<size_t>(vertex_count) *
+                                    sizeof(ConvertedGeometryVertex))) {
+                    missing_converted_geometries->insert(record_id);
+                    return nullptr;
+                }
+            }
+            part.vertices = part.animation_frames.front();
         }
-        part.vertices = part.animation_frames.front();
         part.triangle_indices.resize(index_count);
         if (!ReadExact(
                     &input,
@@ -1905,6 +1948,60 @@ const ConvertedGeometry* LoadConvertedGeometry(
                                 sizeof(uint32_t))) {
                 missing_converted_geometries->insert(record_id);
                 return nullptr;
+            }
+        }
+        if (version >= 5 && skinning_mode == 1) {
+            if (part.bones.empty()) {
+                missing_converted_geometries->insert(record_id);
+                return nullptr;
+            }
+            part.skin_weights.resize(vertex_count);
+            for (ConvertedGeometrySkinWeights& weights :
+                 part.skin_weights) {
+                for (uint16_t& bone : weights.bones) {
+                    if (!ReadExact(&input, &bone, sizeof(bone))) {
+                        missing_converted_geometries->insert(record_id);
+                        return nullptr;
+                    }
+                }
+                float total_weight = 0.0f;
+                for (size_t influence = 0;
+                     influence < kMaxSkinInfluences;
+                     ++influence) {
+                    float& weight = weights.weights[influence];
+                    if (!ReadExact(&input, &weight, sizeof(weight)) ||
+                        !std::isfinite(weight) ||
+                        weight < 0.0f ||
+                        (weight > 0.0f &&
+                         weights.bones[influence] >= part.bones.size())) {
+                        missing_converted_geometries->insert(record_id);
+                        return nullptr;
+                    }
+                    total_weight += weight;
+                }
+                if (total_weight > 1.0001f) {
+                    missing_converted_geometries->insert(record_id);
+                    return nullptr;
+                }
+            }
+            const size_t matrix_value_count =
+                    part.bones.size() * kSkinningMatrixFloatCount;
+            part.skinning_frames.resize(animation_frame_count);
+            for (std::vector<float>& frame : part.skinning_frames) {
+                frame.resize(matrix_value_count);
+                if (!ReadExact(
+                            &input,
+                            frame.data(),
+                            matrix_value_count * sizeof(float)) ||
+                    std::any_of(
+                            frame.begin(),
+                            frame.end(),
+                            [](float value) {
+                                return !std::isfinite(value);
+                            })) {
+                    missing_converted_geometries->insert(record_id);
+                    return nullptr;
+                }
             }
         }
         ClassifyWheelPart(&part);
@@ -3920,11 +4017,19 @@ void AppendPartIndices(
     }
 }
 
+size_t ConvertedGeometryFrameCount(
+        const ConvertedGeometryPart& part) {
+    return !part.skinning_frames.empty()
+            ? part.skinning_frames.size()
+            : part.animation_frames.size();
+}
+
 size_t ConvertedGeometryFrameIndex(
         const ConvertedGeometryPart& part,
         ConvertedAnimationVariant animation_variant,
         float animation_time_seconds) {
-    if (part.animation_frames.size() <= 1 ||
+    const size_t frame_count = ConvertedGeometryFrameCount(part);
+    if (frame_count <= 1 ||
         part.animation_duration_seconds <= 0.0f) {
         return 0;
     }
@@ -3944,23 +4049,126 @@ size_t ConvertedGeometryFrameIndex(
             static_cast<size_t>(
                     animation_time /
                     part.animation_duration_seconds *
-                    part.animation_frames.size()),
-            part.animation_frames.size() - 1);
+                    frame_count),
+            frame_count - 1);
 }
 
 const std::vector<ConvertedGeometryVertex>*
 SelectConvertedGeometryVertices(
         const ConvertedGeometryPart& part,
         ConvertedAnimationVariant animation_variant,
-        float animation_time_seconds) {
-    if (part.animation_frames.size() <= 1 ||
+        float animation_time_seconds,
+        std::vector<ConvertedGeometryVertex>* skinning_scratch) {
+    if (part.skinning_frames.empty()) {
+        if (part.animation_frames.size() <= 1 ||
+            part.animation_duration_seconds <= 0.0f) {
+            return &part.vertices;
+        }
+        return &part.animation_frames[ConvertedGeometryFrameIndex(
+                part,
+                animation_variant,
+                animation_time_seconds)];
+    }
+    if (skinning_scratch == nullptr ||
+        part.skin_weights.size() != part.vertices.size() ||
+        part.bones.empty() ||
         part.animation_duration_seconds <= 0.0f) {
         return &part.vertices;
     }
-    return &part.animation_frames[ConvertedGeometryFrameIndex(
-            part,
-            animation_variant,
-            animation_time_seconds)];
+    const std::vector<float>& matrices =
+            part.skinning_frames[ConvertedGeometryFrameIndex(
+                    part,
+                    animation_variant,
+                    animation_time_seconds)];
+    const size_t expected_matrix_values =
+            part.bones.size() * kSkinningMatrixFloatCount;
+    if (matrices.size() != expected_matrix_values) {
+        return &part.vertices;
+    }
+
+    skinning_scratch->resize(part.vertices.size());
+    for (size_t vertex_index = 0;
+         vertex_index < part.vertices.size();
+         ++vertex_index) {
+        const ConvertedGeometryVertex& source =
+                part.vertices[vertex_index];
+        const ConvertedGeometrySkinWeights& skin =
+                part.skin_weights[vertex_index];
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        float nx = 0.0f;
+        float ny = 0.0f;
+        float nz = 0.0f;
+        float total_weight = 0.0f;
+        for (size_t influence = 0;
+             influence < kMaxSkinInfluences;
+             ++influence) {
+            const float weight = skin.weights[influence];
+            const uint16_t bone = skin.bones[influence];
+            if (weight <= 0.0f || bone >= part.bones.size()) {
+                continue;
+            }
+            const float* matrix =
+                    matrices.data() +
+                    static_cast<size_t>(bone) *
+                            kSkinningMatrixFloatCount;
+            x += (matrix[0] * source.x +
+                  matrix[4] * source.y +
+                  matrix[8] * source.z +
+                  matrix[12]) * weight;
+            y += (matrix[1] * source.x +
+                  matrix[5] * source.y +
+                  matrix[9] * source.z +
+                  matrix[13]) * weight;
+            z += (matrix[2] * source.x +
+                  matrix[6] * source.y +
+                  matrix[10] * source.z +
+                  matrix[14]) * weight;
+            nx += (matrix[0] * source.nx +
+                   matrix[4] * source.ny +
+                   matrix[8] * source.nz) * weight;
+            ny += (matrix[1] * source.nx +
+                   matrix[5] * source.ny +
+                   matrix[9] * source.nz) * weight;
+            nz += (matrix[2] * source.nx +
+                   matrix[6] * source.ny +
+                   matrix[10] * source.nz) * weight;
+            total_weight += weight;
+        }
+        ConvertedGeometryVertex& output =
+                (*skinning_scratch)[vertex_index];
+        output = source;
+        if (total_weight > 0.00000001f) {
+            const float inverse_weight = 1.0f / total_weight;
+            output.x = x * inverse_weight;
+            output.y = y * inverse_weight;
+            output.z = z * inverse_weight;
+            const float normal_length = std::sqrt(
+                    nx * nx + ny * ny + nz * nz);
+            if (normal_length > 0.00000001f) {
+                const float inverse_normal = 1.0f / normal_length;
+                output.nx = nx * inverse_normal;
+                output.ny = ny * inverse_normal;
+                output.nz = nz * inverse_normal;
+            } else {
+                output.nx = 0.0f;
+                output.ny = 0.0f;
+                output.nz = 1.0f;
+            }
+        }
+    }
+    g_runtime_skinned_vertex_count += skinning_scratch->size();
+    if (!g_runtime_skinning_logged) {
+        std::ostringstream report;
+        report << "runtime_skinning=active"
+               << "; vertices=" << skinning_scratch->size()
+               << "; bones=" << part.bones.size()
+               << "; frames=" << part.skinning_frames.size();
+        PlatformRuntime::instance().log_info(report.str());
+        g_runtime_skinning_logged = true;
+    }
+    return skinning_scratch;
 }
 
 void ApplyWorldRootTilt(
@@ -4136,12 +4344,14 @@ void AppendProjectedGeometryShadow(
     const float bucket_cosine = std::cos(bucket_angle);
     const float bucket_sine = std::sin(bucket_angle);
     std::vector<ProjectedShadowPoint> points;
+    std::vector<ConvertedGeometryVertex> skinning_scratch;
     for (const ConvertedGeometryPart& part : geometry.parts) {
         const std::vector<ConvertedGeometryVertex>* vertices =
                 SelectConvertedGeometryVertices(
                         part,
                         animation_variant,
-                        animation_time_seconds);
+                        animation_time_seconds,
+                        &skinning_scratch);
         points.reserve(points.size() + vertices->size());
         for (const ConvertedGeometryVertex& vertex : *vertices) {
             float local_x =
@@ -4257,6 +4467,7 @@ void AppendAlphaMaskedGeometryShadow(
     constexpr uint32_t kShadowArgb = 0x3411170du;
     const uint32_t shadow_abgr = ArgbToAbgr(kShadowArgb);
     int material_base = 0;
+    std::vector<ConvertedGeometryVertex> skinning_scratch;
     for (size_t part_index = 0;
          part_index < geometry.parts.size();
          ++part_index) {
@@ -4265,7 +4476,8 @@ void AppendAlphaMaskedGeometryShadow(
                 SelectConvertedGeometryVertices(
                         part,
                         animation_variant,
-                        animation_time_seconds);
+                        animation_time_seconds,
+                        &skinning_scratch);
         const uint32_t vertex_base =
                 static_cast<uint32_t>(mesh->vertices.size());
         for (const ConvertedGeometryVertex& vertex : *vertices) {
@@ -4541,8 +4753,9 @@ bool AppendConvertedGeometry(
             binding.texture_paths.end(),
             [](const std::string& value) {
                 return !value.empty();
-            });
+    });
     int material_base = 0;
+    std::vector<ConvertedGeometryVertex> skinning_scratch;
     for (size_t part_index = 0;
          part_index < geometry->parts.size();
          ++part_index) {
@@ -4566,7 +4779,8 @@ bool AppendConvertedGeometry(
                 SelectConvertedGeometryVertices(
                         part,
                         animation_variant,
-                        animation_time_seconds);
+                        animation_time_seconds,
+                        &skinning_scratch);
         const uint32_t vertex_base =
                 static_cast<uint32_t>(mesh->vertices.size());
         // Pose the rotating platform before the hull heading is applied, so
@@ -8164,6 +8378,8 @@ void ShutdownSinglePlayerRuntime() {
     g_lying_attack_animation_instance_count = 0;
     g_lie_transition_animation_instance_count = 0;
     g_stand_transition_animation_instance_count = 0;
+    g_runtime_skinned_vertex_count = 0;
+    g_runtime_skinning_logged = false;
     g_combat_effect_render_count = 0;
     g_effect_light_render_count = 0;
     g_active_combat_effect_count = 0;
@@ -9172,6 +9388,8 @@ std::string SinglePlayerRuntimeReport() {
            << g_lie_transition_animation_instance_count
            << "; stand_transition_animation_instances="
            << g_stand_transition_animation_instance_count
+           << "; runtime_skinned_vertices="
+           << g_runtime_skinned_vertex_count
            << "; combat_effect_renders="
            << g_combat_effect_render_count
            << "; effect_light_renders="

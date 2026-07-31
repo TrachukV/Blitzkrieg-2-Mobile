@@ -47,15 +47,16 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   type-specific command grid, while common desktop actions still address the
   full mixed selection. Original converted geometry now also supplies projected
   silhouette shadows for static objects and live units; animated infantry
-  shadows use the same current pre-skinned frame as the visible mesh. The camera
-  reads the original horizontal FOV, pitch/yaw defaults, and distance range from
-  the loaded `ClientGameConsts`, then applies the local player's shipped map
-  anchor and optional placement exactly where the desktop mission does. The
+  shadows use the same current runtime-skinned pose as the visible mesh. The
+  camera reads the original horizontal FOV, pitch/yaw defaults, and distance
+  range from the loaded `ClientGameConsts`, then applies the local player's
+  shipped map anchor and optional placement exactly where the desktop mission
+  does. The
   top-left headline now has a thread-safe three-line stack for original
   five-second scenario notifications. Objective feedback combines the shipped
   notification prefix with the objective header, while
   `EFB_REINFORCEMENT_CENTER_LOCAL_PLAYER` resolves and displays the shipped
-  reinforcement text. General runtime skinning, remaining action-specific
+  reinforcement text. GPU skinning, remaining action-specific
   clips, a multi-line notification console, command subpanels, briefings, and
   the rest of the legacy UI are still pending.
 - `BK2_ENABLE_LEGACY_TEXTURE_RUNTIME=ON` links the Android
@@ -385,6 +386,8 @@ there. A phone with room for the whole set needs no such trimming.
     --lying-idle-animation ../../Versions/Current/Data/bin/Animations/3968 \
     --lying-move-animation ../../Versions/Current/Data/bin/Animations/3984 \
     --lying-attack-animation ../../Versions/Current/Data/bin/Animations/3970 \
+    --lie-animation ../../Versions/Current/Data/bin/Animations/3965 \
+    --stand-animation ../../Versions/Current/Data/bin/Animations/3988 \
     --skip-unsupported \
     --all
 )
@@ -717,18 +720,22 @@ layout exactly: the panel lands at `x=779` with 170x42 buttons at `y=143`
 button also reports its original reaction id (`single_player`, `multiplayer`,
 `options`, `LoadMod`, `Credits`, `Encyclopedia`, `exit`, `single_player_back`).
 
-Vehicle animation needs skeleton data the mesh cache did not carry. Vehicle
+Vehicle animation needs skeleton data the old mesh cache did not carry. Vehicle
 models in this game ship an empty `<Animations/>` list with a `Skeleton`
 alongside their geometry: the desktop engine poses them procedurally, rotating
 the turret and gun bones through `CMOUnitMechanical::AIUpdateTurretTurn` from
-the AI's `SAINotifyTurretTurn` feed. The converted mesh cache only stored
-position, normal and UV, so no bone could be posed at runtime and vehicles
-rendered static.
+the AI's `SAINotifyTurretTurn` feed. Before format 4, the converted mesh cache
+stored only position, normal and UV, so no bone could be posed at runtime and
+vehicles rendered static.
 
-The cache format is now version 4 and carries, per mesh, the skeleton's bones
-with their parent index, bind-pose pivot and name, plus the dominant bone of
-every vertex. Older caches still load; they simply have no bone table.
-Regenerating the cache is what turns bone posing on.
+The cache format is now version 5. Version 4 added, per mesh, the skeleton's
+bones with their parent index, bind-pose pivot and name, plus the dominant bone
+of every vertex. Version 5 keeps that table and replaces repeated pre-skinned
+vertex frames with one bind-pose stream, up to four exact Granny influences per
+vertex, and 16 sampled skinning matrices per bone. The runtime transforms
+positions and normals from those matrices before applying vehicle procedural
+posing and world placement. Versions 1-4 still load through the old baked-frame
+path.
 
 Converting the first 120 numeric geometries produces exactly the bones the
 posing needs: geometry 1030 carries `Basis`, `Basis_a`, `Turret01`,
@@ -792,8 +799,8 @@ radius also scales with the viewport rather than staying at the desktop-sized
 
 The Android content step now decodes the shipped Granny format-6/Oodle0
 geometry into a small native `BK2MSH1` cache. The complete current pass yields
-2,510 renderable geometry files (1,126,692 vertices and 731,200 triangles);
-44 geometry records contain no renderable mesh and are skipped, while 263
+2,512 renderable geometry files (1,127,552 vertices and 732,060 triangles);
+44 geometry records contain no renderable mesh and are skipped, while 261
 Oodle1 resources remain blocked. An offline index follows
 the original `RPGStats -> VisObj -> Model -> Geometry` XDB chain, preferring the
 Asia season and falling back through the other seasons. The runtime keys this
@@ -811,20 +818,28 @@ instead of silently dropping the remaining model parts.
 
 The same offline index resolves each selected Model's material list and each
 Texture descriptor's original DDS `DestName`. Version 3 of the `BK2MSH1` cache
-preserves Granny triangle material groups and can carry pre-skinned animation
-frames. The converter samples the shipped RIFLE idle animation through the
-mesh's real bone bindings and vertex weights; compatible infantry instances
-advance those frames in the live mission. Additional caches are emitted only
-for the same skinned meshes using the shipped RIFLE move, shoot, death,
-lying-idle, crawl, and lying-shoot clips: the current pass creates 259 files per
-action (32,913,536 bytes each). The presentation bridge marks infantry from the
+added Granny triangle material groups and baked animation frames; version 5
+replaces those repeated vertices with runtime skinning. The converter samples
+the shipped RIFLE idle animation into compact bone matrices while preserving
+the mesh's bind pose and all original vertex weights. Compatible infantry
+instances skin those vertices in the live mission. Additional caches are
+emitted only for the same skinned meshes using the shipped RIFLE move, shoot,
+death, lying-idle, crawl, and lying-shoot clips: the verified complete pass
+creates 259 files per action (10,107,552 bytes each). Across all `.bk2mesh`
+files, the completed cache directory now uses 152,471,976 bytes instead of
+360,249,720 bytes for the same 16 sampled poses and retained bridge-death
+variants, a 57.7% reduction.
+`Tools/android/validate_runtime_skinning.mjs` compares a retained version 3/4
+cache with its version 5 replacement by reconstructing every vertex and normal;
+all nine `1724` RIFLE variants match within `1.2e-7` for positions, `3e-8` for
+normals, and exactly for UVs. The presentation bridge marks infantry from the
 original AI movement, attacking, and `CSoldier::IsLying()` states. The renderer
 selects standing or prone action caches from those live states and falls back to
 the base idle cache when a variant is unavailable. It also consumes the
 original `ACTION_NOTIFY_ANIMATION_CHANGED` updates and forwards both the exact
 animation type and its simulation start time. `NDb::ANIMATION_LIE` and
 `NDb::ANIMATION_STAND` select non-looping caches sampled from the shipped RIFLE
-resources `3965` and `3988`; a verified incremental pass converted all 258
+resources `3965` and `3988`; the verified complete pass converted all 259
 compatible infantry geometries into both variants. The transition frame clamps
 at the clip end until the next legacy state update, so neither direction wraps
 back to its first pose. Android's headless runtime also forwards
@@ -893,8 +908,8 @@ converter and index now assign the latter the same stable positive runtime ID
 and reject collisions before conversion. When a descriptor contains both
 identifiers, the index tries its numeric resource and then its UUID resource;
 this preserves exact visuals whose old numeric file was removed. The current
-complete pass requests 2,817 resources: 2,510 convert, 44 contain no renderable
-mesh, 263 are reported as blocked, and none fail unexpectedly. The blocked UUID
+complete pass requests 2,817 resources: 2,512 convert, 44 contain no renderable
+mesh, 261 are reported as blocked, and none fail unexpectedly. The blocked UUID
 files use Granny Oodle1 compression; the bundled open decoder supports Oodle0,
 while the repository's Oodle1 implementation is only present in the original
 32-bit Windows `granny2.dll`. Unsupported files are not reported as converted.
@@ -1401,8 +1416,10 @@ global `InitialPlacement` is intentionally not reapplied because shipped
 infantry geometry already contains the correct root placement. Standing-to-prone
 and prone-to-standing transition clips now follow the exact legacy AI animation
 events. The ARM64 US1.0 runtime received the animation-update stream with no
-geometry fallback after both transition cache sets were installed. GPU/runtime
-skinning, original effect-attached Granny geometry, complete briefing HUD
+geometry fallback after both transition cache sets were installed. CPU runtime
+skinning is now active on ARM64; moving the same bind-pose/weight/matrix
+contract into a dedicated GPU vertex path remains. Original effect-attached
+Granny geometry, complete briefing HUD
 behavior, the full chapter-map availability/highlight rules, and result
 rank/medal popups remain unfinished. The core Action Report, its reward rows,
 and per-marker chapter-map mission launch route are linked. Empty initial

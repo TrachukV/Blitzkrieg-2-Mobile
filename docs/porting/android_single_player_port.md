@@ -235,7 +235,7 @@ original objective and reinforcement notifications. It consumes
 resources, and restores the active objective after expiry. Converted static and
 dynamic models also produce one translucent ground silhouette from the convex
 hull of their sun-projected Granny vertices. The dynamic path samples the same
-current pre-skinned animation frame used by the visible model, so infantry
+current runtime-skinned pose used by the visible model, so infantry
 shadows move with the unit rather than remaining fixed proxy circles. The
 battlefield camera loads horizontal FOV, default pitch/yaw, and
 min/average/max distance from the legacy `ClientGameConsts`, then applies
@@ -645,10 +645,11 @@ presentation bridge now consumes
 the original `ACTION_NOTIFY_ANIMATION_CHANGED` stream, forwards its animation
 type and simulation time, and selects non-looping standing-to-prone and
 prone-to-standing caches sampled from the shipped RIFLE resources `3965` and
-`3988`. An incremental conversion covered all 258 compatible infantry
+`3988`. A complete conversion covered all 259 compatible infantry
 geometries for each direction, and an ARM64 US1.0 run received the live
 animation stream without a geometry fallback. Remaining renderer work includes
-full GPU/runtime skinning, effect-attached Granny geometry,
+moving the now-live CPU runtime skinning contract to a dedicated GPU vertex
+path, effect-attached Granny geometry,
 terrain-conforming shadow maps, more complete legacy shader translation, and
 post effects. The original
 `SingleStatistics2` Action Report is now live: it renders the shipped layout,

@@ -6,10 +6,12 @@ import { basename, join, resolve } from "node:path";
 import { parseAnimated, parseModel, poseSkeletonAt } from "granny-ro-js";
 
 const MAGIC = Buffer.from([0x42, 0x4b, 0x32, 0x4d, 0x53, 0x48, 0x31, 0x00]);
-const FORMAT_VERSION = 4;
+const FORMAT_VERSION = 5;
 const VERTEX_FLOAT_COUNT = 8;
 const DEFAULT_ANIMATION_FRAME_COUNT = 16;
 const MAX_MESH_COUNT = 128;
+const MAX_SKIN_INFLUENCES = 4;
+const SKINNING_MATRIX_FLOAT_COUNT = 16;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PROCEDURAL_GEOMETRY_BUILDERS = new Map([
@@ -156,20 +158,6 @@ function toArrayBuffer(buffer) {
 
 function orderedMeshes(parsed) {
   return parsed.meshes;
-}
-
-function transformPoint(matrix, value, translation) {
-  const x = value[0] ?? 0;
-  const y = value[1] ?? 0;
-  const z = value[2] ?? 0;
-  return [
-    matrix[0] * x + matrix[4] * y + matrix[8] * z +
-      (translation ? matrix[12] : 0),
-    matrix[1] * x + matrix[5] * y + matrix[9] * z +
-      (translation ? matrix[13] : 0),
-    matrix[2] * x + matrix[6] * y + matrix[10] * z +
-      (translation ? matrix[14] : 0),
-  ];
 }
 
 function normalize(value) {
@@ -750,66 +738,71 @@ function boneTableBytes(skeleton) {
   return bytes;
 }
 
-function animatedFrames(mesh, skeleton, animation, frameCount) {
-  if (!canUseAnimation(mesh, skeleton, animation)) {
-    return [];
-  }
+function skinningInfluences(mesh, skeleton) {
   const skeletonIndexByName = new Map(
     skeleton.bones.map((bone, index) => [bone.name, index]),
   );
   const bindingToSkeleton = mesh.boneBindings.map((binding) =>
     skeletonIndexByName.get(binding.name),
   );
+  const influences = [];
+  for (let vertex = 0; vertex < mesh.vertexCount; ++vertex) {
+    const explicitWeights = mesh.vertexWeights[vertex] ?? [];
+    const weights =
+      explicitWeights.length > 0
+        ? explicitWeights
+        : mesh.boneBindings.length === 1
+          ? [{ boneIndex: 0, weight: 1 }]
+          : [];
+    const mapped = [];
+    let totalWeight = 0;
+    for (const weight of weights) {
+      const skeletonIndex = bindingToSkeleton[weight.boneIndex];
+      if (
+        !Number.isInteger(skeletonIndex) ||
+        skeletonIndex < 0 ||
+        skeletonIndex >= 0xffff ||
+        !Number.isFinite(weight.weight) ||
+        weight.weight <= 0
+      ) {
+        continue;
+      }
+      mapped.push({ boneIndex: skeletonIndex, weight: weight.weight });
+      totalWeight += weight.weight;
+    }
+    if (mapped.length > MAX_SKIN_INFLUENCES) {
+      throw new Error(
+        `mesh vertex ${vertex} has ${mapped.length} skin influences; ` +
+          `format supports ${MAX_SKIN_INFLUENCES}`,
+      );
+    }
+    if (totalWeight > 1e-8 && Math.abs(totalWeight - 1) > 1e-5) {
+      for (const influence of mapped) {
+        influence.weight /= totalWeight;
+      }
+    }
+    influences.push(mapped);
+  }
+  return influences;
+}
+
+function skinningFrames(skeleton, animation, frameCount) {
   const frames = [];
   for (let frame = 0; frame < frameCount; ++frame) {
     const time = animation.duration * frame / frameCount;
     const pose = poseSkeletonAt(skeleton, animation, time);
-    const positions = [];
-    const normals = [];
-    for (let vertex = 0; vertex < mesh.vertexCount; ++vertex) {
-      const explicitWeights = mesh.vertexWeights[vertex] ?? [];
-      const weights =
-        explicitWeights.length > 0
-          ? explicitWeights
-          : mesh.boneBindings.length === 1
-            ? [{ boneIndex: 0, weight: 1 }]
-            : [];
-      const sourcePosition = mesh.positions[vertex] ?? [0, 0, 0];
-      const sourceNormal = mesh.normals[vertex] ?? [0, 0, 1];
-      let position = [0, 0, 0];
-      let normal = [0, 0, 0];
-      let totalWeight = 0;
-      for (const weight of weights) {
-        const skeletonIndex = bindingToSkeleton[weight.boneIndex];
-        if (
-          !Number.isInteger(skeletonIndex) ||
-          !pose.skinningMatrices[skeletonIndex] ||
-          weight.weight <= 0
-        ) {
-          continue;
-        }
-        const matrix = pose.skinningMatrices[skeletonIndex];
-        const weightedPosition = transformPoint(matrix, sourcePosition, true);
-        const weightedNormal = transformPoint(matrix, sourceNormal, false);
-        position[0] += weightedPosition[0] * weight.weight;
-        position[1] += weightedPosition[1] * weight.weight;
-        position[2] += weightedPosition[2] * weight.weight;
-        normal[0] += weightedNormal[0] * weight.weight;
-        normal[1] += weightedNormal[1] * weight.weight;
-        normal[2] += weightedNormal[2] * weight.weight;
-        totalWeight += weight.weight;
-      }
-      if (totalWeight <= 1e-8) {
-        position = [...sourcePosition];
-        normal = [...sourceNormal];
-      } else if (Math.abs(totalWeight - 1) > 1e-5) {
-        position = position.map((value) => value / totalWeight);
-        normal = normal.map((value) => value / totalWeight);
-      }
-      positions.push(position);
-      normals.push(normalize(normal));
+    if (pose.skinningMatrices.length < skeleton.bones.length) {
+      throw new Error("animation pose is missing skeleton skinning matrices");
     }
-    frames.push({ positions, normals });
+    const matrices = [];
+    for (let bone = 0; bone < skeleton.bones.length; ++bone) {
+      const matrix = pose.skinningMatrices[bone];
+      if (!matrix || matrix.length < SKINNING_MATRIX_FLOAT_COUNT) {
+        throw new Error(`animation pose is missing matrix for bone ${bone}`);
+      }
+      matrices.push(matrix);
+    }
+    frames.push(matrices);
   }
   return frames;
 }
@@ -831,20 +824,33 @@ function serializeGeometry(parsed, animation, animationFrameCount) {
       mesh.triangleGroups.length > 0
         ? mesh.triangleGroups
         : [{ materialIndex: 0, triFirst: 0, triCount: mesh.indexCount / 3 }];
-    const frames = animatedFrames(
-      mesh,
-      parsed.skeletons[0],
-      animation,
-      animationFrameCount,
-    );
-    mesh.androidAnimationFrames = frames;
-    const frameCount = frames.length > 0 ? frames.length : 1;
-    byteLength += 20;
-    byteLength += frameCount * mesh.vertexCount * VERTEX_FLOAT_COUNT * 4;
+    const skeleton = parsed.skeletons[0];
+    const skinned = canUseAnimation(mesh, skeleton, animation);
+    const frames = skinned
+      ? skinningFrames(skeleton, animation, animationFrameCount)
+      : [];
+    const influences = skinned
+      ? skinningInfluences(mesh, skeleton)
+      : [];
+    mesh.androidSkinningFrames = frames;
+    mesh.androidSkinningInfluences = influences;
+    const frameCount = skinned ? frames.length : 1;
+    byteLength += 24;
+    byteLength += mesh.vertexCount * VERTEX_FLOAT_COUNT * 4;
     byteLength += mesh.indexCount * 4;
     byteLength += groups.length * 12;
-    byteLength += boneTableBytes(parsed.skeletons[0]);
+    byteLength += boneTableBytes(skeleton);
     byteLength += mesh.vertexCount * 4;
+    if (skinned) {
+      byteLength +=
+        mesh.vertexCount *
+        (MAX_SKIN_INFLUENCES * 2 + MAX_SKIN_INFLUENCES * 4);
+      byteLength +=
+        frameCount *
+        skeleton.bones.length *
+        SKINNING_MATRIX_FLOAT_COUNT *
+        4;
+    }
   }
   const output = Buffer.allocUnsafe(byteLength);
   MAGIC.copy(output, 0);
@@ -860,39 +866,33 @@ function serializeGeometry(parsed, animation, animationFrameCount) {
     output.writeUInt32LE(mesh.vertexCount, offset);
     output.writeUInt32LE(mesh.indexCount, offset + 4);
     output.writeUInt32LE(groups.length, offset + 8);
-    const frames = mesh.androidAnimationFrames;
-    const frameCount = frames.length > 0 ? frames.length : 1;
+    const frames = mesh.androidSkinningFrames;
+    const skinned = frames.length > 0;
+    const frameCount = skinned ? frames.length : 1;
     output.writeUInt32LE(frameCount, offset + 12);
     output.writeFloatLE(
-      frames.length > 0 ? animation.duration : 0,
+      skinned ? animation.duration : 0,
       offset + 16,
     );
-    offset += 20;
-    for (let frame = 0; frame < frameCount; ++frame) {
-      for (let vertex = 0; vertex < mesh.vertexCount; ++vertex) {
-        const position =
-          frames[frame]?.positions[vertex] ??
-          mesh.positions[vertex] ??
-          [0, 0, 0];
-        const normal =
-          frames[frame]?.normals[vertex] ??
-          mesh.normals[vertex] ??
-          [0, 0, 1];
-        const uv = mesh.uvs[vertex] ?? [0, 0];
-        const values = [
-          position[0] ?? 0,
-          position[1] ?? 0,
-          position[2] ?? 0,
-          normal[0] ?? 0,
-          normal[1] ?? 0,
-          normal[2] ?? 1,
-          uv[0] ?? 0,
-          uv[1] ?? 0,
-        ];
-        for (const value of values) {
-          output.writeFloatLE(Number.isFinite(value) ? value : 0, offset);
-          offset += 4;
-        }
+    output.writeUInt32LE(skinned ? 1 : 0, offset + 20);
+    offset += 24;
+    for (let vertex = 0; vertex < mesh.vertexCount; ++vertex) {
+      const position = mesh.positions[vertex] ?? [0, 0, 0];
+      const normal = mesh.normals[vertex] ?? [0, 0, 1];
+      const uv = mesh.uvs[vertex] ?? [0, 0];
+      const values = [
+        position[0] ?? 0,
+        position[1] ?? 0,
+        position[2] ?? 0,
+        normal[0] ?? 0,
+        normal[1] ?? 0,
+        normal[2] ?? 1,
+        uv[0] ?? 0,
+        uv[1] ?? 0,
+      ];
+      for (const value of values) {
+        output.writeFloatLE(Number.isFinite(value) ? value : 0, offset);
+        offset += 4;
       }
     }
     for (const index of mesh.indices) {
@@ -949,6 +949,52 @@ function serializeGeometry(parsed, animation, animationFrameCount) {
       output.writeUInt32LE(dominant[vertex] >>> 0, offset);
       offset += 4;
     }
+    if (skinned) {
+      const influences = mesh.androidSkinningInfluences;
+      for (let vertex = 0; vertex < mesh.vertexCount; ++vertex) {
+        const vertexInfluences = influences[vertex] ?? [];
+        for (
+          let influence = 0;
+          influence < MAX_SKIN_INFLUENCES;
+          ++influence
+        ) {
+          output.writeUInt16LE(
+            vertexInfluences[influence]?.boneIndex ?? 0xffff,
+            offset,
+          );
+          offset += 2;
+        }
+        for (
+          let influence = 0;
+          influence < MAX_SKIN_INFLUENCES;
+          ++influence
+        ) {
+          output.writeFloatLE(
+            vertexInfluences[influence]?.weight ?? 0,
+            offset,
+          );
+          offset += 4;
+        }
+      }
+      for (const frame of frames) {
+        for (const matrix of frame) {
+          for (
+            let element = 0;
+            element < SKINNING_MATRIX_FLOAT_COUNT;
+            ++element
+          ) {
+            const value = matrix[element] ?? 0;
+            output.writeFloatLE(Number.isFinite(value) ? value : 0, offset);
+            offset += 4;
+          }
+        }
+      }
+    }
+  }
+  if (offset !== output.length) {
+    throw new Error(
+      `geometry serialization size mismatch: ${offset} != ${output.length}`,
+    );
   }
   return { output, meshes };
 }
@@ -987,7 +1033,7 @@ async function writeAnimationVariant(
   }
   const converted = serializeGeometry(parsed, animation, animationFrames);
   const animatedMeshes = converted.meshes.filter(
-    (mesh) => mesh.androidAnimationFrames.length > 0,
+    (mesh) => mesh.androidSkinningFrames.length > 0,
   ).length;
   if (animatedMeshes === 0) {
     await rm(target, { force: true });
@@ -1034,7 +1080,7 @@ async function convertOne(
     options.animationFrames,
   );
   const animatedMeshes = primary.meshes.filter(
-    (mesh) => mesh.androidAnimationFrames.length > 0,
+    (mesh) => mesh.androidSkinningFrames.length > 0,
   ).length;
   await writeFile(target, primary.output);
 
