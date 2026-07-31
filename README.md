@@ -68,7 +68,12 @@ Campaign mission markers now open the shipped mission-briefing screen before
 combat instead of bypassing it. The port fills its original panels with the
 selected map's localized name, wrapped operations order, objective summary,
 and DDS minimap; Back returns to the chapter map and Play starts that exact
-mission.
+mission. Starting a new campaign now uses the `CampaignSelection2` screen
+registered by `GameRoot.xdb`, rather than the obsolete four-card descriptor.
+Its three production panels are populated from the real USA, Germany, and USSR
+campaign records with the original names, descriptions, DDS artwork, selected
+state, and four-level difficulty mapping before opening the selected campaign's
+chapter map.
 The map renderer now includes general `SObjectRPGStats` records in addition to
 buildings, fences, entrenchments, squads, and mechanized units. This restores
 the original mission's vegetation and small props through their converted

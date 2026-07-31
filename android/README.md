@@ -731,6 +731,27 @@ under the buttons. Invisible windows contribute no geometry and neither do
 their children, which is what keeps the hidden Single Player sub-panel from
 drawing over the main list.
 
+Campaign selection follows the screen registration in `GameRoot.xdb` and the
+original `CInterfaceCampaignSelectionMenu`: it opens
+`CampaignSelection2/CampaignSelection_WindowScreen.xdb`, hides the two unused
+test slots, and binds the three production campaign panels to the USA, Germany,
+and USSR `SCampaign` records. Each panel now shows its shipped localized name,
+wrapped description, and `TextureNotStarted` DDS; the selected panel exposes
+the original bright state while the other two retain their unselected overlay.
+The authored difficulty control is touch-cyclable through Easy, Normal, Hard,
+and Very Hard, and the original four-entry index remap is written into
+`selected_mission.txt` when the briefing starts combat. Campaign intro movies
+remain skipped until their source media is available, so Play currently moves
+directly to the selected campaign's chapter map.
+
+The ARM64 emulator resolved 44 windows for this screen and rendered all three
+campaign cards with 14 of 14 referenced textures ready. Selecting Germany,
+cycling from Normal to Hard, and pressing Play opened
+`Scenario/Campaigns/GER/Chapter1/chapter_map.dds` with five mission targets.
+Launching GER1.0 then wrote `campaign=1`, `chapter=0`, `mission=0`, and the
+correct remapped `difficulty=1`; the single-player runtime initialized
+`Scenario/Campaigns/GER/Chapter1/GER1.0/MapInfo.xdb`.
+
 Chapter-map mission targets now enter the shipped
 `MissionBriefing_WindowScreen.xdb` instead of writing a launch request
 immediately. Its runtime binding follows `CInterfaceMissionBriefing`: the
@@ -1540,10 +1561,13 @@ validated CPU fallback. The `SEffect::Models` schema path is not yet rendered,
 but a scan of all 178 shipped `Effect` descriptors found every `Models` list
 empty, so it is dormant schema rather than a missing shipped scene layer.
 The mission briefing route, text binding, minimap, Back, and Play behavior are
-linked; touch scrolling for orders longer than the authored viewport, the full
-chapter-map availability/highlight rules, and result rank/medal popups remain
-unfinished. The core Action Report, its reward rows, and per-marker chapter-map
-mission route are linked. Empty initial
+linked. The production campaign-selection route, cards, selection state,
+difficulty handoff, and selected chapter-map transition are linked; campaign
+intro playback is still bypassed while most referenced Bink sources are
+unavailable. Touch scrolling for text longer than the authored viewport, the
+full chapter-map availability/highlight rules, and result rank/medal popups
+remain unfinished. The core Action Report, its reward rows, and per-marker
+chapter-map mission route are linked. Empty initial
 dynamic-world snapshots are now accepted as valid, and entity removals between
 the snapshot count/copy calls no longer abort mission startup; this fixed
 campaign-map launch of `US1.2`.

@@ -1578,7 +1578,8 @@ struct MenuScreenRoute {
 
 constexpr MenuScreenRoute kMenuScreenRoutes[] = {
         {"campaign_selection",
-         "UI/Game/Menu/CampaignSelection_WindowScreen.xdb"},
+         "UI/Game/Menu/CampaignSelection2/"
+         "CampaignSelection_WindowScreen.xdb"},
         {"chapter_map", "UI/Game/Menu/ChapterMap_WindowScreen.xdb"},
         {"options", "UI/Game/Menu/OptionsMenu_WindowScreen.xdb"},
         {"Credits", "UI/Game/Menu/Credits_WindowScreen.xdb"},
@@ -1599,6 +1600,14 @@ namespace {
 int g_selected_campaign = 0;
 int g_selected_chapter = 0;
 int g_selected_mission = 0;
+// The original combo presents [Easy, Normal, Hard, Very Hard]. Campaign data
+// stores the four matching descriptors as [Normal, Hard, Very Hard, Easy],
+// and StartCampaign remaps the visible index before starting the tracker.
+int g_selected_difficulty = 1;
+
+constexpr const char* kCampaignSelectionScreenRef =
+        "UI/Game/Menu/CampaignSelection2/"
+        "CampaignSelection_WindowScreen.xdb";
 
 std::string JoinHostPath(const std::string& left, const std::string& right) {
     if (left.empty()) {
@@ -1632,6 +1641,20 @@ bool RequestCampaignLaunch(
     if (targets.empty()) {
         return false;
     }
+    int runtime_difficulty = g_selected_difficulty;
+    const NDb::SGameRoot* root = NGameX::GetGameRoot();
+    if (root != nullptr &&
+        campaign_index >= 0 &&
+        static_cast<size_t>(campaign_index) < root->campaigns.size()) {
+        const NDb::SCampaign* campaign =
+                root->campaigns[static_cast<size_t>(campaign_index)].GetPtr();
+        if (campaign != nullptr && campaign->difficultyLevels.size() == 4) {
+            runtime_difficulty =
+                    g_selected_difficulty == 0
+                            ? 3
+                            : g_selected_difficulty - 1;
+        }
+    }
     bool written = false;
     for (const std::string& target : targets) {
         std::ofstream file(target.c_str(), std::ios::trunc);
@@ -1641,6 +1664,7 @@ bool RequestCampaignLaunch(
         file << "campaign=" << campaign_index << "\n";
         file << "chapter=" << g_selected_chapter << "\n";
         file << "mission=" << mission_index << "\n";
+        file << "difficulty=" << runtime_difficulty << "\n";
         written = true;
     }
     if (!written) {
@@ -1649,7 +1673,9 @@ bool RequestCampaignLaunch(
     std::ostringstream report;
     report << "original_menu_launch=campaign; index=" << campaign_index
            << "; chapter=" << g_selected_chapter
-           << "; mission=" << mission_index;
+           << "; mission=" << mission_index
+           << "; difficulty_ui=" << g_selected_difficulty
+           << "; difficulty_db=" << runtime_difficulty;
     PlatformRuntime::instance().log_info(report.str());
     g_mission_launch_requested = true;
     return true;
@@ -1850,6 +1876,14 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
             std::ostringstream report;
             report << "original_menu_campaign=" << index;
             PlatformRuntime::instance().log_info(report.str());
+            std::string screen_ref;
+            {
+                std::lock_guard<std::mutex> guard(g_menu_mutex);
+                screen_ref = g_screen_ref;
+            }
+            if (screen_ref == kCampaignSelectionScreenRef) {
+                return LoadOriginalMenuScreen(screen_ref);
+            }
             return true;
         }
     }
@@ -1872,6 +1906,33 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
                 "MissionBriefing_WindowScreen.xdb") {
         return LoadOriginalMenuScreen(
                 "UI/Game/Menu/ChapterMap_WindowScreen.xdb");
+    }
+    if (reaction == "difficulty_cycle" &&
+        current_screen == kCampaignSelectionScreenRef) {
+        const NDb::SGameRoot* root = NGameX::GetGameRoot();
+        if (root == nullptr ||
+            g_selected_campaign < 0 ||
+            static_cast<size_t>(g_selected_campaign) >=
+                    root->campaigns.size()) {
+            return false;
+        }
+        const NDb::SCampaign* campaign =
+                root->campaigns[
+                        static_cast<size_t>(g_selected_campaign)].GetPtr();
+        if (campaign == nullptr || campaign->difficultyLevels.empty()) {
+            return false;
+        }
+        g_selected_difficulty =
+                (g_selected_difficulty + 1) %
+                static_cast<int>(campaign->difficultyLevels.size());
+        return LoadOriginalMenuScreen(current_screen);
+    }
+    // Campaign intros are not decodable on Android yet. Until the original
+    // movie path is restored, continue to the exact selected campaign's map
+    // instead of dropping the Play reaction.
+    if ((reaction == "Play" || reaction == "menu_play") &&
+        current_screen == kCampaignSelectionScreenRef) {
+        return RunOriginalMenuReaction("chapter_map");
     }
     // The chapter map is a screen of its own between picking a campaign and
     // the mission.
@@ -2012,6 +2073,77 @@ void ApplyScreenInitVisibilityLocked(const std::string& screen_ref) {
         if (screen_ref == hidden.screen_ref) {
             g_visibility_overrides[hidden.window_name] = false;
         }
+    }
+}
+
+void ApplyCampaignSelectionBindingsLocked(const std::string& screen_ref) {
+    if (screen_ref != kCampaignSelectionScreenRef) {
+        return;
+    }
+    const NDb::SGameRoot* root = NGameX::GetGameRoot();
+    const size_t campaign_count =
+            root == nullptr
+                    ? 0
+                    : std::min<size_t>(3, root->campaigns.size());
+    if (campaign_count == 0) {
+        g_selected_campaign = 0;
+    } else if (g_selected_campaign < 0 ||
+               static_cast<size_t>(g_selected_campaign) >= campaign_count) {
+        g_selected_campaign = 0;
+    }
+
+    if (root != nullptr && root->pInterfacesBackground) {
+        g_path_texture_overrides["Main"] =
+                root->pInterfacesBackground.GetPtr();
+    }
+
+    for (size_t slot = 0; slot < 5; ++slot) {
+        const std::string panel =
+                "Main/CampaignPanel" + std::to_string(slot + 1);
+        const bool available = slot < campaign_count;
+        g_path_visibility_overrides[panel] = available;
+        if (!available || root == nullptr) {
+            continue;
+        }
+        const NDb::SCampaign* campaign =
+                root->campaigns[slot].GetPtr();
+        if (campaign == nullptr) {
+            g_path_visibility_overrides[panel] = false;
+            continue;
+        }
+        g_path_visibility_overrides[panel + "/SelectCampaignBtn"] =
+                static_cast<int>(slot) != g_selected_campaign;
+        g_caption_overrides[panel + "/CampaignNameView"] =
+                LoadUtf16Text(NormalizeResourcePath(
+                        ToStdString(campaign->szLocalizedNameFileRef)));
+        // The controller pushes the description into the scroll container;
+        // suppress the descriptor's placeholder before the wrapped runtime
+        // copy is appended after layout.
+        g_caption_overrides[panel + "/DescCont/DescView"] =
+                std::string();
+        if (campaign->pTextureNotStarted) {
+            g_path_texture_overrides[panel + "/Flag"] =
+                    campaign->pTextureNotStarted.GetPtr();
+        }
+    }
+
+    const NDb::SCampaign* selected =
+            root != nullptr && campaign_count > 0
+                    ? root->campaigns[
+                              static_cast<size_t>(g_selected_campaign)]
+                              .GetPtr()
+                    : nullptr;
+    const int difficulty_count =
+            selected == nullptr
+                    ? 0
+                    : static_cast<int>(selected->difficultyLevels.size());
+    if (difficulty_count > 0) {
+        g_selected_difficulty = std::max(
+                0,
+                std::min(g_selected_difficulty, difficulty_count - 1));
+    } else {
+        g_selected_difficulty = 0;
+        g_path_visibility_overrides["Main/BottomPanel/Difficulty"] = false;
     }
 }
 
@@ -2167,6 +2299,7 @@ bool LoadOriginalMenuScreen(const std::string& screen_ref) {
     g_path_texture_overrides.clear();
     ApplyScreenInitVisibilityLocked(screen_ref);
     ApplyScreenInitTexturesLocked(screen_ref);
+    ApplyCampaignSelectionBindingsLocked(screen_ref);
     ResolveMenuBackgroundLocked();
     g_options_category = 0;
     return RebuildMenuScreenLocked(screen_ref);
@@ -2829,6 +2962,192 @@ void PopulateChapterMapLocked() {
     PlatformRuntime::instance().log_info(report.str());
 }
 
+// CInterfaceCampaignSelectionMenu builds this screen from the three campaigns
+// in GameRoot. The descriptors only contain reusable panel shells, so bind
+// their descriptions and controller-generated actions after exact layout is
+// known. The phone uses a tap-to-cycle difficulty control in the authored
+// combo rectangle; the values and StartCampaign index remap stay original.
+void PopulateCampaignSelectionLocked() {
+    const NDb::SGameRoot* root = NGameX::GetGameRoot();
+    if (root == nullptr) {
+        return;
+    }
+    const size_t campaign_count =
+            std::min<size_t>(3, root->campaigns.size());
+    for (size_t slot = 0; slot < campaign_count; ++slot) {
+        const NDb::SCampaign* campaign =
+                root->campaigns[slot].GetPtr();
+        if (campaign == nullptr) {
+            continue;
+        }
+        const std::string panel =
+                "Main/CampaignPanel" + std::to_string(slot + 1);
+        const std::string container_path = panel + "/DescCont";
+        const std::string view_path = container_path + "/DescView";
+        MenuWindowNode* select_button = nullptr;
+        const MenuWindowNode* container = nullptr;
+        const MenuWindowNode* view = nullptr;
+        for (MenuWindowNode& node : g_nodes) {
+            if (node.path == panel + "/SelectCampaignBtn") {
+                select_button = &node;
+            } else if (node.path == container_path) {
+                container = &node;
+            } else if (node.path == view_path) {
+                view = &node;
+            }
+        }
+        if (select_button != nullptr) {
+            select_button->action =
+                    "campaign0" + std::to_string(slot + 1);
+        }
+        if (container == nullptr || !container->visible) {
+            continue;
+        }
+        std::string description;
+        std::string description_format;
+        SplitMarkupTags(
+                LoadUtf16BriefingText(NormalizeResourcePath(
+                        ToStdString(campaign->szLocalizedDescFileRef))),
+                &description,
+                &description_format);
+        std::string merged_format =
+                view == nullptr ? std::string() : view->text_format;
+        if (!description_format.empty()) {
+            if (!merged_format.empty()) {
+                merged_format.push_back(' ');
+            }
+            merged_format += description_format;
+        }
+        const float inset = 8.0f;
+        const float scroll_bar_reserve = 20.0f;
+        AppendWrappedTextQuads(
+                description,
+                merged_format,
+                container->x + inset,
+                container->y + inset,
+                std::max(
+                        1.0f,
+                        container->width - inset * 2.0f -
+                                scroll_bar_reserve),
+                std::max(1.0f, container->height - inset * 2.0f),
+                view == nullptr ? std::string() : view->text_face,
+                view == nullptr ? 0u : view->text_argb);
+    }
+
+    MenuWindowNode* play = nullptr;
+    MenuWindowNode* back = nullptr;
+    MenuWindowNode* difficulty = nullptr;
+    for (MenuWindowNode& node : g_nodes) {
+        if (node.path == "Main/BottomPanel/PlayBtn") {
+            play = &node;
+        } else if (node.path == "Main/BottomPanel/BackBtn") {
+            back = &node;
+        } else if (node.path == "Main/BottomPanel/Difficulty") {
+            difficulty = &node;
+        }
+    }
+    if (play != nullptr) {
+        play->action = "menu_play";
+    }
+    if (back != nullptr) {
+        back->action = "menu_back";
+    }
+
+    std::string difficulty_name;
+    const NDb::SCampaign* selected =
+            g_selected_campaign >= 0 &&
+                    static_cast<size_t>(g_selected_campaign) <
+                            campaign_count
+                    ? root->campaigns[
+                              static_cast<size_t>(g_selected_campaign)]
+                              .GetPtr()
+                    : nullptr;
+    if (selected != nullptr && !selected->difficultyLevels.empty()) {
+        size_t db_index = static_cast<size_t>(g_selected_difficulty);
+        if (selected->difficultyLevels.size() == 4) {
+            db_index =
+                    g_selected_difficulty == 0
+                            ? 3
+                            : static_cast<size_t>(
+                                      g_selected_difficulty - 1);
+        }
+        if (db_index < selected->difficultyLevels.size() &&
+            selected->difficultyLevels[db_index]) {
+            const NDb::SDifficultyLevel* level =
+                    selected->difficultyLevels[db_index].GetPtr();
+            difficulty_name =
+                    LoadUtf16Text(NormalizeResourcePath(
+                            ToStdString(level->szLocalizedNameFileRef)));
+        }
+    }
+
+    const std::map<std::string, MenuTemplate>::const_iterator combo =
+            g_templates.find("Difficulty");
+    if (difficulty != nullptr && difficulty->visible &&
+        combo != g_templates.end() && combo->second.shared != nullptr) {
+        const NDb::SWindowComboBoxShared* combo_shared =
+                dynamic_cast<const NDb::SWindowComboBoxShared*>(
+                        combo->second.shared);
+        const NDb::SWindowMSButton* icon =
+                combo_shared == nullptr
+                        ? nullptr
+                        : combo_shared->pIcon.GetPtr();
+        const NDb::SWindowMSButtonShared* icon_shared =
+                icon == nullptr
+                        ? nullptr
+                        : dynamic_cast<const NDb::SWindowMSButtonShared*>(
+                                  SharedOf(icon));
+        if (icon_shared != nullptr &&
+            !icon_shared->visualStates.empty()) {
+            AppendBackgroundQuads(
+                    icon_shared->visualStates[0].normal.pBackground.GetPtr(),
+                    difficulty->x - 1.0f,
+                    difficulty->y,
+                    difficulty->width,
+                    difficulty->height);
+            difficulty->pressed_quad_begin =
+                    static_cast<int>(g_pressed_quads.size());
+            const size_t pressed_begin = g_quads.size();
+            AppendBackgroundQuads(
+                    icon_shared->visualStates[0].pushed.pBackground.GetPtr(),
+                    difficulty->x - 1.0f,
+                    difficulty->y,
+                    difficulty->width,
+                    difficulty->height);
+            g_pressed_quads.insert(
+                    g_pressed_quads.end(),
+                    g_quads.begin() + pressed_begin,
+                    g_quads.end());
+            difficulty->pressed_quad_end =
+                    static_cast<int>(g_pressed_quads.size());
+            g_quads.resize(pressed_begin);
+        }
+        AppendTextQuads(
+                difficulty_name,
+                LoadUtf16Text(
+                        "UI/Game/Common/Templates/TopLeft/"
+                        "CourierBold_17pt_Color_ffcecfce.txt"),
+                difficulty->x + 9.0f,
+                difficulty->y + 9.0f,
+                84.0f,
+                22.0f,
+                std::string(),
+                0u);
+        difficulty->button = true;
+        difficulty->enabled = !difficulty_name.empty();
+        difficulty->action = "difficulty_cycle";
+        ++g_button_count;
+    }
+
+    std::ostringstream report;
+    report << "original_menu_campaign_selection=ready"
+           << "; campaigns=" << campaign_count
+           << "; selected=" << g_selected_campaign
+           << "; difficulty_ui=" << g_selected_difficulty
+           << "; difficulty=" << difficulty_name;
+    PlatformRuntime::instance().log_info(report.str());
+}
+
 // CInterfaceMissionBriefing pushes the current map's two text resources into
 // scrollable containers and assigns its authored minimap texture. Android does
 // not link that legacy controller, so reproduce its data binding after the
@@ -2974,6 +3293,9 @@ bool RebuildMenuScreenLocked(const std::string& screen_ref) {
             std::string());
     if (screen_ref.find("OptionsMenu") != std::string::npos) {
         PopulateOptionsScreenLocked();
+    }
+    if (screen_ref == kCampaignSelectionScreenRef) {
+        PopulateCampaignSelectionLocked();
     }
     if (screen_ref == "UI/Game/Menu/ChapterMap_WindowScreen.xdb") {
         PopulateChapterMapLocked();
