@@ -60,6 +60,23 @@ blend total also includes its road and river passes. US1.2 produced 19 masked
 shadow layers and 199,194 projected triangles. Unit `5198` remained selectable
 over the restored vegetation and populated its original world ring, portrait,
 health card, and action grid.
+
+Shadow direction is no longer a global Android constant. The renderer resolves
+the map's `SAmbientLight`, applies the desktop shadow-pitch fallback rule, and
+projects with the descriptor's pitch/yaw. Opaque convex silhouettes are
+clipped per heightfield triangle, while alpha-masked foliage vertices sample
+the same terrain surface; both therefore follow slopes rather than floating
+at the object's base height. Crossed foliage cards use reduced opacity to
+avoid accumulating into the dark rectangular blocks visible in the earlier
+port. US1.0 resolved Summer Daylight pitch `27`, yaw `40`, vector
+`0.390319,-0.327517`, blur strength `1.5`, and a `193x193`
+shadow heightfield. It submitted 6,624 terrain-clipped opaque shadow triangles
+and 189,583 masked triangles in 19 foliage layers.
+`Data/Scene/Lights` is now an explicit sparse-checkout, staging, and
+incremental-install requirement.
+US1.2 then resolved the distinct Summer Sunset descriptor at pitch `50`, yaw
+`215`, vector `-0.976227,0.683562`, submitting 3,204 terrain-clipped opaque
+triangles and 199,194 masked triangles without a renderer failure.
 Combat presentation now also consumes real `SAIHitUpdate` records. The Android
 bridge follows the desktop shell mapping for hit, miss, reflection, ground,
 water, and air impacts, then snapshots the selected `SComplexEffect` variant.

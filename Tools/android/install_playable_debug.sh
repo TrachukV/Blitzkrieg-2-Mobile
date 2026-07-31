@@ -21,6 +21,7 @@ EFFECT_LIGHT_DESCRIPTOR_ROOT="Effects/_Lights"
 PROJECTILE_DESCRIPTOR_ROOT="Other/Projectile"
 TERRAIN_SPOT_DESCRIPTOR_ROOT="Spots"
 TERRAIN_SPOT_TEXTURE_ROOT="Scene/TexAndMats/All/Objects/TerraObjects"
+SCENE_LIGHT_ROOT="Scene/Lights"
 MUZZLE_FLASH="${EFFECT_TEXTURE_ROOT}/Shots/CannonShot/Shot8_Texture.dds"
 MACHINERY_COMBUSTION_DESCRIPTOR="${DESTRUCTION_DESCRIPTOR_ROOT}/MachineryCombustion_ComplexEffect.xdb"
 MACHINERY_COMBUSTION_TEXTURE="${EFFECT_TEXTURE_ROOT}/Destructions/Fire/FireSic0_Texture.dds"
@@ -31,6 +32,7 @@ BAZOOKA_PROJECTILE_TEXTURE="${PROJECTILE_DESCRIPTOR_ROOT}/All/Units/Weapons/Rock
 JET_EXHAUST_DESCRIPTOR="${EXHAUST_DESCRIPTOR_ROOT}/JetExhaust_ComplexEffect.xdb"
 TERRAIN_SPOT_DESCRIPTOR="${TERRAIN_SPOT_DESCRIPTOR_ROOT}/Grazes/02/1.xdb"
 TERRAIN_SPOT_TEXTURE="${TERRAIN_SPOT_TEXTURE_ROOT}/Grazes/02/1_Texture.dds"
+SCENE_LIGHT="${SCENE_LIGHT_ROOT}/All/Summer/Daylight_AmbientLight.xdb"
 
 if [[ -z "${ANDROID_HOME:-}" &&
       -d "${HOME}/Library/Android/sdk" ]]; then
@@ -143,12 +145,13 @@ if [[ ! -r "${DATA_SOURCE}/Data/${INFANTRY_TRACE}" ||
       ! -r "${DATA_SOURCE}/Data/${BAZOOKA_PROJECTILE_TEXTURE}" ||
       ! -r "${DATA_SOURCE}/Data/${JET_EXHAUST_DESCRIPTOR}" ||
       ! -r "${DATA_SOURCE}/Data/${TERRAIN_SPOT_DESCRIPTOR}" ||
-      ! -r "${DATA_SOURCE}/Data/${TERRAIN_SPOT_TEXTURE}" ]]; then
-    echo "Original tracer, particle, destruction, light, projectile, or terrain-spot assets are missing from DataAndroid." >&2
-    echo "Add the Units/Weapons, Other/Projectile, Scene/Effects/All/Destructions, Scene/Effects/All/Exhaust, Effects/_Lights, Scene/TexAndMats/All/Effects, Spots, and Scene/TexAndMats/All/Objects/TerraObjects paths documented in android/README.md to the sparse checkout." >&2
+      ! -r "${DATA_SOURCE}/Data/${TERRAIN_SPOT_TEXTURE}" ||
+      ! -r "${DATA_SOURCE}/Data/${SCENE_LIGHT}" ]]; then
+    echo "Original tracer, particle, destruction, light, projectile, terrain-spot, or scene-light assets are missing from DataAndroid." >&2
+    echo "Add the Units/Weapons, Other/Projectile, Scene/Effects/All/Destructions, Scene/Effects/All/Exhaust, Effects/_Lights, Scene/Lights, Scene/TexAndMats/All/Effects, Spots, and Scene/TexAndMats/All/Objects/TerraObjects paths documented in android/README.md to the sparse checkout." >&2
     exit 1
 fi
-echo "Staging original tracer, particle, destruction, light, projectile, and terrain-spot assets into app-private storage."
+echo "Staging original tracer, particle, destruction, light, projectile, terrain-spot, and scene-light assets into app-private storage."
 "${ADB_BIN}" shell run-as "${PACKAGE}" \
     mkdir -p "files/DataAndroid/Data/${TRACE_ASSET_ROOT}"
 "${ADB_BIN}" shell run-as "${PACKAGE}" \
@@ -163,6 +166,8 @@ echo "Staging original tracer, particle, destruction, light, projectile, and ter
     mkdir -p "files/DataAndroid/Data/Spots"
 "${ADB_BIN}" shell run-as "${PACKAGE}" \
     mkdir -p "files/DataAndroid/Data/Scene/TexAndMats/All/Objects"
+"${ADB_BIN}" shell run-as "${PACKAGE}" \
+    mkdir -p "files/DataAndroid/Data/Scene/Lights"
 COPYFILE_DISABLE=1 tar -chf - -C "${DATA_SOURCE}/Data" \
     "${INFANTRY_TRACE}" "${MECHANIZED_TRACE}" \
     "${DESTRUCTION_DESCRIPTOR_ROOT}" \
@@ -171,7 +176,8 @@ COPYFILE_DISABLE=1 tar -chf - -C "${DATA_SOURCE}/Data" \
     "${EFFECT_TEXTURE_ROOT}" \
     "${PROJECTILE_DESCRIPTOR_ROOT}" \
     "${TERRAIN_SPOT_DESCRIPTOR_ROOT}" \
-    "${TERRAIN_SPOT_TEXTURE_ROOT}" |
+    "${TERRAIN_SPOT_TEXTURE_ROOT}" \
+    "${SCENE_LIGHT_ROOT}" |
     "${ADB_BIN}" shell run-as "${PACKAGE}" tar -xf - \
         -C files/DataAndroid/Data
 

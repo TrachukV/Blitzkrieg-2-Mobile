@@ -86,6 +86,7 @@ REQUIRED_RUNTIME_DIRS = [
     Path("Data/Consts"),
     Path("Data/Other/Text"),
     Path("Data/Spots"),
+    Path("Data/Scene/Lights"),
     Path("Data/Scene/TexAndMats/All/Objects/TerraObjects"),
 ]
 

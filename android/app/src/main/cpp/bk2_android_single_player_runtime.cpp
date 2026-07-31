@@ -181,6 +181,21 @@ bool g_terrain_spot_texture_logged = false;
 bool g_turret_pose_logged = false;
 // Mirrors the shipped gfx_noshadows option, refreshed once a frame.
 bool g_shadows_disabled = false;
+struct ShadowProjectionSettings {
+    float x_per_height = 0.42f;
+    float y_per_height = -0.28f;
+    float pitch_degrees = 0.0f;
+    float yaw_degrees = 0.0f;
+    float blur_strength = 0.0f;
+    uint32_t solid_argb = 0x5811170du;
+    uint32_t alpha_masked_argb = 0x2011170du;
+    bool descriptor_ready = false;
+};
+ShadowProjectionSettings g_shadow_projection;
+std::vector<float> g_shadow_terrain_heights;
+int g_shadow_terrain_width = 0;
+int g_shadow_terrain_height = 0;
+size_t g_terrain_conforming_shadow_triangle_count = 0;
 bool g_wheel_roll_logged = false;
 size_t g_wheel_roll_part_count = 0;
 size_t g_track_scroll_part_count = 0;
@@ -1500,6 +1515,123 @@ float TerrainHeightAt(
     const float top = h00 + (h10 - h00) * tx;
     const float bottom = h01 + (h11 - h01) * tx;
     return top + (bottom - top) * ty;
+}
+
+float ShadowTerrainHeightAt(float world_x, float world_y) {
+    if (g_shadow_terrain_width < 2 ||
+        g_shadow_terrain_height < 2 ||
+        g_shadow_terrain_heights.size() !=
+                static_cast<size_t>(
+                        g_shadow_terrain_width *
+                        g_shadow_terrain_height)) {
+        return 0.0f;
+    }
+    const float grid_x = std::clamp(
+            world_x / VIS_TILE_SIZE,
+            0.0f,
+            static_cast<float>(g_shadow_terrain_width - 1));
+    const float grid_y = std::clamp(
+            world_y / VIS_TILE_SIZE,
+            0.0f,
+            static_cast<float>(g_shadow_terrain_height - 1));
+    const int x0 = std::min(
+            static_cast<int>(grid_x),
+            g_shadow_terrain_width - 2);
+    const int y0 = std::min(
+            static_cast<int>(grid_y),
+            g_shadow_terrain_height - 2);
+    const int x1 = x0 + 1;
+    const int y1 = y0 + 1;
+    const float tx = grid_x - static_cast<float>(x0);
+    const float ty = grid_y - static_cast<float>(y0);
+    const auto height_at = [](int grid_x_value, int grid_y_value) {
+        return g_shadow_terrain_heights[
+                static_cast<size_t>(
+                        grid_y_value * g_shadow_terrain_width +
+                        grid_x_value)];
+    };
+    const float top =
+            height_at(x0, y0) +
+            (height_at(x1, y0) - height_at(x0, y0)) * tx;
+    const float bottom =
+            height_at(x0, y1) +
+            (height_at(x1, y1) - height_at(x0, y1)) * tx;
+    return top + (bottom - top) * ty;
+}
+
+void ConfigureShadowProjection(
+        const NDb::SMapInfo* map,
+        const STerrainInfo& terrain_info) {
+    g_shadow_projection = ShadowProjectionSettings();
+    g_shadow_terrain_width = HeightWidth(terrain_info);
+    g_shadow_terrain_height = HeightHeight(terrain_info);
+    g_shadow_terrain_heights.clear();
+    g_terrain_conforming_shadow_triangle_count = 0;
+    if (g_shadow_terrain_width >= 2 &&
+        g_shadow_terrain_height >= 2) {
+        g_shadow_terrain_heights.resize(
+                static_cast<size_t>(
+                        g_shadow_terrain_width *
+                        g_shadow_terrain_height));
+        for (int y = 0; y < g_shadow_terrain_height; ++y) {
+            for (int x = 0; x < g_shadow_terrain_width; ++x) {
+                g_shadow_terrain_heights[
+                        static_cast<size_t>(
+                                y * g_shadow_terrain_width + x)] =
+                        BaseHeight(terrain_info, x, y) +
+                        AddedHeight(terrain_info, x, y);
+            }
+        }
+    }
+
+    const NDb::SAmbientLight* light =
+            map != nullptr && map->pLight
+            ? map->pLight.GetPtr()
+            : nullptr;
+    if (light != nullptr) {
+        const float pitch =
+                light->fShadowPitch == 100.0f
+                ? light->fPitch
+                : light->fShadowPitch;
+        const float yaw =
+                light->fShadowPitch == 100.0f
+                ? light->fYaw
+                : light->fShadowYaw;
+        if (std::isfinite(pitch) &&
+            std::isfinite(yaw) &&
+            pitch > 0.1f &&
+            pitch < 89.0f) {
+            const float pitch_radians = pitch * kPi / 180.0f;
+            const float yaw_radians = yaw * kPi / 180.0f;
+            const float horizontal_per_height =
+                    std::tan(pitch_radians);
+            g_shadow_projection.x_per_height =
+                    horizontal_per_height * std::cos(yaw_radians);
+            g_shadow_projection.y_per_height =
+                    -horizontal_per_height * std::sin(yaw_radians);
+            g_shadow_projection.pitch_degrees = pitch;
+            g_shadow_projection.yaw_degrees = yaw;
+            g_shadow_projection.blur_strength =
+                    std::max(light->fBlurStrength, 0.0f);
+            g_shadow_projection.descriptor_ready = true;
+        }
+    }
+
+    std::ostringstream report;
+    report << "shadow_projection="
+           << (g_shadow_projection.descriptor_ready
+                       ? "descriptor"
+                       : "fallback")
+           << "; pitch=" << g_shadow_projection.pitch_degrees
+           << "; yaw=" << g_shadow_projection.yaw_degrees
+           << "; vector="
+           << g_shadow_projection.x_per_height << ","
+           << g_shadow_projection.y_per_height
+           << "; blur=" << g_shadow_projection.blur_strength
+           << "; terrain="
+           << g_shadow_terrain_width << "x"
+           << g_shadow_terrain_height;
+    PlatformRuntime::instance().log_info(report.str());
 }
 
 uint32_t ArgbToAbgr(uint32_t argb) {
@@ -4929,19 +5061,6 @@ void AppendProjectedShadowHull(
     if (hull.size() < 3) {
         return;
     }
-    const uint32_t vertex_base =
-            static_cast<uint32_t>(mesh->vertices.size());
-    constexpr uint32_t kShadowArgb = 0x5811170du;
-    const uint32_t shadow_abgr = ArgbToAbgr(kShadowArgb);
-    for (const ProjectedShadowPoint& point : hull) {
-        mesh->vertices.push_back(TerrainVertex{
-                x + point.x,
-                y + point.y,
-                z + 0.08f,
-                0.0f,
-                0.0f,
-                shadow_abgr});
-    }
     WorldObjectMesh::Layer* shadow_layer =
             FindOrAddWorldObjectLayer(
                     mesh,
@@ -4950,12 +5069,185 @@ void AppendProjectedShadowHull(
         return;
     }
     shadow_layer->alpha_blended = true;
-    for (uint32_t index = 1;
-         index + 1 < static_cast<uint32_t>(hull.size());
-         ++index) {
-        shadow_layer->triangle_indices.push_back(vertex_base);
-        shadow_layer->triangle_indices.push_back(vertex_base + index);
-        shadow_layer->triangle_indices.push_back(vertex_base + index + 1);
+
+    const uint32_t shadow_abgr =
+            ArgbToAbgr(g_shadow_projection.solid_argb);
+    if (g_shadow_terrain_width < 2 ||
+        g_shadow_terrain_height < 2) {
+        const uint32_t vertex_base =
+                static_cast<uint32_t>(mesh->vertices.size());
+        for (const ProjectedShadowPoint& point : hull) {
+            mesh->vertices.push_back(TerrainVertex{
+                    x + point.x,
+                    y + point.y,
+                    z + 0.08f,
+                    0.0f,
+                    0.0f,
+                    shadow_abgr});
+        }
+        for (uint32_t index = 1;
+             index + 1 < static_cast<uint32_t>(hull.size());
+             ++index) {
+            shadow_layer->triangle_indices.push_back(vertex_base);
+            shadow_layer->triangle_indices.push_back(vertex_base + index);
+            shadow_layer->triangle_indices.push_back(vertex_base + index + 1);
+        }
+        return;
+    }
+
+    struct ShadowTerrainVertex {
+        float x;
+        float y;
+        float z;
+    };
+    std::vector<ProjectedShadowPoint> world_hull;
+    world_hull.reserve(hull.size());
+    float minimum_x = std::numeric_limits<float>::max();
+    float minimum_y = std::numeric_limits<float>::max();
+    float maximum_x = std::numeric_limits<float>::lowest();
+    float maximum_y = std::numeric_limits<float>::lowest();
+    for (const ProjectedShadowPoint& point : hull) {
+        const ProjectedShadowPoint world_point{
+                x + point.x,
+                y + point.y};
+        world_hull.push_back(world_point);
+        minimum_x = std::min(minimum_x, world_point.x);
+        minimum_y = std::min(minimum_y, world_point.y);
+        maximum_x = std::max(maximum_x, world_point.x);
+        maximum_y = std::max(maximum_y, world_point.y);
+    }
+    const int first_tile_x = std::clamp(
+            static_cast<int>(std::floor(minimum_x / VIS_TILE_SIZE)),
+            0,
+            g_shadow_terrain_width - 2);
+    const int first_tile_y = std::clamp(
+            static_cast<int>(std::floor(minimum_y / VIS_TILE_SIZE)),
+            0,
+            g_shadow_terrain_height - 2);
+    const int last_tile_x = std::clamp(
+            static_cast<int>(std::floor(maximum_x / VIS_TILE_SIZE)),
+            0,
+            g_shadow_terrain_width - 2);
+    const int last_tile_y = std::clamp(
+            static_cast<int>(std::floor(maximum_y / VIS_TILE_SIZE)),
+            0,
+            g_shadow_terrain_height - 2);
+    const auto cross = [](
+            const ProjectedShadowPoint& edge_start,
+            const ProjectedShadowPoint& edge_end,
+            const ShadowTerrainVertex& point) {
+        return (edge_end.x - edge_start.x) *
+                        (point.y - edge_start.y) -
+                (edge_end.y - edge_start.y) *
+                        (point.x - edge_start.x);
+    };
+    const auto clip_to_hull =
+            [&](std::vector<ShadowTerrainVertex> polygon) {
+        for (size_t edge_index = 0;
+             edge_index < world_hull.size() && !polygon.empty();
+             ++edge_index) {
+            const ProjectedShadowPoint& edge_start =
+                    world_hull[edge_index];
+            const ProjectedShadowPoint& edge_end =
+                    world_hull[(edge_index + 1) % world_hull.size()];
+            std::vector<ShadowTerrainVertex> output;
+            output.reserve(polygon.size() + 1);
+            ShadowTerrainVertex previous = polygon.back();
+            float previous_distance =
+                    cross(edge_start, edge_end, previous);
+            bool previous_inside = previous_distance >= -0.0001f;
+            for (const ShadowTerrainVertex& current : polygon) {
+                const float current_distance =
+                        cross(edge_start, edge_end, current);
+                const bool current_inside =
+                        current_distance >= -0.0001f;
+                if (current_inside != previous_inside) {
+                    const float denominator =
+                            previous_distance - current_distance;
+                    const float amount =
+                            std::abs(denominator) > 0.000001f
+                            ? std::clamp(
+                                      previous_distance / denominator,
+                                      0.0f,
+                                      1.0f)
+                            : 0.0f;
+                    output.push_back(ShadowTerrainVertex{
+                            previous.x +
+                                    (current.x - previous.x) * amount,
+                            previous.y +
+                                    (current.y - previous.y) * amount,
+                            previous.z +
+                                    (current.z - previous.z) * amount});
+                }
+                if (current_inside) {
+                    output.push_back(current);
+                }
+                previous = current;
+                previous_distance = current_distance;
+                previous_inside = current_inside;
+            }
+            polygon = std::move(output);
+        }
+        return polygon;
+    };
+    const auto terrain_vertex = [](float world_x, float world_y) {
+        return ShadowTerrainVertex{
+                world_x,
+                world_y,
+                ShadowTerrainHeightAt(world_x, world_y) + 0.08f};
+    };
+    for (int tile_y = first_tile_y;
+         tile_y <= last_tile_y;
+         ++tile_y) {
+        for (int tile_x = first_tile_x;
+             tile_x <= last_tile_x;
+             ++tile_x) {
+            const float left =
+                    static_cast<float>(tile_x) * VIS_TILE_SIZE;
+            const float top =
+                    static_cast<float>(tile_y) * VIS_TILE_SIZE;
+            const float right = left + VIS_TILE_SIZE;
+            const float bottom = top + VIS_TILE_SIZE;
+            const std::array<std::array<ShadowTerrainVertex, 3>, 2>
+                    triangles{{
+                            {terrain_vertex(left, top),
+                             terrain_vertex(left, bottom),
+                             terrain_vertex(right, top)},
+                            {terrain_vertex(right, top),
+                             terrain_vertex(left, bottom),
+                             terrain_vertex(right, bottom)}}};
+            for (const auto& triangle : triangles) {
+                std::vector<ShadowTerrainVertex> polygon(
+                        triangle.begin(),
+                        triangle.end());
+                polygon = clip_to_hull(std::move(polygon));
+                if (polygon.size() < 3) {
+                    continue;
+                }
+                const uint32_t vertex_base =
+                        static_cast<uint32_t>(mesh->vertices.size());
+                for (const ShadowTerrainVertex& point : polygon) {
+                    mesh->vertices.push_back(TerrainVertex{
+                            point.x,
+                            point.y,
+                            point.z,
+                            0.0f,
+                            0.0f,
+                            shadow_abgr});
+                }
+                for (uint32_t index = 1;
+                     index + 1 <
+                             static_cast<uint32_t>(polygon.size());
+                     ++index) {
+                    shadow_layer->triangle_indices.push_back(vertex_base);
+                    shadow_layer->triangle_indices.push_back(
+                            vertex_base + index);
+                    shadow_layer->triangle_indices.push_back(
+                            vertex_base + index + 1);
+                    ++g_terrain_conforming_shadow_triangle_count;
+                }
+            }
+        }
     }
 }
 
@@ -4976,8 +5268,6 @@ void AppendProjectedGeometryShadow(
     if (mesh == nullptr) {
         return;
     }
-    constexpr float kShadowProjectionX = 0.42f;
-    constexpr float kShadowProjectionY = -0.28f;
     const float heading = std::atan2(sine, cosine);
     const size_t heading_bucket = static_cast<size_t>(
             ((static_cast<int>(std::lround(
@@ -5057,8 +5347,12 @@ void AppendProjectedGeometryShadow(
                     &local_height);
             local_height = std::max(local_height, 0.0f);
             points.push_back({
-                    local_x + local_height * kShadowProjectionX,
-                    local_y + local_height * kShadowProjectionY});
+                    local_x +
+                            local_height *
+                                    g_shadow_projection.x_per_height,
+                    local_y +
+                            local_height *
+                                    g_shadow_projection.y_per_height});
         }
     }
     if (points.size() < 3) {
@@ -5149,10 +5443,8 @@ void AppendAlphaMaskedGeometryShadow(
     if (mesh == nullptr || binding.texture_paths.empty()) {
         return;
     }
-    constexpr float kShadowProjectionX = 0.42f;
-    constexpr float kShadowProjectionY = -0.28f;
-    constexpr uint32_t kShadowArgb = 0x3411170du;
-    const uint32_t shadow_abgr = ArgbToAbgr(kShadowArgb);
+    const uint32_t shadow_abgr =
+            ArgbToAbgr(g_shadow_projection.alpha_masked_argb);
     int material_base = 0;
     std::vector<ConvertedGeometryVertex> skinning_scratch;
     for (size_t part_index = 0;
@@ -5183,10 +5475,22 @@ void AppendAlphaMaskedGeometryShadow(
                     &local_y,
                     &local_height);
             local_height = std::max(local_height, 0.0f);
+            const float shadow_x =
+                    x + local_x +
+                    local_height *
+                            g_shadow_projection.x_per_height;
+            const float shadow_y =
+                    y + local_y +
+                    local_height *
+                            g_shadow_projection.y_per_height;
             mesh->vertices.push_back(TerrainVertex{
-                    x + local_x + local_height * kShadowProjectionX,
-                    y + local_y + local_height * kShadowProjectionY,
-                    z + 0.08f,
+                    shadow_x,
+                    shadow_y,
+                    g_shadow_terrain_width >= 2
+                            ? ShadowTerrainHeightAt(
+                                      shadow_x,
+                                      shadow_y) + 0.08f
+                            : z + 0.08f,
                     vertex.u,
                     vertex.v,
                     shadow_abgr});
@@ -7193,6 +7497,8 @@ void BuildPresentationStaticWorldMesh(
     g_material_alpha_test_triangle_count = 0;
     g_material_alpha_blend_layer_count = 0;
     g_material_alpha_blend_triangle_count = 0;
+    size_t masked_shadow_layers = 0;
+    size_t masked_shadow_triangles = 0;
     for (const WorldObjectMesh::Layer& layer : mesh->layers) {
         if (layer.alpha_tested && !layer.alpha_masked_shadow) {
             ++g_material_alpha_test_layer_count;
@@ -7204,6 +7510,11 @@ void BuildPresentationStaticWorldMesh(
             !layer.alpha_masked_shadow) {
             ++g_material_alpha_blend_layer_count;
             g_material_alpha_blend_triangle_count +=
+                    layer.triangle_indices.size() / 3;
+        }
+        if (layer.alpha_masked_shadow) {
+            ++masked_shadow_layers;
+            masked_shadow_triangles +=
                     layer.triangle_indices.size() / 3;
         }
     }
@@ -7219,6 +7530,18 @@ void BuildPresentationStaticWorldMesh(
             << "; blend_triangles="
             << g_material_alpha_blend_triangle_count;
     PlatformRuntime::instance().log_info(material_report.str());
+    std::ostringstream shadow_report;
+    shadow_report
+            << "terrain_shadows=ready"
+            << "; projection="
+            << (g_shadow_projection.descriptor_ready
+                        ? "descriptor"
+                        : "fallback")
+            << "; opaque_conforming_triangles="
+            << g_terrain_conforming_shadow_triangle_count
+            << "; masked_layers=" << masked_shadow_layers
+            << "; masked_triangles=" << masked_shadow_triangles;
+    PlatformRuntime::instance().log_info(shadow_report.str());
 }
 
 void ReportGeometryFallbacksLocked() {
@@ -9098,6 +9421,7 @@ bool InitializeSinglePlayerRuntime() {
     WaterMesh water_mesh;
     BuildWaterMesh(map, terrain_info, &water_mesh);
     WorldObjectMesh presentation_world_mesh;
+    ConfigureShadowProjection(map, terrain_info);
     // Scene object shadows are baked into the static mesh, so the option has
     // to be read before it is built, not just before the first frame.
     g_shadows_disabled = ReadShadowsDisabledOption();
@@ -9349,6 +9673,11 @@ void ShutdownSinglePlayerRuntime() {
     g_missing_stand_transition_converted_geometries.clear();
     g_death_animation_start_seconds.clear();
     g_projected_shadow_hulls.clear();
+    g_shadow_projection = ShadowProjectionSettings();
+    g_shadow_terrain_heights.clear();
+    g_shadow_terrain_width = 0;
+    g_shadow_terrain_height = 0;
+    g_terrain_conforming_shadow_triangle_count = 0;
     g_stats_geometry_index.clear();
     g_stats_geometry_variants.clear();
     g_stats_geometry_index_loaded = false;
@@ -10271,6 +10600,15 @@ std::string SinglePlayerRuntimeReport() {
            << alpha_masked_shadow_layers
            << "; alpha_masked_shadow_triangles="
            << alpha_masked_shadow_triangles
+           << "; shadow_projection="
+           << (g_shadow_projection.descriptor_ready
+                       ? "descriptor"
+                       : "fallback")
+           << "; shadow_vector="
+           << g_shadow_projection.x_per_height << ","
+           << g_shadow_projection.y_per_height
+           << "; terrain_conforming_shadow_triangles="
+           << g_terrain_conforming_shadow_triangle_count
            << "; converted_geometry_cache="
            << g_converted_geometries.size()
            << "; missing_converted_geometry="

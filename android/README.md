@@ -321,6 +321,7 @@ git sparse-checkout add \
   Versions/Current/Data/Other/Projectile \
   Versions/Current/Data/Spots \
   Versions/Current/Data/Scene/Effects/All/Exhaust \
+  Versions/Current/Data/Scene/Lights \
   Versions/Current/Data/Scene/TexAndMats/All/Effects \
   Versions/Current/Data/Scene/TexAndMats/All/Objects/TerraObjects \
   Versions/Current/Data/Scene/TexAndMats/All/Units/Weapons \
@@ -1155,6 +1156,26 @@ runtime pass reported
 layers and 199,194 projected triangles. Selecting unit `5198` still populated
 its world ring, portrait, health card, and action grid over the restored
 vegetation.
+
+Projected shadows now use each map's original `SAmbientLight` rather than the
+old fixed Android vector. The renderer follows the desktop
+`fShadowPitch == 100` rule, derives the ground projection from the selected
+light pitch/yaw, and reports the resolved vector at mission startup. Opaque
+silhouette hulls are clipped against the two real heightfield triangles in
+every covered tile, so their vertices follow hills instead of occupying one
+flat plane. Alpha-masked foliage shadows sample the same terrain height at
+every projected Granny vertex and use lower per-card opacity to limit the dark
+overdraw produced by crossed billboards. US1.0 resolved its shipped Summer
+Daylight light as pitch `27`, yaw `40`, vector
+`0.390319,-0.327517`, and blur strength `1.5` on a `193x193`
+heightfield. That run generated 6,624 terrain-clipped opaque shadow triangles
+plus 189,583 masked triangles across 19 foliage layers. Sparse and incremental
+installs now include `Data/Scene/Lights`; without that content the renderer
+explicitly reports and uses its legacy fallback vector.
+US1.2 independently selected its Summer Sunset descriptor and changed the
+projection to pitch `50`, yaw `215`, vector
+`-0.976227,0.683562`; it rendered 3,204 terrain-clipped opaque triangles and
+199,194 masked triangles without a process or renderer failure.
 
 The F10 menu
 now owns an explicit native user-pause state rather than merely
