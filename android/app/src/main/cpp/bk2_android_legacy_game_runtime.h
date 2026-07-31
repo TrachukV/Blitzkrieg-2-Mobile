@@ -8,6 +8,7 @@ struct STerrainInfo;
 
 namespace NDb {
 struct SMapInfo;
+struct STexture;
 }
 
 namespace bk2::android {
@@ -102,6 +103,12 @@ struct LegacyMissionStatisticsPlayer {
     int reinforcements_called = 0;
 };
 
+struct LegacyMissionStatisticsReward {
+    std::string name_ref;
+    const NDb::STexture* icon_texture = nullptr;
+    bool upgrade = false;
+};
+
 struct LegacyMissionStatisticsSnapshot {
     bool available = false;
     bool won = false;
@@ -116,6 +123,7 @@ struct LegacyMissionStatisticsSnapshot {
     int campaign_experience_absolute = 0;
     int campaign_experience_max = 0;
     std::vector<LegacyMissionStatisticsPlayer> players;
+    std::vector<LegacyMissionStatisticsReward> rewards;
 };
 
 bool InitializeLegacyGameRuntime(

@@ -172,9 +172,10 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   killer/victim players, reinforcement types, infantry classification, and
   experience price for campaign matrices, player XP, and leader progress.
   Reinforcement XP-level mutations for non-leader units, the munchkin medal
-  check, the result-screen reward/rank popup graph, and the final legacy save
+  check, the result-screen rank/medal popup graph, and the final legacy save
   object graph are still not linked. The shipped `SingleStatistics2` Action
-  Report screen itself is now live and populated from the tracker snapshot.
+  Report screen itself is now live and populated from the tracker snapshot,
+  including up to four real reward reinforcement/upgrade rows.
   The bridge can now continue the current campaign/chapter state into another
   enabled mission with `StartCurrentCampaignMissionState()` or
   `StartFirstEnabledCampaignMissionState()` without resetting player XP, won
@@ -1140,12 +1141,17 @@ Report instead of the temporary Android victory/defeat overlay. The screen
 shows the original success/failure header, real participating-player
 statistics and party flags, mission/campaign time, rank progress, and the
 original Restart, Exit to Chapter, or Next navigation for the outcome.
+Campaign wins also show the original reinforcement reward rows with their
+localized new-branch/upgrade prefix, branch name, and 38x38 shipped icon.
 Previously those `local_win`/`local_loose` events were discarded because the
 old desktop `WorldClient` was not linked. The in-game `Surrender` action uses
 the same defeat path. On the ARM64 emulator, victory was verified with three
 player rows and 9-second mission/campaign time; defeat was verified at 25
 seconds, Restart relaunched the same mission and restored the HUD, and Next
-opened the shipped USA Chapter 1 map.
+opened the shipped USA Chapter 1 map. Selecting the `US1.2` marker on that map
+now launches mission index 2 instead of always falling back to the
+chapter-final index 0; its Action Report was verified with the real Main
+Infantry upgrade and Bombers branch rewards and their original icons.
 Successful missions now also persist `android_autosave.bk2checkpoint`. The
 selector exposes **Continue campaign** only when that checkpoint exists; it
 restores the campaign state, advances a completed chapter when necessary, and
@@ -1388,9 +1394,11 @@ global `InitialPlacement` is intentionally not reapplied because shipped
 infantry geometry already contains the correct root placement. Standing-to-prone
 and prone-to-standing transition clips, GPU/runtime skinning, original
 effect-attached Granny geometry, complete briefing HUD behavior, the full
-interactive chapter-map mission graph, and result reward/rank/medal popups
-remain unfinished. The core Action Report and its chapter-map navigation route
-are linked.
+chapter-map availability/highlight rules, and result rank/medal popups remain
+unfinished. The core Action Report, its reward rows, and per-marker chapter-map
+mission launch route are linked. Empty initial dynamic-world snapshots are now
+accepted as valid, and entity removals between the snapshot count/copy calls no
+longer abort mission startup; this fixed campaign-map launch of `US1.2`.
 
 The video transcode manifest now writes Android-canonical runtime paths. A Bink
 ref such as `Movies\Nival.bik` maps to `DataAndroid/Movies/Nival.mp4`, not to a

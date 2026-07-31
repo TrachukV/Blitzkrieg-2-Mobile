@@ -540,9 +540,9 @@ collection remain follow-up work.
   XP, leader XP, leader loss debt, score, and campaign win statistics. The real
   simulation/`MapObj` kill feed is not wired into the bridge yet; non-leader
   reinforcement XP-level mutations, the munchkin medal check, and the
-  result-screen reward/rank popup graph are still not linked. The shipped
+  result-screen rank/medal popup graph are still not linked. The shipped
   `SingleStatistics2` Action Report screen is linked and populated from a real
-  tracker snapshot.
+  tracker snapshot, including the original reinforcement reward/upgrade rows.
   `NativeBridge.runMissionProgressionProbe()` now performs a temporary real
   campaign mission progression smoke test with objective/reward preference,
   applies objective XP, statistics, a reinforcement call, leader assignment,
@@ -645,12 +645,25 @@ clips, effect-attached Granny geometry, terrain-conforming shadow maps, more
 complete legacy shader translation, and post effects. The original
 `SingleStatistics2` Action Report is now live: it renders the shipped layout,
 participating-player rows and flags, mission/campaign time, rank progress, and
-outcome-specific navigation from the real mission statistics snapshot. ARM64
-validation covered victory, Surrender defeat, same-mission Restart, and Next to
-the shipped chapter map. UI work still includes the complete briefing flow,
-the full interactive chapter-map mission graph, reward/rank/medal result
-popups, and replacement of temporary immediate-mode stubs with proper batching
-and render-target behavior.
+outcome-specific navigation from the real mission statistics snapshot. It also
+reads `SMissionStats::bonusReinforcements` and `oldReinfs` to render up to four
+localized new-branch/upgrade rows with the shipped reinforcement icons. ARM64
+validation covered victory, Surrender defeat, same-mission Restart, Next to the
+shipped chapter map, and direct selection of `US1.2` from its generated map
+marker. That mission produced the expected Main Infantry upgrade and Bombers
+branch rows. The chapter targets now preserve their mission index instead of
+all launching path index 0. UI work still includes the complete briefing flow,
+chapter-map availability/highlight rules, rank/medal result popups, and
+replacement of temporary immediate-mode stubs with proper batching and
+render-target behavior.
+
+Mission startup also treats an empty initial dynamic-world mesh as valid:
+static scenery is uploaded separately and later presentation generations fill
+the dynamic buffer. If AI retires an entity between the snapshot count and
+copy calls, Android keeps the complete shortened copy instead of aborting the
+mission. Together these changes removed the intermittent
+`dynamic_world_snapshot_failed` seen when launching `US1.2` from the chapter
+map.
 
 ## Current Content Evidence
 

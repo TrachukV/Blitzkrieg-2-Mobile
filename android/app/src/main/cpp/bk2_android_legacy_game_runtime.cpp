@@ -5769,6 +5769,44 @@ LegacyMissionStatisticsSnapshot CopyLegacyMissionStatisticsSnapshot() {
                         IScenarioTracker::ESK_REINFORCEMENTS_CALLED);
         snapshot.players.push_back(std::move(row));
     }
+
+    const IScenarioTracker::SMissionStats* mission_statistics =
+            g_scenario_tracker->GetMissionStats(mission);
+    constexpr size_t kStatisticsRewardRows = 4;
+    if (mission_statistics != nullptr) {
+        for (size_t index = 0;
+             index < mission_statistics->bonusReinforcements.size() &&
+             snapshot.rewards.size() < kStatisticsRewardRows;
+             ++index) {
+            const NDb::SReinforcement* reinforcement =
+                    mission_statistics->bonusReinforcements[index].GetPtr();
+            if (reinforcement == nullptr) {
+                continue;
+            }
+            LegacyMissionStatisticsReward reward;
+            reward.name_ref =
+                    reinforcement->szLocalizedNameFileRef.c_str();
+            if (reinforcement->pIconTexture) {
+                reward.icon_texture =
+                        reinforcement->pIconTexture.GetPtr();
+            }
+            for (const IScenarioTracker::SMissionStats::SOldReinf&
+                         old_reinforcement :
+                 mission_statistics->oldReinfs) {
+                const NDb::SReinforcement* old_db_reinforcement =
+                        old_reinforcement.pDBReinf.GetPtr();
+                if (old_db_reinforcement != nullptr &&
+                    old_reinforcement.eState ==
+                            IScenarioTracker::ERS_ENABLED &&
+                    old_db_reinforcement->eType ==
+                            reinforcement->eType) {
+                    reward.upgrade = true;
+                    break;
+                }
+            }
+            snapshot.rewards.push_back(std::move(reward));
+        }
+    }
     return snapshot;
 }
 

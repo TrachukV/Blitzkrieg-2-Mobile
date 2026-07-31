@@ -6471,8 +6471,12 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
         const size_t copied = bk2_presentation_copy_entities(
                 entities.data(),
                 entities.size());
-        if (copied != entities.size()) {
-            return false;
+        if (copied < entities.size()) {
+            // AI can retire an entity between snapshot_info() and the copy.
+            // The copy is still a complete snapshot of the now-shorter
+            // vector, so keep it and let the next generation refresh pick up
+            // any concurrent additions instead of aborting mission startup.
+            entities.resize(copied);
         }
     }
 
@@ -6766,6 +6770,15 @@ bool RefreshDynamicWorldMeshLocked(bool force) {
     RefreshWorldObjectTextureHandles(&g_world_object_mesh);
     g_rendered_presentation_generation = info.generation;
     g_rendered_war_fog_generation = war_fog.generation;
+    if (g_world_object_mesh.vertices.empty() ||
+        (g_world_object_mesh.triangle_indices.empty() &&
+         g_world_object_mesh.layers.empty())) {
+        // A mission may start with every dynamic entity outside the initial
+        // camera/fog bounds. An empty dynamic mesh is valid; static objects
+        // are uploaded separately and a later presentation generation will
+        // populate this buffer when an entity becomes visible.
+        return true;
+    }
     return RenderBackend().set_world_object_mesh(g_world_object_mesh);
 }
 

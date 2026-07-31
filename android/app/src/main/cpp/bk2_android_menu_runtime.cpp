@@ -1500,7 +1500,9 @@ bool g_mission_launch_requested = false;
 
 // Writes the shell's mission selection the same way MissionSelectActivity
 // does, then asks Java to restart the activity out of menu mode.
-bool RequestCampaignLaunch(int campaign_index) {
+bool RequestCampaignLaunch(
+        int campaign_index,
+        int mission_index) {
     const PortPaths paths = GetPortPaths();
     std::vector<std::string> targets;
     if (!paths.external_files_dir.empty()) {
@@ -1522,14 +1524,16 @@ bool RequestCampaignLaunch(int campaign_index) {
         }
         file << "campaign=" << campaign_index << "\n";
         file << "chapter=" << g_selected_chapter << "\n";
-        file << "mission=0\n";
+        file << "mission=" << mission_index << "\n";
         written = true;
     }
     if (!written) {
         return false;
     }
     std::ostringstream report;
-    report << "original_menu_launch=campaign; index=" << campaign_index;
+    report << "original_menu_launch=campaign; index=" << campaign_index
+           << "; chapter=" << g_selected_chapter
+           << "; mission=" << mission_index;
     PlatformRuntime::instance().log_info(report.str());
     g_mission_launch_requested = true;
     return true;
@@ -1733,7 +1737,17 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
     // The chapter map is a screen of its own between picking a campaign and
     // the mission; its Play button is what actually starts one.
     if (reaction == "play") {
-        return RequestCampaignLaunch(g_selected_campaign);
+        return RequestCampaignLaunch(g_selected_campaign, 0);
+    }
+    if (reaction.compare(0, 13, "play_mission_") == 0) {
+        const int mission_index =
+                std::atoi(reaction.c_str() + 13);
+        if (mission_index < 0) {
+            return false;
+        }
+        return RequestCampaignLaunch(
+                g_selected_campaign,
+                mission_index);
     }
     // The statistics screen's DB command file names are what ButtonAction()
     // sees, while the desktop controller receives the reaction string inside
@@ -2064,10 +2078,39 @@ bool LoadOriginalMissionStatisticsScreen() {
             }
         }
     }
+    const std::string reward_text_root =
+            "UI/Game/Menu/SingleStatictics2/ReinfLine/";
+    const std::string new_reinforcement_prefix =
+            LoadUtf16Text(
+                    reward_text_root + "PrefixNewReinf.txt");
+    const std::string upgrade_prefix =
+            LoadUtf16Text(
+                    reward_text_root + "PrefixUpgrade.txt");
     for (int index = 0; index < 4; ++index) {
-        g_path_visibility_overrides[
+        const std::string reward_path =
                 "Main/RewardPanel/Line0" +
-                std::to_string(index + 1)] = false;
+                std::to_string(index + 1);
+        const bool has_reward =
+                static_cast<size_t>(index) <
+                statistics.rewards.size();
+        g_path_visibility_overrides[reward_path] = has_reward;
+        if (!has_reward) {
+            continue;
+        }
+        const LegacyMissionStatisticsReward& reward =
+                statistics.rewards[static_cast<size_t>(index)];
+        std::string name =
+                LoadUtf16Text(
+                        NormalizeResourcePath(reward.name_ref));
+        g_caption_overrides[reward_path + "/BlockBtn/NameView"] =
+                (reward.upgrade ? upgrade_prefix
+                                : new_reinforcement_prefix) +
+                name;
+        if (reward.icon_texture != nullptr) {
+            g_path_texture_overrides[
+                    reward_path + "/BlockBtn/Icon"] =
+                    reward.icon_texture;
+        }
     }
 
     g_caption_overrides["Main/InfoPanel/MissionTimeView"] =
@@ -2159,6 +2202,7 @@ bool LoadOriginalMissionStatisticsScreen() {
            << "; campaign=" << statistics.campaign_index
            << "; chapter=" << statistics.chapter_index
            << "; players=" << statistics.players.size()
+           << "; rewards=" << statistics.rewards.size()
            << "; mission_time=" << statistics.mission_time_seconds
            << "; campaign_time=" << statistics.campaign_time_seconds
            << "; experience=" << statistics.experience_earned;
@@ -2553,7 +2597,8 @@ void PopulateChapterMapLocked() {
         node.visible = true;
         node.enabled = true;
         node.button = true;
-        node.action = "play";
+        node.action =
+                "play_mission_" + std::to_string(index);
         node.pressed_quad_begin = static_cast<int>(g_pressed_quads.size());
         node.pressed_quad_end = node.pressed_quad_begin;
         AppendBackgroundQuads(
@@ -2572,6 +2617,14 @@ void PopulateChapterMapLocked() {
            << "; map_rect=" << map_window->second.x << ","
            << map_window->second.y << "+" << map_window->second.width << "x"
            << map_window->second.height;
+    for (const MenuWindowNode& node : g_nodes) {
+        if (node.type != "ChapterMapTarget") {
+            continue;
+        }
+        report << "; " << node.name << "="
+               << node.x << "," << node.y << "+"
+               << node.width << "x" << node.height;
+    }
     PlatformRuntime::instance().log_info(report.str());
 }
 
