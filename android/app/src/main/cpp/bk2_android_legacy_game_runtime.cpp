@@ -32,6 +32,7 @@
 #include "AILogic/UnitStates.h"
 #include "AILogic/UnitGuns.h"
 #include "AILogic/UnitsIterators.h"
+#include "SceneB2/StatSystem.h"
 #include "B2_M1_Terrain/DBTerrain.h"
 #include "B2_M1_World/MissionObjectiveStates.h"
 #include "Common_RTS_AI/AIClasses.h"
@@ -3569,6 +3570,49 @@ void PublishPresentationEntities() {
     bk2::presentation::PublishEntities(std::move(entities));
 }
 
+// The original AI still carries its development instrumentation. Every time a
+// Shturmovik patrol changes substate, PlaneStates.cpp reports the new substate
+// name to Singleton<IStatSystem>() with no null check. The desktop scene
+// registers that sink through CreateStatSystem(); Android does not link the
+// scene's debug stats window, so the singleton resolved to null and the first
+// substate change of any ground-attack plane took the process down with it.
+// Registering a sink that accepts the entries and drops them keeps the shipped
+// AI on its original path.
+class CAndroidStatSystem : public IStatSystem {
+    OBJECT_BASIC_METHODS(CAndroidStatSystem);
+
+public:
+    void UpdateEntry(
+            const string& /*name*/,
+            const string& /*entry*/,
+            const DWORD /*color*/) override {
+    }
+
+    int operator&(IBinSaver& /*saver*/) {
+        return 0;
+    }
+};
+
+CObj<CAndroidStatSystem> g_android_stat_system;
+
+void RegisterAndroidStatSystem() {
+    if (NSingleton::Singleton(IStatSystem::tidTypeID) != nullptr) {
+        return;
+    }
+    g_android_stat_system = new CAndroidStatSystem();
+    NSingleton::RegisterSingleton(
+            g_android_stat_system.GetPtr(),
+            IStatSystem::tidTypeID);
+}
+
+void UnregisterAndroidStatSystem() {
+    if (!g_android_stat_system) {
+        return;
+    }
+    NSingleton::UnRegisterSingleton(IStatSystem::tidTypeID);
+    g_android_stat_system = nullptr;
+}
+
 bool InitializeScenarioTracker(
         const NDb::SMapInfo* map,
         int campaign_index,
@@ -3934,6 +3978,9 @@ bool InitializeLegacyGameRuntime(
     NormalizeMapRPGStats(map);
 
     g_start_unit_object_count = CountStartUnitObjects(map);
+
+    SetStage("register_stat_system");
+    RegisterAndroidStatSystem();
 
     SetStage("register_timer");
     IGameTimer* timer = CreateGameTimer(SAIConsts::AI_SEGMENT_DURATION);
@@ -6140,6 +6187,7 @@ void ShutdownLegacyGameRuntime() {
     NSingleton::UnRegisterSingleton(IScenarioTracker::tidTypeID);
     NSingleton::UnRegisterSingleton(CCommonPathFinder::tidTypeID);
     NSingleton::UnRegisterSingleton(IGameTimer::tidTypeID);
+    UnregisterAndroidStatSystem();
 
     g_scenario_tracker = nullptr;
     g_game_timer = nullptr;
