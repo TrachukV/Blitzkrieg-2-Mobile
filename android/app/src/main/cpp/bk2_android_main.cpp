@@ -98,11 +98,31 @@ struct TouchCameraState {
     float start_x = 0.0f;
     float start_y = 0.0f;
     float distance = 0.0f;
+    float angle = 0.0f;
+    float pending_rotation = 0.0f;
+    bool rotating = false;
     bool moved = false;
     bool panning = false;
     bool selecting = false;
     uint64_t down_millis = 0;
 };
+
+// The desktop game turns the battlefield with the keyboard, which a phone
+// does not have. A two-finger twist is the gesture a touch player already
+// knows from every map application, and it composes with the pan and pinch
+// the same two fingers already drive.
+constexpr float kTwoPi = 6.28318530718f;
+constexpr float kRotationGestureDeadzoneRadians = 0.12f;
+
+float WrapSignedRadians(float radians) {
+    while (radians > kTwoPi * 0.5f) {
+        radians -= kTwoPi;
+    }
+    while (radians < -kTwoPi * 0.5f) {
+        radians += kTwoPi;
+    }
+    return radians;
+}
 
 TouchCameraState g_touch_camera;
 
@@ -240,6 +260,15 @@ void QueueTouchSelectionOverlay() {
             kSelectionBorderArgb);
 }
 
+// A menu pointer that has scrolled a text panel is no longer a button press,
+// so the release has to be swallowed.
+struct MenuPointerState {
+    float last_y = 0.0f;
+    bool scrolled = false;
+};
+
+MenuPointerState g_menu_pointer;
+
 // Routes a pointer through the original menu screen instead of the
 // battlefield while no mission is running.
 void PollMenuInput(android_input_buffer* input_buffer) {
@@ -254,12 +283,32 @@ void PollMenuInput(android_input_buffer* input_buffer) {
         const uint32_t width = bk2::android::RenderBackend().width();
         const uint32_t height = bk2::android::RenderBackend().height();
         if (action == AMOTION_EVENT_ACTION_DOWN) {
+            g_menu_pointer.last_y = y;
+            g_menu_pointer.scrolled = false;
             bk2::android::PressOriginalMenu(x, y, width, height);
+        } else if (action == AMOTION_EVENT_ACTION_MOVE) {
+            if (bk2::android::DragOriginalMenu(
+                        x,
+                        y,
+                        y - g_menu_pointer.last_y,
+                        width,
+                        height)) {
+                g_menu_pointer.scrolled = true;
+                bk2::android::CancelOriginalMenuPress();
+            }
+            g_menu_pointer.last_y = y;
         } else if (action == AMOTION_EVENT_ACTION_UP) {
+            const bool scrolled = g_menu_pointer.scrolled;
+            g_menu_pointer.scrolled = false;
+            if (scrolled) {
+                bk2::android::CancelOriginalMenuPress();
+                continue;
+            }
             const std::string reaction =
                     bk2::android::ReleaseOriginalMenu(x, y, width, height);
             bk2::android::RunOriginalMenuReaction(reaction);
         } else if (action == AMOTION_EVENT_ACTION_CANCEL) {
+            g_menu_pointer.scrolled = false;
             bk2::android::CancelOriginalMenuPress();
         }
     }
@@ -417,6 +466,7 @@ void PollInput(android_app* app) {
         const float center_x = (x0 + x1) * 0.5f;
         const float center_y = (y0 + y1) * 0.5f;
         const float distance = std::hypot(x1 - x0, y1 - y0);
+        const float angle = std::atan2(y1 - y0, x1 - x0);
 
         if (!g_touch_camera.tracking ||
             g_touch_camera.pointer_count != 2 ||
@@ -427,6 +477,9 @@ void PollInput(android_app* app) {
             g_touch_camera.center_x = center_x;
             g_touch_camera.center_y = center_y;
             g_touch_camera.distance = distance;
+            g_touch_camera.angle = angle;
+            g_touch_camera.pending_rotation = 0.0f;
+            g_touch_camera.rotating = false;
             g_touch_camera.moved = true;
             g_touch_camera.panning = true;
             g_touch_camera.selecting = false;
@@ -441,9 +494,28 @@ void PollInput(android_app* app) {
                 bk2::android::ZoomSinglePlayerCamera(
                         distance / g_touch_camera.distance);
             }
+            // Screen Y grows downward while the camera orbits its target
+            // counter-clockwise as yaw grows, so a clockwise twist and a
+            // growing yaw are the same direction and the delta applies
+            // unchanged. The deadzone keeps a plain pinch from drifting the
+            // battlefield; once the twist is deliberate it stays engaged.
+            const float angle_delta =
+                    WrapSignedRadians(angle - g_touch_camera.angle);
+            if (g_touch_camera.rotating) {
+                bk2::android::RotateSinglePlayerCamera(angle_delta);
+            } else {
+                g_touch_camera.pending_rotation += angle_delta;
+                if (std::abs(g_touch_camera.pending_rotation) >=
+                    kRotationGestureDeadzoneRadians) {
+                    g_touch_camera.rotating = true;
+                    bk2::android::RotateSinglePlayerCamera(
+                            g_touch_camera.pending_rotation);
+                }
+            }
             g_touch_camera.center_x = center_x;
             g_touch_camera.center_y = center_y;
             g_touch_camera.distance = distance;
+            g_touch_camera.angle = angle;
         }
     }
 

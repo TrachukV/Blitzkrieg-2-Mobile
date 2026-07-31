@@ -430,6 +430,66 @@ From `android/`:
 ./gradlew :app:assembleDebug
 ```
 
+## Touch Controls
+
+The desktop game expects a mouse and a keyboard. What the port maps onto a
+touch screen:
+
+| Gesture | Battlefield | Menu |
+| --- | --- | --- |
+| Tap | select a unit, or issue the pending command | press the button under the finger |
+| Double tap a selected unit | extend the selection to up to twelve nearby units of the same legacy type | — |
+| Drag | pan the camera | scroll a text panel taller than its authored rect |
+| Hold 350 ms, then drag | original selection rectangle, up to twelve friendly units of any type | — |
+| Two-finger drag | pan | — |
+| Two-finger pinch | zoom, clamped to the mission's own distance limits | — |
+| Two-finger twist | turn the battlefield, the rotation the desktop game keeps on Q/E | — |
+| System Back | — | pop the screen stack, like the shipped Back buttons |
+
+The twist has a 0.12 rad deadzone so a plain pinch does not drift the camera;
+once the twist is deliberate it stays engaged for the rest of the gesture.
+Screen Y grows downward while the camera orbits its target counter-clockwise
+as yaw grows, so a clockwise twist and a growing yaw are the same direction
+and the gesture delta applies unchanged.
+
+Text panels scroll by whole lines, and the leftover drag pixels are kept so a
+short drag still accumulates into a step. The three panels that overflow their
+authored rect are the mission briefing's operations order and objective list
+and the campaign-selection descriptions. A pointer that has scrolled does not
+also fire the button it started on.
+
+The shipped Load Game button restores the campaign autosave the port writes
+after every won mission and reopens the chapter map that campaign was left on,
+with its completed, enabled, and recommended targets intact. Before this the
+autosave was only reachable from the developer mission browser, so closing the
+app left a campaign unreachable from the original interface.
+
+## Frame Rate
+
+The shell paces itself against a 60 Hz budget and sleeps only the part of the
+budget the frame did not use. It used to sleep a fixed 16 ms *after*
+presenting, on top of the vsync wait already inside `bgfx::frame()`, so a
+display-paced 16.6 ms frame always missed the following vblank and the game ran
+at half the panel rate. Every second the loop logs
+
+```text
+frame_pacing=measured; fps=58.8; cpu_ms=3.85; worst_ms=5.40; budget_ms=16.67
+```
+
+`tick_budget` breaks the game thread down further — `legacy_ms` for the
+simulation, then the dynamic mesh refresh split into `mesh_snapshot_ms`,
+`mesh_entity_ms`, `mesh_effect_ms`, `mesh_fog_ms`, `mesh_texture_ms`, and
+`mesh_upload_ms` — so a regression names itself.
+
+Bind-pose vertices for GPU-skinned parts travel to the backend once per
+`geometry_key`. The backend answers `has_skinned_geometry()`, and after the
+first upload a snapshot leaves those arrays empty rather than rebuilding
+position, uv, normal, four bone indices and four bone weights per vertex for
+every visible soldier every frame; only the bone palette and the world
+transform change. On the ARM64 GLES3 emulator at 2856x1280, USA US1.1 with 289
+presented entities went from 23-58 fps with spikes past 100 ms to a steady
+58 fps with a 3.9 ms average frame and a 5.4 ms worst frame.
+
 ## Release Builds
 
 `./gradlew :app:assembleRelease` produces the shippable APK: R8-minified Java,
@@ -457,6 +517,11 @@ or supply `BK2_KEYSTORE`, `BK2_KEYSTORE_PASSWORD`, `BK2_KEY_ALIAS`, and
 `BK2_KEY_PASSWORD` in the environment for a CI runner. Both the properties file
 and `*.jks`/`*.keystore` are gitignored. Without them the release variant still
 assembles, unsigned, so an optimised build is not blocked on secrets.
+
+Both the APK's native library entries and the ELF `LOAD` segments inside them
+are 16 KB aligned, which Google Play requires of anything targeting Android 15
+or newer; NDK 28 produces that by default and the release APK was checked for
+it directly.
 
 The launcher icon is cut from the original
 `Consts/Common/MainMenu/Background_Texture.dds` key art by

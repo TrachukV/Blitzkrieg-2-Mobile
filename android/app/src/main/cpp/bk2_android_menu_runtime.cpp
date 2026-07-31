@@ -412,6 +412,9 @@ uint16_t MenuTextureHandle(const std::string& texture_path) {
 // atlas texture its STexture descriptor points at.
 struct MenuFont {
     CObj<CFontFormatInfo> metrics;
+    // Index into g_texture_paths, which every screen rebuild starts empty.
+    // The atlas path is what survives; the index is re-registered per screen.
+    std::string atlas_path;
     int texture = -1;
     float texture_width = 1.0f;
     float texture_height = 1.0f;
@@ -764,6 +767,11 @@ std::string ResolveButtonClickSoundPath() {
 }
 
 void LoadButtonClickSound() {
+    // One shipped click for every screen: decoding its PCM again on each
+    // rebuild is pure cost.
+    if (g_click_clip.frame_count() > 0) {
+        return;
+    }
     g_click_clip = DecodedPcmClip();
     g_click_sound_error.clear();
     g_click_sound_path = ResolveButtonClickSoundPath();
@@ -844,7 +852,20 @@ void StopMenuMusic() {
 }
 
 void LoadMenuFonts() {
-    g_fonts.clear();
+    // The shipped font set is the same on every screen and each entry opens
+    // its descriptor and metrics cache off the VFS, so reloading all of it
+    // per rebuild costs real time on a screen that rebuilds while the player
+    // drags a text panel. The metrics are reusable; the atlas index is not,
+    // because g_texture_paths starts empty on every rebuild and a stale index
+    // makes every glyph sample whatever texture landed in that slot instead.
+    if (!g_fonts.empty()) {
+        for (std::map<std::string, MenuFont>::iterator font = g_fonts.begin();
+             font != g_fonts.end();
+             ++font) {
+            font->second.texture = TextureIndex(font->second.atlas_path);
+        }
+        return;
+    }
     for (const char* path : kMenuFontPaths) {
         const NDb::SFont* font_desc = NDb::Get<NDb::SFont>(CDBID(path));
         if (font_desc == nullptr || font_desc->szName.empty()) {
@@ -881,6 +902,7 @@ void LoadMenuFonts() {
                 atlas_path = folder + "/" + atlas_path;
             }
         }
+        font.atlas_path = atlas_path;
         font.texture = TextureIndex(atlas_path);
         font.texture_width = static_cast<float>(std::max(atlas->nWidth, 1));
         font.texture_height = static_cast<float>(std::max(atlas->nHeight, 1));
@@ -1074,6 +1096,34 @@ void AppendTextQuads(
     }
 }
 
+// The shipped operations order, objective list, and campaign description are
+// routinely longer than the panel they are authored into. The desktop screen
+// gives each one a scroll bar; a phone drags the text itself, so a container
+// that overflows registers the region the drag has to hit and how far it can
+// travel.
+struct ScrollableTextRegion {
+    std::string key;
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+    float line_height = 1.0f;
+    int total_lines = 0;
+    int visible_lines = 0;
+};
+
+std::vector<ScrollableTextRegion> g_text_regions;
+std::map<std::string, int> g_text_scroll_lines;
+// Dragging is continuous but the panel steps by whole lines, so the leftover
+// pixels are kept here and a short drag still accumulates into a step.
+std::map<std::string, float> g_text_scroll_pixels;
+
+int ScrollLinesFor(const std::string& key) {
+    const std::map<std::string, int>::const_iterator found =
+            g_text_scroll_lines.find(key);
+    return found == g_text_scroll_lines.end() ? 0 : found->second;
+}
+
 void AppendWrappedTextQuads(
         const std::string& text,
         const std::string& tags,
@@ -1082,7 +1132,8 @@ void AppendWrappedTextQuads(
         float width,
         float height,
         const std::string& face_override = std::string(),
-        uint32_t argb_override = 0) {
+        uint32_t argb_override = 0,
+        const std::string& scroll_key = std::string()) {
     if (text.empty() || width <= 0.0f || height <= 0.0f) {
         return;
     }
@@ -1138,11 +1189,30 @@ void AppendWrappedTextQuads(
         paragraph_begin = paragraph_end + 1;
     }
 
+    const int total_lines = static_cast<int>(lines.size());
+    int first_line = 0;
+    if (!scroll_key.empty()) {
+        ScrollableTextRegion region;
+        region.key = scroll_key;
+        region.x = x;
+        region.y = y;
+        region.width = width;
+        region.height = height;
+        region.line_height = line_height;
+        region.total_lines = total_lines;
+        region.visible_lines = max_lines;
+        g_text_regions.push_back(region);
+        first_line = std::clamp(
+                ScrollLinesFor(scroll_key),
+                0,
+                std::max(0, total_lines - max_lines));
+        g_text_scroll_lines[scroll_key] = first_line;
+    }
     const int count = std::min(
-            max_lines, static_cast<int>(lines.size()));
+            max_lines, total_lines - first_line);
     for (int index = 0; index < count; ++index) {
         AppendTextQuads(
-                lines[static_cast<size_t>(index)],
+                lines[static_cast<size_t>(first_line + index)],
                 tags,
                 x,
                 y + static_cast<float>(index) * line_height,
@@ -2158,6 +2228,42 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
                 (g_selected_difficulty + 1) %
                 static_cast<int>(campaign->difficultyLevels.size());
         return LoadOriginalMenuScreen(current_screen);
+    }
+    // The port autosaves the campaign tracker after every won mission, but
+    // nothing in the original interface reached it: closing the app and
+    // reopening it left the shipped Load Game button on an empty screen and
+    // the player's only way back in was a new campaign. Load Game now
+    // restores that checkpoint and reopens the chapter map the campaign was
+    // left on, with its completed, enabled, and recommended targets intact.
+    // With no checkpoint it still opens the shipped save/load screen.
+    if (reaction == "Load" || reaction == "load") {
+        const MissionRuntimeResult restored =
+                LoadMissionRuntimeCheckpoint("android_autosave");
+        if (restored.ok &&
+            restored.state.campaign_active &&
+            restored.state.campaign_index >= 0 &&
+            restored.state.chapter_index >= 0) {
+            g_selected_campaign = restored.state.campaign_index;
+            g_selected_chapter = restored.state.chapter_index;
+            g_selected_difficulty = restored.state.difficulty;
+            g_chapter_selection_campaign = -1;
+            g_chapter_selection_chapter = -1;
+            g_chapter_runtime_state_allowed = true;
+            g_chapter_frontline_animation_requested = false;
+            g_chapter_reinf_dialog_mode = ChapterReinfDialogMode::kNone;
+            std::ostringstream report;
+            report << "original_menu_load=restored"
+                   << "; campaign=" << restored.state.campaign_index
+                   << "; chapter=" << restored.state.chapter_index
+                   << "; completed=" << restored.state.completed_mission_count
+                   << "; enabled=" << restored.state.enabled_mission_count;
+            PlatformRuntime::instance().log_info(report.str());
+            return RunOriginalMenuReaction("chapter_map");
+        }
+        PlatformRuntime::instance().log_info(
+                std::string("original_menu_load=no_checkpoint; error=") +
+                (restored.error.empty() ? std::string("<none>")
+                                        : restored.error));
     }
     // Campaign intros are not decodable on Android yet. Until the original
     // movie path is restored, continue to the exact selected campaign's map
@@ -5869,7 +5975,8 @@ void PopulateCampaignSelectionLocked() {
                                 scroll_bar_reserve),
                 std::max(1.0f, container->height - inset * 2.0f),
                 view == nullptr ? std::string() : view->text_face,
-                view == nullptr ? 0u : view->text_argb);
+                view == nullptr ? 0u : view->text_argb,
+                "campaign_description_" + std::to_string(slot));
     }
 
     MenuWindowNode* play = nullptr;
@@ -6054,7 +6161,8 @@ void PopulateMissionBriefingLocked() {
                                 container->second.height - inset * 2.0f),
                         view == nullptr ? std::string()
                                         : view->text_face,
-                        view == nullptr ? 0u : view->text_argb);
+                        view == nullptr ? 0u : view->text_argb,
+                        container_name);
             };
     append_to_container(
             "MissionDescCont",
@@ -6110,6 +6218,11 @@ bool RebuildMenuScreenLocked(const std::string& screen_ref) {
     g_textured_quads.clear();
     g_textured_quad_insert_index = static_cast<size_t>(-1);
     g_applied_caption_paths.clear();
+    g_text_regions.clear();
+    if (screen_ref != g_screen_ref) {
+        g_text_scroll_lines.clear();
+        g_text_scroll_pixels.clear();
+    }
     g_modal_quad_path =
             g_chapter_reinf_dialog_mode != ChapterReinfDialogMode::kNone &&
                     screen_ref == "UI/Game/Menu/ChapterMap_WindowScreen.xdb"
@@ -6125,9 +6238,9 @@ bool RebuildMenuScreenLocked(const std::string& screen_ref) {
     g_pressed_button = -1;
     g_templates.clear();
     g_texture_handles.clear();
-    g_fonts.clear();
     g_render_logged = false;
-    g_text_cache.clear();
+    // The caption cache is keyed by resource path and the shipped text files
+    // do not change while the game runs, so it outlives a rebuild.
     g_button_count = 0;
     g_texture_count = 0;
     g_caption_count = 0;
@@ -6408,6 +6521,58 @@ int PickMenuButtonLocked(
 }
 
 }  // namespace
+
+bool DragOriginalMenu(
+        float screen_x,
+        float screen_y,
+        float delta_y,
+        uint32_t screen_width,
+        uint32_t screen_height) {
+    std::lock_guard<std::mutex> guard(g_menu_mutex);
+    if (!g_ready || screen_width == 0 || screen_height == 0 ||
+        delta_y == 0.0f) {
+        return false;
+    }
+    const float virtual_x = screen_x * kVirtualScreenWidth /
+            static_cast<float>(screen_width);
+    const float virtual_y = screen_y * kVirtualScreenHeight /
+            static_cast<float>(screen_height);
+    const float virtual_delta_y = delta_y * kVirtualScreenHeight /
+            static_cast<float>(screen_height);
+    for (const ScrollableTextRegion& region : g_text_regions) {
+        const int maximum = std::max(
+                0, region.total_lines - region.visible_lines);
+        if (maximum == 0 ||
+            virtual_x < region.x ||
+            virtual_x > region.x + region.width ||
+            virtual_y < region.y ||
+            virtual_y > region.y + region.height) {
+            continue;
+        }
+        // Dragging the text upward reveals what is below it, the direction
+        // the panel's own scroll bar would move.
+        g_text_scroll_pixels[region.key] -= virtual_delta_y;
+        const float travel = static_cast<float>(maximum) *
+                region.line_height;
+        g_text_scroll_pixels[region.key] = std::clamp(
+                g_text_scroll_pixels[region.key],
+                0.0f,
+                travel);
+        const int line = std::clamp(
+                static_cast<int>(std::lround(
+                        g_text_scroll_pixels[region.key] /
+                        region.line_height)),
+                0,
+                maximum);
+        if (line == ScrollLinesFor(region.key)) {
+            return true;
+        }
+        g_text_scroll_lines[region.key] = line;
+        RebuildMenuScreenLocked(g_screen_ref);
+        return true;
+    }
+    return false;
+}
 
 void PressOriginalMenu(
         float screen_x,

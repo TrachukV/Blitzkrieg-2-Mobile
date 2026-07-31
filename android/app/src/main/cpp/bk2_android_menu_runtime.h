@@ -59,6 +59,15 @@ void PressOriginalMenu(
         uint32_t screen_width,
         uint32_t screen_height);
 void CancelOriginalMenuPress();
+// A vertical drag inside a text panel whose content is taller than the panel
+// scrolls it, the way the desktop screen's scroll bar does. Returns true when
+// the drag was consumed, in which case the pointer is not a button press.
+bool DragOriginalMenu(
+        float screen_x,
+        float screen_y,
+        float delta_y,
+        uint32_t screen_width,
+        uint32_t screen_height);
 // Returns the reaction id of the activated button, or an empty string.
 std::string ReleaseOriginalMenu(
         float screen_x,
