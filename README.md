@@ -64,6 +64,11 @@ map-specific DDS background and AI war-fog snapshot with the original
 draws the original magenta viewport polygon from the current 3D camera. The APK
 carries the small original HUD subset as a fallback, so an incomplete external
 content sync no longer replaces that panel with a dark debug rectangle.
+Campaign mission markers now open the shipped mission-briefing screen before
+combat instead of bypassing it. The port fills its original panels with the
+selected map's localized name, wrapped operations order, objective summary,
+and DDS minimap; Back returns to the chapter map and Play starts that exact
+mission.
 The map renderer now includes general `SObjectRPGStats` records in addition to
 buildings, fences, entrenchments, squads, and mechanized units. This restores
 the original mission's vegetation and small props through their converted

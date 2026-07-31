@@ -57,6 +57,7 @@ constexpr float kVirtualScreenHeight = 768.0f;
 constexpr int kMaxMenuWindowDepth = 24;
 constexpr size_t kMaxMenuWindowNodes = 512;
 constexpr int kMaxCaptionCharacters = 120;
+constexpr int kMaxBriefingCharacters = 4096;
 
 // One submitted rectangle in the 1024x768 virtual screen space, with texture
 // coordinates already normalized out of the descriptor's pixel maps.
@@ -140,28 +141,22 @@ std::string NormalizeResourcePath(std::string path) {
     return path;
 }
 
-// Mirrors NText::GetText() for the UTF-16 caption files the menu descriptors
-// reference, converted to UTF-8 for the Android view layer.
-std::string LoadUtf16Text(const std::string& file_ref) {
+// Mirrors NText::GetText() for the UTF-16 text files the menu descriptors
+// reference, converted to UTF-8 for the Android renderer.
+std::string DecodeUtf16Text(
+        const std::string& file_ref,
+        int max_characters) {
     if (file_ref.empty() || NVFS::GetMainVFS() == nullptr) {
         return std::string();
     }
-    const std::map<std::string, std::string>::const_iterator cached =
-            g_text_cache.find(file_ref);
-    if (cached != g_text_cache.end()) {
-        return cached->second;
-    }
-
     CFileStream stream(NVFS::GetMainVFS(), string(file_ref.c_str()));
     std::string text;
     const int byte_count = stream.GetSize();
     if (!stream.IsOk() || byte_count < 2) {
-        g_text_cache[file_ref] = text;
         return text;
     }
     const unsigned char* bytes = stream.GetBuffer();
     if (bytes == nullptr) {
-        g_text_cache[file_ref] = text;
         return text;
     }
 
@@ -176,7 +171,7 @@ std::string LoadUtf16Text(const std::string& file_ref) {
 
     int character_count = 0;
     while (offset + 1 < byte_count &&
-           character_count < kMaxCaptionCharacters) {
+           character_count < max_characters) {
         const std::uint16_t first = little_endian
                 ? static_cast<std::uint16_t>(
                           bytes[offset] | (bytes[offset + 1] << 8))
@@ -221,8 +216,23 @@ std::string LoadUtf16Text(const std::string& file_ref) {
             text.push_back(static_cast<char>(0x80 | (code_point & 0x3f)));
         }
     }
+    return text;
+}
+
+std::string LoadUtf16Text(const std::string& file_ref) {
+    const std::map<std::string, std::string>::const_iterator cached =
+            g_text_cache.find(file_ref);
+    if (cached != g_text_cache.end()) {
+        return cached->second;
+    }
+    const std::string text =
+            DecodeUtf16Text(file_ref, kMaxCaptionCharacters);
     g_text_cache[file_ref] = text;
     return text;
+}
+
+std::string LoadUtf16BriefingText(const std::string& file_ref) {
+    return DecodeUtf16Text(file_ref, kMaxBriefingCharacters);
 }
 
 // UI/Tools.cpp ApplyWindowAlign, reproduced so Android lays the shipped
@@ -910,6 +920,49 @@ MenuTextStyle ParseTextStyle(const std::string& tags) {
     return style;
 }
 
+std::vector<uint16_t> DecodeUtf8Characters(const std::string& text) {
+    std::vector<uint16_t> characters;
+    for (size_t index = 0; index < text.size();) {
+        const unsigned char lead = static_cast<unsigned char>(text[index]);
+        uint32_t code_point = lead;
+        size_t length = 1;
+        if ((lead & 0xe0) == 0xc0) {
+            code_point = lead & 0x1fu;
+            length = 2;
+        } else if ((lead & 0xf0) == 0xe0) {
+            code_point = lead & 0x0fu;
+            length = 3;
+        } else if ((lead & 0xf8) == 0xf0) {
+            code_point = lead & 0x07u;
+            length = 4;
+        }
+        for (size_t extra = 1; extra < length && index + extra < text.size();
+             ++extra) {
+            code_point = (code_point << 6) |
+                    (static_cast<unsigned char>(text[index + extra]) & 0x3fu);
+        }
+        index += length;
+        if (code_point <= 0xffff) {
+            characters.push_back(static_cast<uint16_t>(code_point));
+        }
+    }
+    return characters;
+}
+
+float MeasureTextWidth(
+        const std::string& text,
+        const CFontFormatInfo& metrics) {
+    float total = 0.0f;
+    uint16_t previous = 0;
+    for (uint16_t character : DecodeUtf8Characters(text)) {
+        const STFCharacter& glyph = metrics.GetChar(character);
+        total += static_cast<float>(glyph.nBC) +
+                static_cast<float>(metrics.GetKern(character, previous));
+        previous = character;
+    }
+    return total;
+}
+
 // Lays a caption out with the shipped glyph metrics: nA is the pre-space,
 // nBC the advance to the next character, plus the kerning pair correction.
 void AppendTextQuads(
@@ -941,47 +994,15 @@ void AppendTextQuads(
 
     // The captions are UTF-8 here; the shipped fonts are single-plane, so a
     // direct decode to UTF-16 code units matches the original lookup.
-    std::vector<uint16_t> characters;
-    for (size_t index = 0; index < text.size();) {
-        const unsigned char lead = static_cast<unsigned char>(text[index]);
-        uint32_t code_point = lead;
-        size_t length = 1;
-        if ((lead & 0xe0) == 0xc0) {
-            code_point = lead & 0x1fu;
-            length = 2;
-        } else if ((lead & 0xf0) == 0xe0) {
-            code_point = lead & 0x0fu;
-            length = 3;
-        } else if ((lead & 0xf8) == 0xf0) {
-            code_point = lead & 0x07u;
-            length = 4;
-        }
-        for (size_t extra = 1; extra < length && index + extra < text.size();
-             ++extra) {
-            code_point = (code_point << 6) |
-                    (static_cast<unsigned char>(text[index + extra]) & 0x3fu);
-        }
-        index += length;
-        if (code_point <= 0xffff) {
-            characters.push_back(static_cast<uint16_t>(code_point));
-        }
-    }
-
-    float total = 0.0f;
-    uint16_t previous = 0;
-    for (uint16_t character : characters) {
-        const STFCharacter& glyph = metrics.GetChar(character);
-        total += static_cast<float>(glyph.nBC) +
-                static_cast<float>(metrics.GetKern(character, previous));
-        previous = character;
-    }
+    const std::vector<uint16_t> characters = DecodeUtf8Characters(text);
+    const float total = MeasureTextWidth(text, metrics);
 
     float pen_x = style.centered
             ? x + (width - total) * 0.5f
             : x;
     const float pen_y =
             y + (height - static_cast<float>(font.height)) * 0.5f;
-    previous = 0;
+    uint16_t previous = 0;
     for (uint16_t character : characters) {
         const STFCharacter& glyph = metrics.GetChar(character);
         pen_x += static_cast<float>(metrics.GetKern(character, previous));
@@ -1008,6 +1029,85 @@ void AppendTextQuads(
     }
 }
 
+void AppendWrappedTextQuads(
+        const std::string& text,
+        const std::string& tags,
+        float x,
+        float y,
+        float width,
+        float height,
+        const std::string& face_override = std::string(),
+        uint32_t argb_override = 0) {
+    if (text.empty() || width <= 0.0f || height <= 0.0f) {
+        return;
+    }
+    MenuTextStyle style = ParseTextStyle(tags);
+    if (!face_override.empty()) {
+        style.face = face_override;
+    }
+    const std::map<std::string, MenuFont>::const_iterator found =
+            g_fonts.find(style.face.empty() ? "body" : style.face);
+    if (found == g_fonts.end() || !found->second.metrics) {
+        return;
+    }
+    const CFontFormatInfo& metrics = *found->second.metrics;
+    const float line_height =
+            static_cast<float>(found->second.height + 3);
+    const int max_lines = std::max(
+            1, static_cast<int>(height / line_height));
+
+    std::vector<std::string> lines;
+    size_t paragraph_begin = 0;
+    while (paragraph_begin <= text.size()) {
+        const size_t paragraph_end = text.find('\n', paragraph_begin);
+        std::string paragraph = text.substr(
+                paragraph_begin,
+                paragraph_end == std::string::npos
+                        ? std::string::npos
+                        : paragraph_end - paragraph_begin);
+        if (!paragraph.empty() && paragraph.back() == '\r') {
+            paragraph.pop_back();
+        }
+        std::istringstream words(paragraph);
+        std::string line;
+        std::string word;
+        while (words >> word) {
+            const std::string candidate =
+                    line.empty() ? word : line + " " + word;
+            if (line.empty() ||
+                MeasureTextWidth(candidate, metrics) <= width) {
+                line = candidate;
+            } else {
+                lines.push_back(line);
+                line = word;
+            }
+        }
+        if (!line.empty()) {
+            lines.push_back(line);
+        } else if (paragraph.empty()) {
+            lines.emplace_back();
+        }
+        if (paragraph_end == std::string::npos) {
+            break;
+        }
+        paragraph_begin = paragraph_end + 1;
+    }
+
+    const int count = std::min(
+            max_lines, static_cast<int>(lines.size()));
+    for (int index = 0; index < count; ++index) {
+        AppendTextQuads(
+                lines[static_cast<size_t>(index)],
+                tags,
+                x,
+                y + static_cast<float>(index) * line_height,
+                width,
+                line_height,
+                face_override,
+                argb_override);
+    }
+}
+
 const NDb::SWindowShared* SharedOf(const NDb::SWindow* window) {
     if (window == nullptr || !window->pShared) {
         return nullptr;
@@ -1025,6 +1125,8 @@ std::string WindowTypeName(int type_id) {
             return "WindowMSButton";
         case NDb::SWindowTextView::typeID:
             return "WindowTextView";
+        case NDb::SWindowMiniMap::typeID:
+            return "WindowMiniMap";
         default:
             return "Window";
     }
@@ -1280,6 +1382,19 @@ void CollectWindow(
                 width,
                 height,
                 resolved_texture_override);
+        if (window->GetTypeID() == NDb::SWindowMiniMap::typeID &&
+            resolved_texture_override != nullptr) {
+            MenuQuad minimap;
+            minimap.x = x;
+            minimap.y = y;
+            minimap.width = width;
+            minimap.height = height;
+            minimap.texture =
+                    TextureIndex(TexturePath(resolved_texture_override));
+            if (minimap.texture >= 0) {
+                g_quads.push_back(minimap);
+            }
+        }
         if (window->GetTypeID() == NDb::SWindowProgressBar::typeID) {
             const NDb::SWindowProgressBar* progress_bar =
                     static_cast<const NDb::SWindowProgressBar*>(window);
@@ -1483,6 +1598,7 @@ namespace {
 
 int g_selected_campaign = 0;
 int g_selected_chapter = 0;
+int g_selected_mission = 0;
 
 std::string JoinHostPath(const std::string& left, const std::string& right) {
     if (left.empty()) {
@@ -1709,6 +1825,8 @@ bool CycleOptionValue(const std::string& program_name) {
 
 }  // namespace
 
+bool LoadOriginalMissionBriefingScreen(int mission_index);
+
 bool ConsumeMenuMissionLaunchRequest() {
     const bool requested = g_mission_launch_requested;
     g_mission_launch_requested = false;
@@ -1728,16 +1846,38 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
         if (index >= 0 && index < 8) {
             g_selected_campaign = index;
             g_selected_chapter = 0;
+            g_selected_mission = 0;
             std::ostringstream report;
             report << "original_menu_campaign=" << index;
             PlatformRuntime::instance().log_info(report.str());
             return true;
         }
     }
+    std::string current_screen;
+    {
+        std::lock_guard<std::mutex> guard(g_menu_mutex);
+        current_screen = g_screen_ref;
+    }
+    if ((reaction == "Play" || reaction == "menu_play") &&
+        current_screen ==
+                "UI/Game/Menu/MissionBriefing/"
+                "MissionBriefing_WindowScreen.xdb") {
+        return RequestCampaignLaunch(
+                g_selected_campaign,
+                g_selected_mission);
+    }
+    if ((reaction == "Back" || reaction == "menu_back") &&
+        current_screen ==
+                "UI/Game/Menu/MissionBriefing/"
+                "MissionBriefing_WindowScreen.xdb") {
+        return LoadOriginalMenuScreen(
+                "UI/Game/Menu/ChapterMap_WindowScreen.xdb");
+    }
     // The chapter map is a screen of its own between picking a campaign and
-    // the mission; its Play button is what actually starts one.
+    // the mission.
     if (reaction == "play") {
-        return RequestCampaignLaunch(g_selected_campaign, 0);
+        return LoadOriginalMissionBriefingScreen(
+                g_selected_mission);
     }
     if (reaction.compare(0, 13, "play_mission_") == 0) {
         const int mission_index =
@@ -1745,9 +1885,7 @@ bool RunOriginalMenuReaction(const std::string& reaction) {
         if (mission_index < 0) {
             return false;
         }
-        return RequestCampaignLaunch(
-                g_selected_campaign,
-                mission_index);
+        return LoadOriginalMissionBriefingScreen(mission_index);
     }
     // The statistics screen's DB command file names are what ButtonAction()
     // sees, while the desktop controller receives the reaction string inside
@@ -1899,6 +2037,18 @@ const NDb::SChapter* SelectedChapter() {
     return campaign->chapters[chapter_index].GetPtr();
 }
 
+const NDb::SMapInfo* SelectedMission() {
+    const NDb::SChapter* chapter = SelectedChapter();
+    if (chapter == nullptr ||
+        g_selected_mission < 0 ||
+        static_cast<size_t>(g_selected_mission) >=
+                chapter->missionPath.size()) {
+        return nullptr;
+    }
+    return chapter->missionPath[
+            static_cast<size_t>(g_selected_mission)].pMap.GetPtr();
+}
+
 // CInterfaceChapterMapMenu sets the map artwork on the window it looks up as
 // "ChapterMap"; the descriptor ships that window with no texture of its own.
 // CInterfaceMissionBackground sits behind every menu screen. It shows a live
@@ -1954,6 +2104,57 @@ void ApplyScreenInitTexturesLocked(const std::string& screen_ref) {
            << "; campaign=" << g_selected_campaign
            << "; missions=" << chapter->missionPath.size();
     PlatformRuntime::instance().log_info(report.str());
+}
+
+bool LoadOriginalMissionBriefingScreen(int mission_index) {
+    const NDb::SChapter* chapter = SelectedChapter();
+    if (chapter == nullptr ||
+        mission_index < 0 ||
+        static_cast<size_t>(mission_index) >=
+                chapter->missionPath.size()) {
+        return false;
+    }
+    const NDb::SMapInfo* mission =
+            chapter->missionPath[
+                    static_cast<size_t>(mission_index)].pMap.GetPtr();
+    if (mission == nullptr) {
+        return false;
+    }
+
+    constexpr const char* kScreenRef =
+            "UI/Game/Menu/MissionBriefing/"
+            "MissionBriefing_WindowScreen.xdb";
+    std::lock_guard<std::mutex> guard(g_menu_mutex);
+    g_selected_mission = mission_index;
+    g_visibility_overrides.clear();
+    g_path_visibility_overrides.clear();
+    g_caption_overrides.clear();
+    g_progress_overrides.clear();
+    g_texture_overrides.clear();
+    g_path_texture_overrides.clear();
+
+    std::string mission_name = LoadUtf16BriefingText(
+            NormalizeResourcePath(
+                    ToStdString(mission->szLocalizedNameFileRef)));
+    if (mission_name.empty()) {
+        mission_name = LoadUtf16Text(
+                "UI/Game/Menu/MissionBriefing/DefaultHeader.txt");
+    }
+    g_caption_overrides["Main/TopPanel/HeaderView"] =
+            mission_name;
+    if (mission->pMiniMap && mission->pMiniMap->pTexture) {
+        g_path_texture_overrides[
+                "Main/RightTopPanel/Minimap"] =
+                mission->pMiniMap->pTexture.GetPtr();
+    }
+    ResolveMenuBackgroundLocked();
+    g_options_category = 0;
+    const bool loaded = RebuildMenuScreenLocked(kScreenRef);
+    if (loaded) {
+        PlatformRuntime::instance().log_info(
+                ScreenLayoutReportLocked());
+    }
+    return loaded;
 }
 
 bool LoadOriginalMenuScreen(const std::string& screen_ref) {
@@ -2628,6 +2829,102 @@ void PopulateChapterMapLocked() {
     PlatformRuntime::instance().log_info(report.str());
 }
 
+// CInterfaceMissionBriefing pushes the current map's two text resources into
+// scrollable containers and assigns its authored minimap texture. Android does
+// not link that legacy controller, so reproduce its data binding after the
+// shipped descriptor graph has supplied the exact panel geometry and fonts.
+void PopulateMissionBriefingLocked() {
+    const NDb::SMapInfo* mission = SelectedMission();
+    if (mission == nullptr) {
+        return;
+    }
+
+    std::string mission_text;
+    std::string mission_format;
+    SplitMarkupTags(
+            LoadUtf16BriefingText(NormalizeResourcePath(
+                    ToStdString(mission->szLoadingDescriptionFileRef))),
+            &mission_text,
+            &mission_format);
+    std::string objectives_text;
+    std::string objectives_format;
+    SplitMarkupTags(
+            LoadUtf16BriefingText(NormalizeResourcePath(
+                    ToStdString(mission->szLocalizedDescriptionFileRef))),
+            &objectives_text,
+            &objectives_format);
+
+    const auto append_to_container =
+            [](const char* container_name,
+               const char* view_name,
+               const std::string& text,
+               const std::string& format) {
+                const std::map<std::string, MenuTemplate>::const_iterator
+                        container = g_templates.find(container_name);
+                if (container == g_templates.end() || text.empty()) {
+                    return;
+                }
+                const MenuWindowNode* view = nullptr;
+                for (const MenuWindowNode& node : g_nodes) {
+                    if (node.name == view_name) {
+                        view = &node;
+                        break;
+                    }
+                }
+                std::string merged_format =
+                        view == nullptr ? std::string()
+                                        : view->text_format;
+                if (!format.empty()) {
+                    if (!merged_format.empty()) {
+                        merged_format.push_back(' ');
+                    }
+                    merged_format += format;
+                }
+                const float inset = 8.0f;
+                const float scroll_bar_reserve = 24.0f;
+                AppendWrappedTextQuads(
+                        text,
+                        merged_format,
+                        container->second.x + inset,
+                        container->second.y + inset,
+                        std::max(
+                                1.0f,
+                                container->second.width -
+                                        inset * 2.0f -
+                                        scroll_bar_reserve),
+                        std::max(
+                                1.0f,
+                                container->second.height - inset * 2.0f),
+                        view == nullptr ? std::string()
+                                        : view->text_face,
+                        view == nullptr ? 0u : view->text_argb);
+            };
+    append_to_container(
+            "MissionDescCont",
+            "MissionDescView",
+            mission_text,
+            mission_format);
+    append_to_container(
+            "ObjectivesListCont",
+            "ObjectivesListView",
+            objectives_text,
+            objectives_format);
+
+    const NDb::STexture* minimap =
+            mission->pMiniMap && mission->pMiniMap->pTexture
+                    ? mission->pMiniMap->pTexture.GetPtr()
+                    : nullptr;
+    std::ostringstream report;
+    report << "original_mission_briefing=ready"
+           << "; mission="
+           << ToStdString(mission->GetDBID().ToString())
+           << "; loading_bytes=" << mission_text.size()
+           << "; objective_bytes=" << objectives_text.size()
+           << "; minimap="
+           << (minimap == nullptr ? "<none>" : TexturePath(minimap));
+    PlatformRuntime::instance().log_info(report.str());
+}
+
 bool RebuildMenuScreenLocked(const std::string& screen_ref) {
     g_nodes.clear();
     g_quads.clear();
@@ -2680,6 +2977,11 @@ bool RebuildMenuScreenLocked(const std::string& screen_ref) {
     }
     if (screen_ref == "UI/Game/Menu/ChapterMap_WindowScreen.xdb") {
         PopulateChapterMapLocked();
+    }
+    if (screen_ref ==
+        "UI/Game/Menu/MissionBriefing/"
+        "MissionBriefing_WindowScreen.xdb") {
+        PopulateMissionBriefingLocked();
     }
     g_ready = g_nodes.size() > 1;
     if (!g_ready) {

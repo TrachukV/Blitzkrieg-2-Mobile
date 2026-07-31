@@ -57,8 +57,8 @@ one after their Win32/D3D9/FMOD/Granny blockers are removed.
   notification prefix with the objective header, while
   `EFB_REINFORCEMENT_CENTER_LOCAL_PLAYER` resolves and displays the shipped
   reinforcement text. Additional weapon-specific clip selection, a multi-line
-  notification console, command subpanels, briefings, and the rest of the
-  legacy UI are still pending.
+  notification console, command subpanels, and the rest of the legacy UI are
+  still pending.
 - `BK2_ENABLE_LEGACY_TEXTURE_RUNTIME=ON` links the Android
   `NGfx::CTexture`/`I2DBuffer` contract. Legacy callers can allocate textures,
   lock mip levels with `CTextureLock`, write the original pixel formats into CPU
@@ -730,6 +730,24 @@ because the menu's black backing panel is authored at `-1` and has to land
 under the buttons. Invisible windows contribute no geometry and neither do
 their children, which is what keeps the hidden Single Player sub-panel from
 drawing over the main list.
+
+Chapter-map mission targets now enter the shipped
+`MissionBriefing_WindowScreen.xdb` instead of writing a launch request
+immediately. Its runtime binding follows `CInterfaceMissionBriefing`: the
+selected `SMapInfo` supplies the localized mission name,
+`LoadingDescriptionFileRef`, `LocalizedDescriptionFileRef`, and the texture
+inside `pMiniMap`. Long UTF-16 descriptions are decoded up to 4096 characters,
+split into lines with the shipped bitmap-font metrics, and constrained to the
+two authored scrollable-container rectangles. Back rebuilds the chapter map;
+both the chapter Play control and a mission target preserve the selected
+mission, and briefing Play launches that exact index.
+
+The ARM64 GLES3 check selected USA chapter-one mission index 1. The screen
+resolved 15 shipped windows, loaded 541 bytes of operations-order text, 141
+bytes of objective text, and `us1_1_6x6_minimap_texture.dds`. Back returned to
+the chapter map, its Play button reopened US1.1 rather than the default
+mission, and briefing Play initialized
+`Scenario/Campaigns/USA/Chapter1/US1.1/MapInfo.xdb` successfully.
 
 On the ARM64 emulator the main menu screen resolves 28 windows, 16 buttons, 20
 textures, and 17 captions, loads 4 shipped fonts, and submits 158 quads with
@@ -1521,10 +1539,11 @@ bind-pose/weight/matrix contract now has a dedicated bgfx GPU path with a
 validated CPU fallback. The `SEffect::Models` schema path is not yet rendered,
 but a scan of all 178 shipped `Effect` descriptors found every `Models` list
 empty, so it is dormant schema rather than a missing shipped scene layer.
-Complete briefing HUD
-behavior, the full chapter-map availability/highlight rules, and result
-rank/medal popups remain unfinished. The core Action Report, its reward rows,
-and per-marker chapter-map mission launch route are linked. Empty initial
+The mission briefing route, text binding, minimap, Back, and Play behavior are
+linked; touch scrolling for orders longer than the authored viewport, the full
+chapter-map availability/highlight rules, and result rank/medal popups remain
+unfinished. The core Action Report, its reward rows, and per-marker chapter-map
+mission route are linked. Empty initial
 dynamic-world snapshots are now accepted as valid, and entity removals between
 the snapshot count/copy calls no longer abort mission startup; this fixed
 campaign-map launch of `US1.2`.
