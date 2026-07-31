@@ -430,6 +430,41 @@ From `android/`:
 ./gradlew :app:assembleDebug
 ```
 
+## Release Builds
+
+`./gradlew :app:assembleRelease` produces the shippable APK: R8-minified Java,
+shrunk resources, a stripped `libblitzkrieg2.so` with a `SYMBOL_TABLE` native
+debug symbol bundle for Play crash symbolication, and `NDEBUG` defined for the
+native build, which also compiles out the port's debug-only key handlers. The
+release APK is 16.7 MB; the runtime data tree stays outside it.
+
+`android/app/proguard-rules.pro` keeps everything the native library reaches by
+name: `NativeBridge` (resolved through `FindClass`/`GetStaticMethodID` by
+`bk2_android_video_bridge.cpp`), the three Activities named in the manifest,
+GameActivity, Oboe, and every class declaring `native` methods.
+
+Signing comes from outside the repository. Put the four values in
+`android/keystore.properties`:
+
+```properties
+storeFile=/absolute/path/to/release.jks
+storePassword=...
+keyAlias=...
+keyPassword=...
+```
+
+or supply `BK2_KEYSTORE`, `BK2_KEYSTORE_PASSWORD`, `BK2_KEY_ALIAS`, and
+`BK2_KEY_PASSWORD` in the environment for a CI runner. Both the properties file
+and `*.jks`/`*.keystore` are gitignored. Without them the release variant still
+assembles, unsigned, so an optimised build is not blocked on secrets.
+
+The launcher icon is cut from the original
+`Consts/Common/MainMenu/Background_Texture.dds` key art by
+`Tools/android/build_launcher_icons.py`, because the shipped Windows icon
+(`Sources/Game/main.ico`) tops out at 48x48. The crop is wide enough that an
+adaptive-icon mask, which shows only the middle 66% of the layer, still frames
+the soldier.
+
 The wrapper uses Gradle 9.4.1, matching Android Gradle Plugin 9.2.x
 compatibility requirements.
 

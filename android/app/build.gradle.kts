@@ -1,6 +1,32 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
 }
+
+// Release signing comes from outside the repository: keystore.properties
+// beside this module, or the same four values in the environment for a CI
+// runner. Without them the release variant still assembles, unsigned, so a
+// contributor who only wants an optimised build is not blocked on secrets.
+val releaseKeystoreProperties = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.isFile) {
+        file.inputStream().use { load(it) }
+    }
+}
+
+fun releaseSigningValue(key: String, environmentKey: String): String? =
+    releaseKeystoreProperties.getProperty(key)
+        ?: System.getenv(environmentKey)
+
+val releaseKeystorePath =
+    releaseSigningValue("storeFile", "BK2_KEYSTORE")
+val releaseKeystoreFile =
+    releaseKeystorePath?.let { rootProject.file(it) }
+val hasReleaseSigning = releaseKeystoreFile?.isFile == true &&
+        releaseSigningValue("storePassword", "BK2_KEYSTORE_PASSWORD") != null &&
+        releaseSigningValue("keyAlias", "BK2_KEY_ALIAS") != null &&
+        releaseSigningValue("keyPassword", "BK2_KEY_PASSWORD") != null
 
 val generatedOriginalHudAssets =
     layout.buildDirectory.dir("generated/originalHudAssets")
@@ -101,8 +127,8 @@ android {
         applicationId = "com.nival.blitzkrieg2"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1-port-bootstrap"
+        versionCode = 2
+        versionName = "0.9.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -126,6 +152,55 @@ android {
                     "-DANDROID_STL=c++_shared",
                     "-DBK2_ENABLE_LEGACY_SOURCES=OFF"
                 )
+            }
+        }
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = releaseKeystoreFile
+                storePassword =
+                    releaseSigningValue("storePassword", "BK2_KEYSTORE_PASSWORD")
+                keyAlias =
+                    releaseSigningValue("keyAlias", "BK2_KEY_ALIAS")
+                keyPassword =
+                    releaseSigningValue("keyPassword", "BK2_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            // The engine is far too heavy to run unoptimised, so the debug
+            // variant that gets played during the port keeps -O2 from
+            // defaultConfig and only carries the extra native asserts.
+            isJniDebuggable = true
+        }
+        getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            isDebuggable = false
+            isJniDebuggable = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                file("proguard-rules.pro")
+            )
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+            ndk {
+                // Play needs a symbol table to symbolicate native crashes;
+                // the stripped library still ships in the APK.
+                debugSymbolLevel = "SYMBOL_TABLE"
+            }
+            externalNativeBuild {
+                cmake {
+                    // NDEBUG also compiles out the port's debug-only key
+                    // handlers and bgfx debug annotations.
+                    cppFlags += listOf("-DNDEBUG")
+                    cFlags += listOf("-DNDEBUG")
+                }
             }
         }
     }

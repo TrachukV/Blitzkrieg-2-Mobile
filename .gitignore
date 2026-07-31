@@ -70,3 +70,8 @@ godot/artifacts/
 Icon?
 .directory
 .localized
+
+# Release signing secrets stay out of the repository.
+android/keystore.properties
+*.jks
+*.keystore
